@@ -1,0 +1,20 @@
+# MANA — optional feature dependencies. Nothing here is required to run;
+# each one unlocks a specific subsystem and MANA degrades gracefully
+# without it (see mana/optional_deps.py -- the single place these are
+# imported and capability-flagged).
+
+# --- Semantic memory (better retrieval than the TF-IDF fallback) ---
+sentence-transformers
+torch                    # also enables CUDA detection for hardware tiering
+scikit-learn             # TF-IDF fallback + learned routing classifier
+
+# --- Voice (see scripts/voice_manual_test.py) ---
+sounddevice              # NOTE: also needs the system PortAudio library installed
+faster-whisper           # speech-to-text
+pyttsx3                  # text-to-speech fallback (Silero used when torch present)
+
+# --- Document knowledge acquisition ---
+PyMuPDF                  # imported as `fitz`; PDF ingestion
+
+# --- Development / testing ---
+pytest

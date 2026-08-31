@@ -1,0 +1,14 @@
+# MANA — core runtime dependencies.
+# Install with:  pip install -r requirements.txt
+numpy
+
+# --- Strongly recommended (MANA works without them, but degrades) ---
+# psutil: accurate RAM/CPU detection for hardware adaptation.
+#   Without it, Windows and macOS fall back to OS APIs / report unknown,
+#   and the machine may be mis-tiered. See mana/hardware.py.
+psutil
+# requests: required by every LLM provider (Ollama/Gemini/OpenRouter/OpenAI).
+#   Without it, enable_llm has no effect -- the LLM is simply unavailable.
+requests
+# ddgs: web search backend. Without it, web_search is permanently unavailable.
+ddgs
