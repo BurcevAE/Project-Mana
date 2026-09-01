@@ -40,7 +40,49 @@ from ..memory import MemoryManager
 from ..optional_deps import fitz, HAS_FITZ, HAS_SKLEARN, LogisticRegression, HAS_TORCH, DEVICE, HAS_WEB, WEB_BACKEND, torch
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
+
+
+#: The words that mark a question as needing CURRENT information.
+#: Previously this list was written out FOUR separate times in this file
+#: (_task_category, _should_use_web, _route_signature, classify_route) and
+#: they had already drifted apart. Measured consequence, from a live
+#: session: "какая завтра погода в Воронеже?" was classified `general` and
+#: never reached the web, while "какая сегодня погода" did -- because
+#: "сегодня" was in the lists and "завтра" was in none of them. Likewise
+#: "как сыграли ЦСКА и Локомотив?" had no matching word at all, so a
+#: sports result question was answered from the model's memory with no
+#: search. Same failure mode as the two programming classifiers that
+#: disagreed about "функция"; one list is the fix.
+CURRENT_INFO_TERMS = (
+    # time references -- "завтра"/"вчера" were missing entirely
+    "сегодня", "сейчас", "завтра", "вчера", "на этой неделе", "текущ",
+    "на данный момент", "кто сейчас", "в 2026", "2026",
+    # freshness
+    "актуаль", "последн", "новост", "свеж", "новейш", "современн",
+    # markets
+    "цена", "стоимость", "курс", "котиров",
+    # results and events -- sports, elections, scores had no coverage
+    "сыгра", "матч", "счёт", "счет", "результат", "победил", "выиграл",
+    "проиграл", "чемпионат", "турнир", "погод", "прогноз",
+    # english
+    "latest", "today", "tomorrow", "current", "recent", "news", "weather",
+)
+
+#: Matched as PREFIXES AT A WORD BOUNDARY, not as bare substrings.
+#: Plain `in` matching was wrong and measurably so: "курс" fired inside
+#: "реКУРСия", "дисКУРС" and "конКУРС", and "счёт" inside "обСЧЁТ", so
+#: "объясни, что такое рекурсия" was routed to the web as a
+#: currency-rate question. A leading \b keeps "курс"/"курса"/"курсы"
+#: while rejecting the words that merely contain those letters.
+_CURRENT_INFO_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(term) for term in CURRENT_INFO_TERMS) + r")",
+    re.IGNORECASE)
+
+
+def mentions_current_info(text: str) -> bool:
+    """Does this text ask for information that changes over time?"""
+    return bool(_CURRENT_INFO_RE.search(text or ""))
 
 
 class RoutingMixin:
@@ -51,7 +93,7 @@ class RoutingMixin:
         if any(x in t for x in ["python", "код", "программ", "sql", "1с", "git", "тест", "функци", "алгоритм"]): return "programming"
         if any(x in t for x in ["сколько", "вычисл", "математ", "процент", "арифмет", "умнож", "раздели"]): return "math"
         if any(x in t for x in ["почему", "сравни", "логик", "объясни"]): return "reasoning"
-        if any(x in t for x in ["сегодня", "сейчас", "актуаль", "последн", "новост", "цена", "текущ"]): return "current"
+        if mentions_current_info(t): return "current"
         if any(x in t for x in ["больше", "меньше", "0."]): return "logic"
         return "general"
 
@@ -59,7 +101,7 @@ class RoutingMixin:
         if spec.web_mode == "never" or not spec.use_web: return False
         if spec.web_mode == "always": return True
         t = task.lower()
-        return self._task_category(task) == "current" or any(x in t for x in ["сегодня", "сейчас", "актуаль", "последн", "цена", "2026", "новост"])
+        return self._task_category(task) == "current" or mentions_current_info(t)
 
 
     # ---------- learned routing (v4.6) ----------
@@ -131,7 +173,7 @@ class RoutingMixin:
         t = (task or "").lower()
         flags = []
         for name, words in {
-            "current": ["сегодня", "сейчас", "актуаль", "последн", "новост", "цена", "стоимость", "курс", "свеж", "текущ", "latest", "today", "current", "recent", "современн", "новейш"],
+            "current": list(CURRENT_INFO_TERMS),
             "research": ["найди", "поищи", "источники", "ссылк", "исследуй", "проверь в интернете", "по данным", "рынок", "inference", "llm"],
             "compare": ["сравни", "сопоставь", "что выгоднее", "какой лучше", "против"],
             "calculation": ["сколько", "вычисл", "процент", "арифмет", "умнож", "раздели"],
@@ -224,10 +266,7 @@ class RoutingMixin:
     def classify_route(self, task: str) -> str:
         """Conservative deterministic router. Adaptive history may override only after enough evidence."""
         t = (task or "").lower().strip()
-        current = any(x in t for x in [
-            "сегодня", "сейчас", "актуаль", "последн", "новост", "цена", "стоимость",
-            "курс", "котиров", "свеж", "в 2026", "2026", "latest", "today", "current", "recent",
-            "кто сейчас", "на данный момент", "текущ"])
+        current = mentions_current_info(t)
         research = any(x in t for x in [
             "найди", "поищи", "источники", "ссылк", "исследуй", "проверь в интернете",
             "сравни цены", "сравни актуаль", "по данным", "свежие данные", "рынок"])

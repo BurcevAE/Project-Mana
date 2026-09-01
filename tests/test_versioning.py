@@ -31,7 +31,7 @@ def test_product_version_is_declared_once():
     """Pinned deliberately: the product version must be bumped as part of
     a change, not drift. Update this line in the same commit that changes
     PRODUCT_VERSION -- the failure is the reminder."""
-    assert PRODUCT_VERSION == "5.9.0"
+    assert PRODUCT_VERSION == "5.9.1"
 
 
 def test_every_listed_module_declares_a_version():
@@ -53,7 +53,7 @@ def test_modules_changed_in_this_release_were_bumped():
     5.7.9, so they must no longer report the 1.0 baseline. If a future
     change touches them again without a bump, this is where it shows."""
     versions = component_versions()
-    for name in ("knowledge", "agent_parts.context", "config", "graph_memory", "intent"):
+    for name in ("knowledge", "agent_parts.context", "config", "graph_memory", "intent", "agent_parts.routing"):
         assert versions[name] != "1.0", (
             f"{name} changed in this release but still reports 1.0 -- bump it")
 

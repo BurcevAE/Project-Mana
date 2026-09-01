@@ -41,7 +41,7 @@ from ..memory import MemoryManager
 from ..optional_deps import fitz, HAS_FITZ, HAS_SKLEARN, LogisticRegression, HAS_TORCH, DEVICE, HAS_WEB, WEB_BACKEND, torch
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.3"
+__version__ = "1.4"
 
 
 class ContextMixin:
@@ -178,6 +178,25 @@ class ContextMixin:
         if len(text)>budget: text=text[:budget]+"\n[CONTEXT BUDGET EXHAUSTED]"
         meta={"intent":self._evidence_intent(task),"evidence_count":len(ranked),"evidence":ranked,"session":data}
         return text,meta
+
+    def _available_tools_line(self) -> str:
+        """One line per available tool, for the answer prompt.
+
+        Observed in a live session: asked "ты можешь посмотреть в
+        интернете?", MANA answered "могу искать, но не могу делать это в
+        реальном времени" -- which is false; it had just run three
+        searches. The model was inventing a limitation because nothing
+        ever told it what it can do. The registry already knows; it simply
+        was not being shown.
+        """
+        try:
+            available = [t for t in self.tools.list_tools() if t.get("available")]
+        except Exception:
+            return "- (список инструментов недоступен)"
+        if not available:
+            return "- сейчас внешние инструменты недоступны"
+        return "\n".join(f"- {t['name']}: {t['description'].split('.')[0]}."
+                          for t in available)
 
     def _detect_conversation_reference(self, task: str):
         """Is this turn about the previous exchange rather than the world?
@@ -341,6 +360,14 @@ class ContextMixin:
         prompt = f"""Ты — когнитивный модуль MANA. Реши задачу пользователя.
 
 Сегодняшняя дата: {time.strftime('%Y-%m-%d')} (используй её как точку отсчёта для любых суждений о времени).
+
+Что ты умеешь прямо сейчас (это выполняет агент, не ты сама — результаты уже
+в контексте ниже, если инструмент вызывался):
+{self._available_tools_line()}
+Не заявляй, что не можешь искать в интернете или работать в реальном времени,
+если web_search доступен: поиск выполняется на каждом подходящем запросе.
+Если данных в контексте нет — скажи, что в выдаче их не нашлось, а не что ты
+принципиально не умеешь искать.
 
 Задача:
 {task}

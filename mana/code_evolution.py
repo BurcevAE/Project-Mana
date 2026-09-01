@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 HISTORY_ROOT = PACKAGE_ROOT.parent / "mana_code_history"
@@ -99,6 +99,18 @@ def _task_category_test_cases() -> List[CodeTestCase]:
     return [CodeTestCase(t.query, [t.category]) for t in tasks]
 
 
+#: NOTE: `_task_category` was REMOVED from this whitelist in 5.9.1.
+#: It stopped being a pure self-contained function: it now calls the
+#: module-level `mentions_current_info`, which exists because the same
+#: keyword list had been duplicated four times in routing.py and the
+#: copies had drifted (a live session routed "какая завтра погода" away
+#: from the web while "какая сегодня погода" reached it).
+#:
+#: The alternative was to inline the keyword list back into the function
+#: to keep it patchable -- which would have restored exactly the bug the
+#: shared helper fixed. Shared correctness beats patchability here, and a
+#: target that no longer satisfies the purity contract must leave the
+#: whitelist rather than have the contract bent around it.
 WHITELIST: Dict[str, CodeTarget] = {
     "local_fallback": CodeTarget(
         target_id="local_fallback",
@@ -112,19 +124,6 @@ WHITELIST: Dict[str, CodeTarget] = {
                      "unavailable or empty. Graded against MANA's own "
                      "benchmark suite (must_contain substrings).",
         test_cases=_fallback_test_cases(),
-    ),
-    "task_category": CodeTarget(
-        target_id="task_category",
-        file_path="agent_parts/routing.py",
-        class_name="RoutingMixin",
-        function_name="_task_category",
-        is_staticmethod=False,  # kept as an instance method in the real file (unused self), see apply()
-        param_names=["task"],
-        signature_hint="def _task_category(task: str) -> str:",
-        description="Classifies a task into math/programming/reasoning/current/general; "
-                     "drives routing and architecture selection. Graded against "
-                     "MANA's own benchmark suite's `category` labels.",
-        test_cases=_task_category_test_cases(),
     ),
 }
 

@@ -29,68 +29,78 @@ def test_baseline_score_shape():
 
 
 def test_genuine_improvement_is_accepted(isolated_agent_exec_enabled):
-    """Uses a test-local CodeTarget (registered under a throwaway id, never
-    touching the real WHITELIST entries) so this test is robust regardless
-    of whatever state the real local_fallback/task_category targets
-    happen to be in after previous fixes. Targets a category
-    (_task_category has no branch that ever returns "safety") and asserts
-    its own precondition, so if a future change happens to add that
-    branch, this test fails loudly on the precondition instead of
-    silently proving something different than intended."""
+    """Uses a test-local CodeTarget under a throwaway id, so it never
+    depends on what state the real whitelist entries happen to be in.
+
+    The single test case is one the current implementation demonstrably
+    fails, and the test asserts that precondition first -- if a future
+    change makes it pass, this fails loudly on the precondition rather
+    than quietly proving something else.
+    """
     verifier = isolated_agent_exec_enabled.verifier
-    real_target = ce.WHITELIST["task_category"]
+    real_target = ce.WHITELIST["local_fallback"]
     local_target = ce.CodeTarget(
-        target_id="task_category_local_test",
+        target_id="local_fallback_local_test",
         file_path=real_target.file_path, class_name=real_target.class_name,
-        function_name=real_target.function_name, is_staticmethod=False,
+        function_name=real_target.function_name, is_staticmethod=True,
         param_names=["task"], signature_hint=real_target.signature_hint,
         description="test-local target, not part of the real whitelist",
-        test_cases=[ce.CodeTestCase("вопрос про безопасность хеширования паролей", ["safety"])],
+        test_cases=[ce.CodeTestCase("Что такое рекурсия простыми словами?", ["рекурс"])],
     )
     base = ce.baseline_score(local_target)
-    assert base["failed"] == [0], "precondition: _task_category must not already classify this as 'safety'"
+    assert base["failed"] == [0], (
+        "precondition: _local_fallback must not already answer this")
 
     candidate = '''
-def _task_category(task: str) -> str:
+def _local_fallback(task: str) -> str:
     t = task.lower()
-    if "безопасност" in t: return "safety"
-    if any(x in t for x in ["python", "код", "программ", "sql", "1с", "git", "тест"]): return "programming"
-    if any(x in t for x in ["сколько", "вычисл", "математ", "процент", "арифмет", "умнож", "раздели"]): return "math"
-    if any(x in t for x in ["почему", "сравни", "логик", "объясни"]): return "reasoning"
-    if any(x in t for x in ["сегодня", "сейчас", "актуаль", "последн", "новост", "цена", "текущ"]): return "current"
-    return "general"
+    if "рекурс" in t:
+        return "Рекурсия — это когда функция вызывает саму себя."
+    return "Недостаточно данных для надёжного ответа без внешней модели."
 '''.strip()
-    ce.WHITELIST["task_category_local_test"] = local_target
+    ce.WHITELIST["local_fallback_local_test"] = local_target
     try:
-        evaluation = ce.evaluate_candidate("task_category_local_test", candidate, verifier)
+        evaluation = ce.evaluate_candidate("local_fallback_local_test", candidate, verifier)
         decision = ce.decide(evaluation)
     finally:
-        del ce.WHITELIST["task_category_local_test"]
-    assert decision["accepted"] is True
+        del ce.WHITELIST["local_fallback_local_test"]
+    assert decision["accepted"] is True, decision
     assert decision["reason"] == "strict_improvement"
 
 
 def test_noop_candidate_is_rejected_as_no_improvement(isolated_agent_exec_enabled):
-    verifier = isolated_agent_exec_enabled.verifier
-    target = ce.WHITELIST["task_category"]
-    # Reconstruct the CURRENT implementation verbatim as the "candidate" --
-    # identical behavior must never count as an accepted improvement,
-    # regardless of what that implementation currently is.
+    """Identical behaviour must never count as an accepted improvement.
+
+    Uses the CURRENT implementation of the remaining whitelist target,
+    reconstructed as a free function. (This test previously used
+    `task_category`, which left the whitelist in 5.9.1 when it stopped
+    being a pure function -- see the note in mana/code_evolution.py.)
+    """
     import inspect
     import textwrap
-    from mana.agent_parts.routing import RoutingMixin
-    src = textwrap.dedent(inspect.getsource(RoutingMixin._task_category))
-    src = src.replace("def _task_category(self, task: str)", "def _task_category(task: str)")
-    evaluation = ce.evaluate_candidate("task_category", src, verifier)
+
+    from mana.agent_parts.execution import ExecutionMixin
+    verifier = isolated_agent_exec_enabled.verifier
+    src = textwrap.dedent(inspect.getsource(ExecutionMixin._local_fallback))
+    src = src.replace("@staticmethod\n", "")
+    evaluation = ce.evaluate_candidate("local_fallback", src, verifier)
     decision = ce.decide(evaluation)
     assert decision["accepted"] is False
     assert decision["reason"] == "no_improvement"
 
 
+def test_impure_functions_are_not_whitelisted():
+    """`_task_category` now calls a module-level helper, so a candidate
+    for it could not run standalone in the sandbox. A target that breaks
+    the purity contract must leave the whitelist rather than have the
+    contract loosened."""
+    assert "task_category" not in ce.WHITELIST
+
+
 def test_regressing_candidate_is_rejected(isolated_agent_exec_enabled):
     verifier = isolated_agent_exec_enabled.verifier
-    candidate = 'def _task_category(task: str) -> str:\n    return "general"'
-    evaluation = ce.evaluate_candidate("task_category", candidate, verifier)
+    candidate = 'def _local_fallback(task: str) -> str:\n    return "не знаю"'
+    evaluation = ce.evaluate_candidate("local_fallback", candidate, verifier)
     decision = ce.decide(evaluation)
     assert decision["accepted"] is False
     assert decision["reason"] == "regression"
@@ -99,8 +109,8 @@ def test_regressing_candidate_is_rejected(isolated_agent_exec_enabled):
 
 def test_self_referencing_candidate_rejected_at_static_validation(isolated_agent_exec_enabled):
     verifier = isolated_agent_exec_enabled.verifier
-    candidate = 'def _task_category(task: str) -> str:\n    return self.foo(task)'
-    evaluation = ce.evaluate_candidate("task_category", candidate, verifier)
+    candidate = 'def _local_fallback(task: str) -> str:\n    return self.foo(task)'
+    evaluation = ce.evaluate_candidate("local_fallback", candidate, verifier)
     assert evaluation["ok"] is False
     assert "self" in evaluation["reason"]
 
