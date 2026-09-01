@@ -43,7 +43,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Sequence
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.1"
+__version__ = "1.1.1"
 
 
 #: Markers that a turn is commenting on the exchange rather than asking
@@ -119,8 +119,21 @@ _TOPICLESS_FOLLOWUP = re.compile(
     r"а\s+что|а\s+как|что\s+там|как\s+там)", re.I)
 
 
+#: A turn that inherits its topic is SHORT. Found in live use: a 17-word
+#: instruction -- "Я не говорил что матч был сегодня, узнай когда был
+#: последний матч и с каким счётом закончился" -- was asked about, because
+#: it names its subject with ordinary nouns ("матч", "счёт") rather than a
+#: proper noun, and extract_entities only sees names and acronyms. So
+#: "extract_entities returned nothing" does NOT mean "no subject named".
+#: Length is the signal that separates them: a genuine topic-inheriting
+#: follow-up is a few words ("а что там?", "какие последние новости?"),
+#: while a sentence long enough to explain itself carries its own subject.
+MAX_FOLLOWUP_WORDS = 6
+
+
 def is_ambiguous_followup(text: str, recent_topics: Sequence[Sequence[str]],
-                           min_candidates: int = 2) -> AmbiguousReference:
+                           min_candidates: int = 2,
+                           max_words: int = MAX_FOLLOWUP_WORDS) -> AmbiguousReference:
     """Would answering this require guessing WHICH earlier topic is meant?
 
     Asks only when both conditions hold:
@@ -146,6 +159,10 @@ def is_ambiguous_followup(text: str, recent_topics: Sequence[Sequence[str]],
     from .graph_memory import extract_entities
     if extract_entities(query):
         return AmbiguousReference(False, reason="the question names its own subject")
+    words = len(query.split())
+    if words > max_words:
+        return AmbiguousReference(
+            False, reason=f"{words} words -- long enough to carry its own subject")
     if not _TOPICLESS_FOLLOWUP.search(query):
         return AmbiguousReference(False, reason="not a topic-inheriting follow-up")
 

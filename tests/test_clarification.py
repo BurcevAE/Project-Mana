@@ -180,3 +180,60 @@ def test_clarification_can_be_disabled(isolated_agent):
         agent.persistent_memory.remember_assistant(agent.session_id, mana)
     result = agent.solve_task("Какие последние новости?")
     assert result["trace"].get("clarification_requested") is not True
+
+
+# --- length: found by a false ask in live use ----------------------------
+
+#: Verbatim from a real session. MANA asked "Уточни: про ИИ или ЦСКА?"
+#: about this, which is a refusal to answer a perfectly clear instruction.
+LIVE_FALSE_ASK = ("Я не говорил что матч был сегодня, узнай когды был последний "
+                  "матч и с каким счетом закончился.")
+
+
+def test_live_false_ask_is_not_repeated():
+    """The labelled set above was too easy -- every "should not ask" case
+    was a short self-contained question. This one names its subject with
+    ORDINARY NOUNS ("матч", "счёт"), which extract_entities cannot see,
+    so "no entities found" wrongly read as "no subject named".
+
+    Length is what separates them: a turn that inherits its topic is a few
+    words; a sentence long enough to explain itself carries its subject.
+    """
+    assert not is_ambiguous_followup(LIVE_FALSE_ASK, TWO_TOPICS), (
+        "asked for clarification on an explicit 17-word instruction")
+
+
+@pytest.mark.parametrize("query", [
+    "Расскажи подробнее про последние события в мире технологий",
+    "узнай когда был последний матч и с каким счётом он закончился",
+    "покажи что там было самое свежее за последние несколько дней",
+])
+def test_long_requests_are_treated_as_self_contained(query):
+    assert not is_ambiguous_followup(query, TWO_TOPICS), f"{len(query.split())} words: {query}"
+
+
+@pytest.mark.parametrize("query", [
+    "Какие последние новости?",
+    "А что там дальше?",
+    "Какой результат?",
+    "Есть что-то свежее?",
+])
+def test_short_followups_still_ask(query):
+    """The ceiling must not silence genuine ambiguity."""
+    assert is_ambiguous_followup(query, TWO_TOPICS), query
+
+
+def test_word_ceiling_is_configurable():
+    long_followup = "какие там были самые последние новости"
+    assert not is_ambiguous_followup(long_followup, TWO_TOPICS, max_words=3)
+    assert is_ambiguous_followup(long_followup, TWO_TOPICS, max_words=10)
+
+
+def test_agent_does_not_ask_on_the_live_false_ask_case(isolated_agent):
+    agent = isolated_agent
+    for user, mana in [("Какие последние новости про ИИ?", "РИА сообщает о сервисе ИИ."),
+                       ("Как сыграли Зенит и ЦСКА?", "Данных нет.")]:
+        agent.persistent_memory.remember_user(agent.session_id, user)
+        agent.persistent_memory.remember_assistant(agent.session_id, mana)
+    result = agent.solve_task(LIVE_FALSE_ASK)
+    assert result["trace"].get("clarification_requested") is not True
