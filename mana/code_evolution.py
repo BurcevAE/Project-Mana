@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.1"
+__version__ = "1.2"
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 HISTORY_ROOT = PACKAGE_ROOT.parent / "mana_code_history"
@@ -286,6 +286,19 @@ def _render_method(target: CodeTarget, candidate_source: str, indent: str = "   
     return f"{decorator}{indent}{new_header}\n{body}\n"
 
 
+
+def _current_target_source(target: CodeTarget) -> str:
+    """Read the current target implementation as a free function."""
+    file_path = PACKAGE_ROOT / target.file_path
+    source = file_path.read_text(encoding="utf-8")
+    loc = _locate_function(source, target.class_name, target.function_name)
+    lines = source.split("\n")
+    block = "\n".join(lines[loc["start"] - 1:loc["end"]]).strip()
+    if block.startswith("@staticmethod"):
+        block = block[len("@staticmethod"):].lstrip("\n ")
+    return block
+
+
 def apply_patch(target_id: str, candidate_source: str, evaluation: Dict[str, Any],
                  decision: Dict[str, Any], instruction: str = "") -> Dict[str, Any]:
     target = WHITELIST[target_id]
@@ -346,36 +359,149 @@ def history(target_id: Optional[str] = None) -> List[Dict[str, Any]]:
     return [e for e in entries if target_id is None or e["target_id"] == target_id]
 
 
-def propose_patch_llm(target_id: str, ask_llm: Callable[..., Any], instruction: str) -> Dict[str, Any]:
-    """Ask the agent's own LLM for a candidate. This is the only entry
-    point that involves the LLM; evaluate_candidate/decide/apply_patch
-    above never trust the LLM's own claims about correctness -- they
-    re-derive pass/fail from the sandbox every time.
+def propose_patch_llm(
+    target_id: str,
+    ask_llm: Callable[..., Any],
+    instruction: str,
+) -> Dict[str, Any]:
+    """Generate a minimal candidate from the actual current target source.
 
-    `ask_llm` is a callable matching ManaAgent._llm_call's signature
-    (prompt, *, temperature=..., context_tag=...) -> (text, meta) -- the
-    same choke point every other LLM call in the agent goes through (see
-    mana/tools.py's 'llm_generate' tool), passed in rather than importing
-    the agent here, to keep this module decoupled from agent_parts."""
+    The LLM proposes only. Static validation, sandbox execution and the
+    strict acceptance gate remain authoritative.
+    """
     target = WHITELIST.get(target_id)
     if target is None:
-        return {"ok": False, "reason": f"unknown target_id: {target_id!r}"}
+        return {
+            "ok": False,
+            "reason": f"unknown target_id: {target_id!r}",
+        }
+
     base = baseline_score(target)
     failing = [target.test_cases[i] for i in base["failed"]]
-    prompt = (
-        "Improve this pure Python function. Requirements:\n"
-        f"- Signature must stay exactly: {target.signature_hint}\n"
-        "- No `self`, no imports, no side effects, no I/O -- pure function of its parameters only.\n"
-        "- Return ONLY the function definition, no markdown fences, no explanation.\n"
-        f"- Currently failing cases that must start passing (need these substrings in the return value):\n"
-        + "\n".join(f'  - input: {tc.query!r} -> must contain: {tc.must_contain}' for tc in failing) +
-        "\n- Every other existing case must keep passing (do not remove existing branches unless replacing their logic).\n"
-        f"- Improvement goal: {instruction}\n\n"
-        f"Current implementation:\n{target.signature_hint}\n    ...\n"
+    passing = [target.test_cases[i] for i in base["passed"]]
+
+    try:
+        current_source = _current_target_source(target)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "reason": f"cannot read current target source: {exc}",
+            "stage": "source_read",
+        }
+
+    if not current_source.strip():
+        return {
+            "ok": False,
+            "reason": "current target source is empty",
+            "stage": "source_read",
+        }
+
+    prompt_parts = [
+        "You are improving an EXISTING deterministic Python fallback.",
+        "Preserve its current purpose and every behavior that already passes tests.",
+        f"Exact required signature: {target.signature_hint}",
+        "Return ONLY one Python function definition.",
+        "Do not use markdown fences or explanations.",
+        "Do not add imports, I/O, filesystem access, networking, "
+        "subprocesses, environment access, globals, self, attribute "
+        "access, or external state.",
+        "Do not invent unrelated commands, languages, demos, or functionality.",
+        "Make the smallest justified change supported by benchmark evidence.",
+        "Maximum candidate length: 6000 characters.",
+        "",
+        "CURRENT IMPLEMENTATION:",
+        current_source,
+        "",
+        "CURRENT BENCHMARK:",
+        f"passed={len(passing)}/{base['total']}; "
+        f"failed={len(failing)}/{base['total']}",
+        "",
+        "PASSING CASES - MUST REMAIN PASSING:",
+    ]
+
+    if passing:
+        prompt_parts.extend(
+            f"- input={tc.query!r}; required={tc.must_contain!r}"
+            for tc in passing
+        )
+    else:
+        prompt_parts.append("- none")
+
+    prompt_parts.append("")
+    prompt_parts.append(
+        "FAILING CASES - TARGET FOR IMPROVEMENT:"
     )
-    text, meta = ask_llm(prompt, temperature=0.2, context_tag="SELF-IMPROVE-CODE")
+
+    if failing:
+        prompt_parts.extend(
+            f"- input={tc.query!r}; required={tc.must_contain!r}"
+            for tc in failing
+        )
+    else:
+        prompt_parts.append(
+            "- none; do not propose a change"
+        )
+
+    prompt_parts.extend([
+        "",
+        "USER INSTRUCTION:",
+        instruction.strip()
+        or "Improve only where benchmark evidence justifies it.",
+        "",
+        "FINAL RULES:",
+        "- Preserve useful existing branches.",
+        "- Do not replace this function with an unrelated generic example.",
+        "- Do not add branches for arbitrary Git or deployment commands.",
+        "- Keep the implementation deterministic.",
+    ])
+
+    text, meta = ask_llm(
+        "\n".join(prompt_parts),
+        temperature=0.1,
+        context_tag="SELF-IMPROVE-CODE",
+    )
+
     if not text:
-        return {"ok": False, "reason": "LLM returned no candidate"}
+        return {
+            "ok": False,
+            "reason": "LLM returned no candidate",
+            "stage": "generation",
+        }
+
     import re
-    candidate = re.sub(r"^```(?:python)?\s*|\s*```$", "", text.strip(), flags=re.I | re.S).strip()
-    return {"ok": True, "candidate_source": candidate, "instruction": instruction, "llm_latency": meta.latency}
+
+    candidate = re.sub(
+        r"^```(?:python)?\s*|\s*```$",
+        "",
+        text.strip(),
+        flags=re.I | re.S,
+    ).strip()
+
+    if len(candidate) > 6000:
+        return {
+            "ok": False,
+            "reason": (
+                f"candidate too large: {len(candidate)} > 6000 characters"
+            ),
+            "stage": "proposal_validation",
+        }
+
+    static_check = _validate_candidate(target, candidate)
+
+    if not static_check.get("ok"):
+        return {
+            "ok": False,
+            "reason": static_check.get(
+                "reason",
+                "candidate static validation failed",
+            ),
+            "stage": "proposal_validation",
+        }
+
+    return {
+        "ok": True,
+        "candidate_source": candidate,
+        "instruction": instruction,
+        "llm_latency": float(meta.latency),
+        "baseline": base,
+    }
