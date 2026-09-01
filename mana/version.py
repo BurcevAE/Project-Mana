@@ -33,7 +33,7 @@ from typing import Dict
 __version__ = "1.0"
 
 #: The release as a whole.
-PRODUCT_VERSION = "5.8.1"
+PRODUCT_VERSION = "5.9.0"
 
 #: Modules that carry their own version. Kept as an explicit list rather
 #: than discovered by scanning, so a module added without a version number
@@ -42,7 +42,7 @@ PRODUCT_VERSION = "5.8.1"
 VERSIONED_MODULES = (
     "config", "optional_deps", "hardware", "knowledge", "web", "llm",
     "pipeline", "experience", "verifier", "memory", "graph_memory", "intent",
-    "tools", "code_evolution", "voice", "cli", "version",
+    "tools", "code_evolution", "voice", "cli", "version", "episode_affinity",
     "agent_parts.core", "agent_parts.context", "agent_parts.routing",
     "agent_parts.confidence", "agent_parts.execution",
     "agent_parts.benchmarking", "agent_parts.evolution",
