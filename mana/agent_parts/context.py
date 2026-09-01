@@ -41,7 +41,7 @@ from ..memory import MemoryManager
 from ..optional_deps import fitz, HAS_FITZ, HAS_SKLEARN, LogisticRegression, HAS_TORCH, DEVICE, HAS_WEB, WEB_BACKEND, torch
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.2"
+__version__ = "1.3"
 
 
 class ContextMixin:
@@ -283,6 +283,22 @@ class ContextMixin:
         # retrieval of any kind belongs here.
         if conversation_reference:
             trace["web_skipped"] = "conversation_reference"
+            # v5.7.12: blocking retrieval was not enough. Measured over 5
+            # live trials: the gate held (web=0, memory=0) but the answer
+            # still recapped the topic, because RECENT CONVERSATION stays
+            # in context -- and it must, since answering a correction
+            # requires knowing what is being corrected. The missing piece
+            # was never "less context", it was telling the model how to
+            # RESPOND to a correction. Asked "Хватит про новости", MANA
+            # replied with another paragraph of news.
+            chunks.append(
+                "[РЕПЛИКА О РАЗГОВОРЕ]\n"
+                f"Это не новый вопрос, а замечание о предыдущем ответе "
+                f"(тип: {conversation_reference.kind}). Ответь коротко на само замечание: "
+                "признай его, уточни, что нужно, или предложи сменить тему. "
+                "НЕ пересказывай и не повторяй ту тему снова — именно её повтор и "
+                "вызвал замечание. Не оправдывайся и не объясняй, почему ты так ответил."
+            )
         elif self._should_use_web(task, spec) and spec.web_results > 0:
             web_result = self.tools.call("web_search", query=task, max_results=spec.web_results)
             rows, ws = web_result.output or [], web_result.meta

@@ -200,3 +200,43 @@ def test_genuine_current_events_question_still_reaches_web_path(isolated_agent):
     _, trace = agent._build_context("какие последние новости про ИИ", spec)
     assert trace.get("web_skipped") is None
     assert trace.get("memory_skipped") is None
+
+
+def test_correction_turn_gets_a_response_instruction(isolated_agent):
+    """Blocking retrieval was not sufficient.
+
+    Measured over 5 live trials of 5.7.11: the gate held (web=0, memory=0)
+    on every correction turn, yet the answer still recapped the topic --
+    "Хватит про новости" was answered with another paragraph of news. The
+    cause is that RECENT CONVERSATION legitimately stays in context (you
+    cannot answer a correction without knowing what is being corrected),
+    so the fix is not less context but an explicit instruction on how to
+    respond to one.
+    """
+    from dataclasses import asdict
+
+    from mana.pipeline import PipelineSpec
+
+    agent = isolated_agent
+    agent.persistent_memory.remember_assistant(agent.session_id,
+                                                "Вот последние новости про ИИ: РИА, Коммерсантъ...")
+    spec = PipelineSpec(**asdict(agent.pipeline)).normalize(agent.config)
+
+    context, trace = agent._build_context("Хватит про новости", spec)
+    assert "[РЕПЛИКА О РАЗГОВОРЕ]" in context
+    assert "НЕ пересказывай" in context
+    assert trace.get("conversation_reference_kind")
+
+
+def test_no_response_instruction_for_a_genuine_question(isolated_agent):
+    """The instruction must appear only where it applies -- adding it to
+    ordinary turns would suppress legitimate answers."""
+    from dataclasses import asdict
+
+    from mana.pipeline import PipelineSpec
+
+    agent = isolated_agent
+    agent.persistent_memory.remember_assistant(agent.session_id, "Вот новости про ИИ...")
+    spec = PipelineSpec(**asdict(agent.pipeline)).normalize(agent.config)
+    context, _ = agent._build_context("какие последние новости про ИИ", spec)
+    assert "[РЕПЛИКА О РАЗГОВОРЕ]" not in context

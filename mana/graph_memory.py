@@ -50,7 +50,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 # --- distillation --------------------------------------------------------
 
@@ -146,22 +146,80 @@ def distill_turn(user_text: str, assistant_text: str, llm_ask: Optional[Callable
 
 # --- lightweight entity extraction (connective tissue for MENTIONS edges) -
 
-_STOPWORDS = {"это", "этот", "эта", "эти", "того", "который", "которая", "которые",
-              "the", "this", "that", "these", "those", "and", "for", "with"}
-_ENTITY_RE = re.compile(r"[A-ZА-Я][a-zа-яA-Za-z0-9_+#.-]{2,}")
+# Words that are capitalised only because of where they sit in a sentence,
+# or that carry no subject at all. Without this list the extractor returned
+# "какие" and "какой" as entities -- measured on real queries -- which both
+# polluted the memory graph (audit #22, "entity = если") and made
+# "новости про ИИ" and "новости" indistinguishable, since both reduced to
+# ['какие'].
+_STOPWORDS = {
+    # demonstratives / relatives (original list)
+    "это", "этот", "эта", "эти", "того", "который", "которая", "которые",
+    "the", "this", "that", "these", "those", "and", "for", "with",
+    # interrogatives -- the actual observed pollution
+    "какие", "какой", "какая", "какое", "каких", "каким", "что", "кто",
+    "где", "когда", "почему", "зачем", "как", "куда", "откуда", "сколько",
+    "чей", "чья", "разве", "неужели",
+    "what", "which", "who", "where", "when", "why", "how",
+    # sentence openers and conversational filler
+    "давай", "дай", "скажи", "расскажи", "покажи", "напиши", "объясни",
+    "привет", "здравствуй", "пожалуйста", "спасибо", "хорошо", "ладно",
+    "теперь", "потом", "затем", "ещё", "еще", "тоже", "также", "просто",
+    "нужно", "надо", "можно", "хочу", "хватит", "понял", "ответь",
+    # pronouns
+    "я", "ты", "он", "она", "оно", "они", "мы", "вы", "мне", "тебе", "меня",
+    "тебя", "его", "её", "ее", "их", "нам", "вам", "там", "тут", "здесь",
+}
+
+#: Two patterns instead of one. The old single regex
+#: `[A-ZА-Я][a-zа-яA-Za-z0-9_+#.-]{2,}` required LOWERCASE characters after
+#: the initial capital, so all-caps Cyrillic acronyms were invisible:
+#: "ИИ", "ЦСКА", "РФ", "МВД" were never extracted at all. That is fatal for
+#: topic detection in Russian, where acronyms are often the whole subject.
+_ACRONYM_RE = re.compile(r"\b[A-ZА-Я]{2,}\b")
+_PROPER_RE = re.compile(r"\b[A-ZА-Я][a-zа-яA-Za-z0-9_+#.-]{2,}")
+_SENTENCE_START_RE = re.compile(r"(?:^|[.!?]\s+)(\S+)")
 
 
 def extract_entities(text: str, limit: int = 5) -> List[str]:
-    """Heuristic entity/keyword extraction: capitalized tokens (proper
-    nouns, tech terms, acronyms) minus stopwords, deduplicated,
-    length-capped. Deliberately simple -- this only needs to be good
-    enough to link related turns, not to do full NER."""
+    """Extract topic-bearing tokens: acronyms and proper nouns.
+
+    Deliberately heuristic -- this only needs to be good enough to link
+    related turns and to tell one conversation topic from another, not to
+    do full NER. Two rules that the previous version got wrong:
+
+      * ALL-CAPS Cyrillic acronyms are entities ("ИИ", "ЦСКА", "РФ"). The
+        old regex could not match them and dropped every one.
+      * A word capitalised only because it opens a sentence is NOT
+        automatically an entity. "Какие последние новости?" yielded
+        ['какие'], which is noise, and made that query indistinguishable
+        from "Какие последние новости про ИИ?".
+
+    A sentence-initial word is kept only if it is an acronym or if the same
+    token also appears capitalised elsewhere in the text -- i.e. there is
+    evidence beyond its position.
+    """
+    raw = text or ""
+    sentence_openers = {m.group(1).strip(".,!?;:").lower()
+                        for m in _SENTENCE_START_RE.finditer(raw)}
+
+    candidates: List[str] = []
+    for match in _ACRONYM_RE.finditer(raw):
+        candidates.append(match.group(0))
+    for match in _PROPER_RE.finditer(raw):
+        candidates.append(match.group(0))
+
     seen: List[str] = []
-    for m in _ENTITY_RE.finditer(text or ""):
-        tok = m.group(0)
-        low = tok.lower()
-        if low in _STOPWORDS or low in seen:
+    for token in candidates:
+        low = token.lower().strip(".,!?;:")
+        if not low or low in _STOPWORDS or low in seen:
             continue
+        is_acronym = token.isupper() and len(token) >= 2
+        if low in sentence_openers and not is_acronym:
+            # Capitalised only by position -- require corroboration.
+            elsewhere = sum(1 for c in candidates if c.lower().strip(".,!?;:") == low)
+            if elsewhere < 2:
+                continue
         seen.append(low)
         if len(seen) >= limit:
             break

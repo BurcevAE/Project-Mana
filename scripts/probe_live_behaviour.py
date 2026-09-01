@@ -49,6 +49,19 @@ LEAKED_LABEL = re.compile(
     r"^\s*(USER CLAIM|SOURCE EVIDENCE|VERIFIED EVIDENCE|EXPERIENCE|INFERENCE|"
     r"RECENT CONVERSATION|CONCLUSION)\s*:", re.M | re.I)
 
+#: Topic words whose reappearance on a CORRECTION turn means the model
+#: recapped the very subject the user just asked it to drop. Measured
+#: rather than judged: 5.7.11 held the retrieval gate (web=0, memory=0)
+#: yet still answered "Хватит про новости" with another news paragraph,
+#: which no existing flag caught.
+TOPIC_WORDS = re.compile(r"новост|РИА|Коммерсант|Lenta|ИИ[\s,.)]|искусственн", re.I)
+
+#: A correction deserves a short acknowledgement, not an essay. This is a
+#: proxy, not a truth: length alone does not prove a recap, so the JSON
+#: keeps the full answer for reading.
+RECAP_CHAR_LIMIT = 400
+RECAP_TOPIC_HITS = 3
+
 #: Phrasings that assert a site has nothing newer, on snippet evidence alone.
 OVERCLAIM = re.compile(
     r"(на сайте .{0,40}(нет|отсутствуют)|не были найдены на сайте|"
@@ -122,6 +135,12 @@ def run_trial(model: str, use_web: bool, trial: int) -> dict:
                 "web_skipped": trace.get("web_skipped"),
                 "leaked_labels": sorted(set(m.group(1).upper() for m in LEAKED_LABEL.finditer(answer))),
                 "snippet_overclaim": bool(OVERCLAIM.search(answer)),
+                "topic_hits": len(TOPIC_WORDS.findall(answer)),
+                "answer_chars": len(answer),
+                "recapped_on_correction": bool(
+                    check == "conversation_reference"
+                    and (len(answer) > RECAP_CHAR_LIMIT
+                         or len(TOPIC_WORDS.findall(answer)) >= RECAP_TOPIC_HITS)),
             })
         _close_agent(agent)
         return {"trial": trial, "turns": turns}
@@ -150,6 +169,8 @@ def main() -> int:
                 flags.append(f"LEAKED {','.join(turn['leaked_labels'])}")
             if turn["snippet_overclaim"]:
                 flags.append("SNIPPET-OVERCLAIM")
+            if turn["recapped_on_correction"]:
+                flags.append(f"RECAP({turn['answer_chars']}ch,{turn['topic_hits']} topic-words)")
             print(f"  {turn['check']:28} web={turn['web_used']} mem={turn['memory_used']} "
                   f"{' '.join(flags)}")
 
@@ -159,6 +180,7 @@ def main() -> int:
     gate_ok = sum(1 for t in meta_turns if t["web_used"] == 0 and t["memory_used"] == 0)
     leak_free = sum(1 for t in all_turns if not t["leaked_labels"])
     overclaim_free = sum(1 for t in all_turns if not t["snippet_overclaim"])
+    no_recap = sum(1 for t in meta_turns if not t["recapped_on_correction"])
 
     print("\n" + "=" * 66)
     print("MECHANICAL (guaranteed by code -- any failure here is a real bug):")
@@ -166,6 +188,7 @@ def main() -> int:
     print("\nPROMPT-DEPENDENT (asked of the model -- a ratio, not a guarantee):")
     print(f"  turns free of leaked labels:      {leak_free}/{len(all_turns)}")
     print(f"  turns free of snippet overclaim:  {overclaim_free}/{len(all_turns)}")
+    print(f"  corrections answered without recap: {no_recap}/{len(meta_turns)}")
     print("\nHow to read this: 5/5 on a prompt-dependent rule is evidence the "
           "instruction works. Anything less means the prompt is not enough and "
           "a deterministic output filter is the honest fix -- do not conclude "
@@ -179,6 +202,7 @@ def main() -> int:
             "gate_held": [gate_ok, len(meta_turns)],
             "leak_free": [leak_free, len(all_turns)],
             "overclaim_free": [overclaim_free, len(all_turns)],
+            "no_recap_on_correction": [no_recap, len(meta_turns)],
         },
         "detail": trials,
     }, ensure_ascii=False, indent=2), encoding="utf-8")
