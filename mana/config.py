@@ -32,7 +32,7 @@ import numpy as np
 from .optional_deps import torch, HAS_TORCH
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.1"
+__version__ = "1.2"
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +109,13 @@ class Config:
     # The embedding figure is a reasoned default, not a calibrated one --
     # see scripts/calibrate_memory_relevance.py to measure it on your own
     # data and model before trusting it.
+    # Ask instead of guessing when a follow-up names no subject and several
+    # topics are in play (mana/intent.py). Asking is a refusal to answer, so
+    # the trigger is deliberately narrow and the false-ask rate is measured.
+    clarify_ambiguous_followups: bool = True
+    clarify_min_topics: int = 2
+    clarify_history_turns: int = 6
+
     memory_min_relevance_embedding: float = 0.45
     memory_min_relevance_lexical: float = 0.20
     memory_recent_messages: int = 12

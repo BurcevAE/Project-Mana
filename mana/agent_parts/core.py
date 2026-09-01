@@ -40,11 +40,12 @@ from ..memory import MemoryManager
 from ..version import PRODUCT_VERSION, format_version_report
 from ..hardware import detect_hardware, apply_hardware_profile
 from ..tools import build_default_registry
-from ..graph_memory import GraphMemoryStore
+from ..graph_memory import GraphMemoryStore, extract_entities
+from ..intent import is_ambiguous_followup, format_clarifying_question
 from ..optional_deps import fitz, HAS_FITZ, HAS_SKLEARN, LogisticRegression, HAS_TORCH, DEVICE, HAS_WEB, WEB_BACKEND, torch
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 
 class CoreMixin:
@@ -314,7 +315,53 @@ class CoreMixin:
                                   depth=depth, limit=limit)
         return {"context": result.output or "", "trace": result.meta.get("trace", {})}
 
+    def _ambiguous_followup(self, task: str):
+        """Would answering require guessing which earlier topic is meant?
+
+        Asking is itself a refusal to answer, so this must stay rare: it
+        fires only when the question names no subject AND at least two
+        distinct topics are in play. Any failure degrades to "not
+        ambiguous", i.e. answer as before -- an unnecessary question is
+        worse than an occasional wrong guess.
+        """
+        try:
+            recent = self.persistent_memory.recent(self.session_id,
+                                                    self.config.clarify_history_turns)
+            # Only the USER's earlier subjects count as candidates. An
+            # assistant answer names many incidental entities -- sources,
+            # places, products -- and counting those inflated the topic
+            # count so badly that a single-subject conversation triggered
+            # "про ИИ или РИА?", asking about a news agency the user never
+            # raised. Ambiguity is about which of THEIR subjects is meant.
+            topics = [extract_entities(str(r.get("content", "")))
+                      for r in recent if r.get("kind") == "USER_MESSAGE"]
+            return is_ambiguous_followup(task, topics,
+                                          min_candidates=self.config.clarify_min_topics)
+        except Exception as exc:
+            self._vlog(f"ambiguity check unavailable: {exc}")
+            from ..intent import AmbiguousReference
+            return AmbiguousReference(False, reason=f"check failed: {exc}")
+
     def solve_task(self, task: str) -> Dict[str, Any]:
+        if self.config.clarify_ambiguous_followups:
+            ambiguous = self._ambiguous_followup(task)
+            if ambiguous:
+                question = format_clarifying_question(ambiguous.candidates)
+                result = {"task": task, "answer": question, "latency": 0.0,
+                          "trace": {"clarification_requested": True,
+                                    "candidates": ambiguous.candidates},
+                          "pipeline": asdict(self.pipeline), "critic_score": 0.0,
+                          "critic_trace": {}, "llm_ok": False, "passes_used": 0,
+                          "timeout_count": 0, "fallback": False, "llm_latency": 0.0,
+                          "verification_trust": "UNVERIFIED",
+                          "clarification": {"asked": True, "candidates": ambiguous.candidates,
+                                            "reason": ambiguous.reason}}
+                self.history.append({"type": "clarification", "task": task, "cycle": self.cycle,
+                                      "latency": 0.0, "reliability": 1.0, "quality": None,
+                                      "timestamp": time.time(), **result})
+                self._save_state()
+                return result
+
         if self._is_memory_write_request(task):
             text=self._extract_memory_text(task)
             saved=self.persistent_memory.store_explicit_memory(self.session_id,text,scope="session")

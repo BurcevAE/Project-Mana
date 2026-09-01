@@ -39,11 +39,11 @@ Honest limitations:
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from typing import List, Optional
+from dataclasses import dataclass, field
+from typing import List, Optional, Sequence
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 
 #: Markers that a turn is commenting on the exchange rather than asking
@@ -88,6 +88,107 @@ _MARKER_GROUPS = {
 }
 
 _COMPILED = {name: [re.compile(p, re.I) for p in pats] for name, pats in _MARKER_GROUPS.items()}
+
+
+@dataclass
+class AmbiguousReference:
+    """Result of the ambiguity check.
+
+    `is_ambiguous` is the decision; `candidates` are the competing topics
+    it would ask about. Both are needed: the question MANA asks is built
+    from the candidates by code, not left to the model to invent.
+    """
+    is_ambiguous: bool
+    candidates: List[str] = field(default_factory=list)
+    reason: str = ""
+
+    def __bool__(self) -> bool:
+        return self.is_ambiguous
+
+
+#: A follow-up that names no subject of its own. These are the phrasings
+#: that inherit their topic from the conversation -- and therefore the only
+#: ones that can be ambiguous. A question that names its subject is never
+#: ambiguous no matter how many topics preceded it.
+#: NOTE: these are PREFIXES, so there is no trailing \b. The first version
+#: had one, and `новост\b` therefore failed to match "новости" -- the exact
+#: phrase from the reported scenario ("Какие последние новости?") was not
+#: detected at all. A word boundary after a stem is a contradiction.
+_TOPICLESS_FOLLOWUP = re.compile(
+    r"\b(последн|свеж|новост|подробн|детал|ещё|еще|дальше|продолж|результат|"
+    r"а\s+что|а\s+как|что\s+там|как\s+там)", re.I)
+
+
+def is_ambiguous_followup(text: str, recent_topics: Sequence[Sequence[str]],
+                           min_candidates: int = 2) -> AmbiguousReference:
+    """Would answering this require guessing WHICH earlier topic is meant?
+
+    Asks only when both conditions hold:
+
+      1. the question names no subject itself -- extract_entities finds
+         nothing, so it must inherit one from the conversation;
+      2. the conversation offers >= `min_candidates` distinct topics, so
+         there is a real choice rather than an obvious one.
+
+    Condition 2 matters as much as condition 1. With a single topic in
+    play there is nothing to guess and asking would be pure friction --
+    and friction is the real cost here: a clarifying question is a refusal
+    to answer, so over-asking is worse than the occasional wrong guess it
+    prevents. That is why this is deliberately narrow, and why the
+    false-ask rate is measured (tests/test_intent.py) rather than assumed.
+
+    `recent_topics` is a sequence of per-turn entity lists, most recent
+    first, as produced by graph_memory.extract_entities.
+    """
+    query = (text or "").strip()
+    if not query:
+        return AmbiguousReference(False, reason="empty input")
+    from .graph_memory import extract_entities
+    if extract_entities(query):
+        return AmbiguousReference(False, reason="the question names its own subject")
+    if not _TOPICLESS_FOLLOWUP.search(query):
+        return AmbiguousReference(False, reason="not a topic-inheriting follow-up")
+
+    # One candidate per earlier TURN, not per entity. Counting entities
+    # made "Какой результат матча Спартак — ЦСКА?" look like two competing
+    # topics and produced "про ЦСКА или Спартак?" -- offering a choice
+    # between two teams in a single question the user asked once. A
+    # candidate is an earlier subject the user raised, and one question
+    # raises one subject however many names it contains.
+    candidates: List[str] = []
+    for topics in recent_topics:
+        if not topics:
+            continue
+        label = topics[0]
+        if label not in candidates:
+            candidates.append(label)
+    if len(candidates) < min_candidates:
+        return AmbiguousReference(False, candidates=candidates,
+                                   reason=f"only {len(candidates)} topic(s) in play -- nothing to guess between")
+    return AmbiguousReference(True, candidates=candidates,
+                               reason=f"{len(candidates)} competing topics and no subject named")
+
+
+def format_clarifying_question(candidates: Sequence[str], limit: int = 3) -> str:
+    """Build the question from the detected topics, in code.
+
+    Deliberately not delegated to the model: the whole point is to stop
+    guessing, and a generated question could invent an option that was
+    never discussed.
+    """
+    # Topics are stored lowercased (they are graph keys), but "про ии,
+    # цска" reads badly. Restore a plausible surface form: short all-letter
+    # tokens are acronyms, everything else is a proper noun. A heuristic,
+    # and occasionally it will capitalise something odd -- preferable to
+    # showing the user raw index keys.
+    def _surface(token: str) -> str:
+        return token.upper() if len(token) <= 4 else token.capitalize()
+
+    shown = [_surface(c) for c in candidates[:limit]]
+    if len(shown) < 2:
+        return "Уточни, пожалуйста, о чём именно речь?"
+    listed = ", ".join(shown[:-1]) + f" или {shown[-1]}"
+    return f"Уточни, пожалуйста: про {listed}?"
 
 
 @dataclass
