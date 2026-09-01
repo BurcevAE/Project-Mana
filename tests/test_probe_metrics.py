@@ -103,3 +103,16 @@ def test_snippet_overclaim_detector_accepts_the_corrected_phrasing():
     corrected = ("В сниппетах поисковой выдачи не видно свежих статей. "
                  "Однако это не исключает наличие более новых материалов на сайтах.")
     assert not module.OVERCLAIM.search(corrected)
+
+
+def test_foreign_script_detector_catches_the_observed_switch():
+    """Verbatim fragment from the live answer about Воронеж weather."""
+    module = _probe()
+    observed = "рекомендуется проверить официальные气象预报显示，明天维罗纳的天气预计为晴朗，26°C。"
+    assert module.FOREIGN_SCRIPT.search(observed)
+
+
+def test_foreign_script_detector_ignores_plain_russian():
+    module = _probe()
+    clean = "В выдаче не найдены актуальные данные о погоде в Воронеже на завтра."
+    assert not module.FOREIGN_SCRIPT.search(clean)

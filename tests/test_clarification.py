@@ -237,3 +237,28 @@ def test_agent_does_not_ask_on_the_live_false_ask_case(isolated_agent):
         agent.persistent_memory.remember_assistant(agent.session_id, mana)
     result = agent.solve_task(LIVE_FALSE_ASK)
     assert result["trace"].get("clarification_requested") is not True
+
+
+def test_history_window_counts_user_turns_not_events(isolated_agent):
+    """UNITS BUG found live. `recent()` returns EVENTS -- user and
+    assistant interleaved -- so asking for `clarify_history_turns` (6)
+    showed only 3 user turns. In the observed session the AI-news and
+    football topics had scrolled out of view, and a question about news
+    was answered with "Уточни: про Воронеже или Gismeteo?" -- offering two
+    weather entities and omitting the topic actually asked about.
+    """
+    agent = isolated_agent
+    topics = ["Расскажи последние новости про ИИ",
+              "А как сыграли ЦСКА и Локомотив?",
+              "А за какую дату есть результаты?",
+              "Мана, какая завтра погода в Воронеже?",
+              "Посмотри на сайте Gismeteo"]
+    for user in topics:
+        agent.persistent_memory.remember_user(agent.session_id, user)
+        agent.persistent_memory.remember_assistant(agent.session_id, "ответ")
+
+    result = agent._ambiguous_followup("Напомни какие были там последние новости?")
+    assert result.is_ambiguous
+    assert "ии" in result.candidates, (
+        f"the AI topic scrolled out of the window: {result.candidates}")
+    assert "цска" in result.candidates, result.candidates

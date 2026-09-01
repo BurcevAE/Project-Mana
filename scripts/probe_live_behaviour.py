@@ -69,6 +69,15 @@ CONTENT_MARKERS = (
     re.compile(r"(предоставил|я\s+дал|пришлось\s+предостав)", re.I),      # justifying the earlier answer
 )
 
+#: Characters from writing systems the conversation is not in. Observed
+#: live: asked about tomorrow's weather in Воронеж, the model answered in
+#: Russian, switched mid-sentence to Chinese, and invented a forecast
+#: ("明天维罗纳的天气...26°C") -- for 维罗纳, which is Verona, not Воронеж --
+#: immediately after saying it had no data. Three failures in one answer:
+#: language switch, fabricated numbers, wrong city. The language switch is
+#: the one that can be detected deterministically, so it is measured here.
+FOREIGN_SCRIPT = re.compile(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]")
+
 #: A correction deserves an acknowledgement, not an essay.
 RECAP_CHAR_LIMIT = 400
 RECAP_CONTENT_HITS = 1
@@ -86,6 +95,7 @@ CONVERSATION = [
     ("Разве я просил новости?", "conversation_reference"),
     ("Хватит про новости", "conversation_reference"),
     ("а что там было про ИИ?", "genuine_followup"),
+    ("Мана, какая завтра погода в Воронеже?", "weather_language_check"),
 ]
 
 
@@ -146,6 +156,7 @@ def run_trial(model: str, use_web: bool, trial: int) -> dict:
                 "web_skipped": trace.get("web_skipped"),
                 "leaked_labels": sorted(set(m.group(1).upper() for m in LEAKED_LABEL.finditer(answer))),
                 "snippet_overclaim": bool(OVERCLAIM.search(answer)),
+                "foreign_script": bool(FOREIGN_SCRIPT.search(answer)),
                 "content_hits": sum(1 for rx in CONTENT_MARKERS if rx.search(answer)),
                 "answer_chars": len(answer),
                 "recapped_on_correction": bool(
@@ -180,6 +191,8 @@ def main() -> int:
                 flags.append(f"LEAKED {','.join(turn['leaked_labels'])}")
             if turn["snippet_overclaim"]:
                 flags.append("SNIPPET-OVERCLAIM")
+            if turn["foreign_script"]:
+                flags.append("FOREIGN-SCRIPT")
             if turn["recapped_on_correction"]:
                 flags.append(f"RECAP({turn['answer_chars']}ch,{turn['content_hits']} content-markers)")
             print(f"  {turn['check']:28} web={turn['web_used']} mem={turn['memory_used']} "
@@ -192,6 +205,7 @@ def main() -> int:
     leak_free = sum(1 for t in all_turns if not t["leaked_labels"])
     overclaim_free = sum(1 for t in all_turns if not t["snippet_overclaim"])
     no_recap = sum(1 for t in meta_turns if not t["recapped_on_correction"])
+    same_language = sum(1 for t in all_turns if not t["foreign_script"])
 
     print("\n" + "=" * 66)
     print("MECHANICAL (guaranteed by code -- any failure here is a real bug):")
@@ -200,6 +214,7 @@ def main() -> int:
     print(f"  turns free of leaked labels:      {leak_free}/{len(all_turns)}")
     print(f"  turns free of snippet overclaim:  {overclaim_free}/{len(all_turns)}")
     print(f"  corrections answered without recap: {no_recap}/{len(meta_turns)}")
+    print(f"  turns without a language switch:   {same_language}/{len(all_turns)}")
     print("\nHow to read this: 5/5 on a prompt-dependent rule is evidence the "
           "instruction works. Anything less means the prompt is not enough and "
           "a deterministic output filter is the honest fix -- do not conclude "
@@ -214,6 +229,7 @@ def main() -> int:
             "leak_free": [leak_free, len(all_turns)],
             "overclaim_free": [overclaim_free, len(all_turns)],
             "no_recap_on_correction": [no_recap, len(meta_turns)],
+            "same_language": [same_language, len(all_turns)],
         },
         "detail": trials,
     }, ensure_ascii=False, indent=2), encoding="utf-8")

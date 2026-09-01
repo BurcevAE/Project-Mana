@@ -45,7 +45,7 @@ from ..intent import is_ambiguous_followup, format_clarifying_question
 from ..optional_deps import fitz, HAS_FITZ, HAS_SKLEARN, LogisticRegression, HAS_TORCH, DEVICE, HAS_WEB, WEB_BACKEND, torch
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.1"
+__version__ = "1.1.1"
 
 
 class CoreMixin:
@@ -325,8 +325,14 @@ class CoreMixin:
         worse than an occasional wrong guess.
         """
         try:
-            recent = self.persistent_memory.recent(self.session_id,
-                                                    self.config.clarify_history_turns)
+            # UNITS BUG (found live): recent() returns EVENTS -- user and
+            # assistant interleaved -- so asking for 6 showed only 3 user
+            # turns. In the observed session the AI-news and football
+            # topics had already scrolled out, and the clarifying question
+            # offered "про Воронеже или Gismeteo?" for a question about
+            # news. Ask for enough events to actually see N user turns.
+            recent = self.persistent_memory.recent(
+                self.session_id, self.config.clarify_history_turns * 2 + 2)
             # Only the USER's earlier subjects count as candidates. An
             # assistant answer names many incidental entities -- sources,
             # places, products -- and counting those inflated the topic

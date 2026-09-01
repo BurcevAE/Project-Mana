@@ -141,3 +141,30 @@ def test_prompt_says_a_snippet_date_describes_only_the_snippet(isolated_agent):
     prompt = isolated_agent._compose_prompt("какие новости", "", spec)
     assert "только сам сниппет" in prompt.lower()
     assert "страницу ты не открывал" in prompt.lower()
+
+
+def test_prompt_requires_answering_in_the_user_language(isolated_agent):
+    """Observed live: asked about tomorrow's weather in Воронеж, the model
+    answered in Russian, switched mid-sentence to Chinese, and invented a
+    forecast for 维罗纳 (Verona, not Воронеж) right after stating it had no
+    data. The language switch is detectable mechanically -- see
+    FOREIGN_SCRIPT in scripts/probe_live_behaviour.py."""
+    from dataclasses import asdict
+
+    from mana.pipeline import PipelineSpec
+
+    spec = PipelineSpec(**asdict(isolated_agent.pipeline)).normalize(isolated_agent.config)
+    prompt = isolated_agent._compose_prompt("какая завтра погода", "", spec)
+    assert "на языке пользователя" in prompt
+    assert "не переключайся" in prompt.lower()
+
+
+def test_prompt_forbids_inventing_missing_data(isolated_agent):
+    from dataclasses import asdict
+
+    from mana.pipeline import PipelineSpec
+
+    spec = PipelineSpec(**asdict(isolated_agent.pipeline)).normalize(isolated_agent.config)
+    prompt = isolated_agent._compose_prompt("какая завтра погода", "", spec)
+    assert "не придумывай" in prompt.lower()
+    assert "не нашлось" in prompt.lower()
