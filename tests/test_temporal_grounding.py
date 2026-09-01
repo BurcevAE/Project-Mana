@@ -110,3 +110,34 @@ def test_critic_verdict_is_still_not_proof():
     assert ExecutionMixin.verification_trust_level(verdict) == ExecutionMixin.TRUST_MODEL_TESTED
     assert (ExecutionMixin.TRUST_QUALITY_CAP[ExecutionMixin.TRUST_MODEL_TESTED]
             < ExecutionMixin.TRUST_QUALITY_CAP[ExecutionMixin.TRUST_INDEPENDENTLY_VERIFIED])
+
+
+def test_prompt_forbids_leaking_evidence_labels_into_the_answer(isolated_agent):
+    """Observed on real hardware: the model emitted "USER CLAIM:",
+    "SOURCE EVIDENCE:" and "CONCLUSION:" as literal headings to the user.
+    Those labels are internal context markup; the prompt described them
+    but never said they are not an output format, and a 7B model followed
+    the description literally."""
+    from dataclasses import asdict
+
+    from mana.pipeline import PipelineSpec
+
+    spec = PipelineSpec(**asdict(isolated_agent.pipeline)).normalize(isolated_agent.config)
+    prompt = isolated_agent._compose_prompt("какие новости", "", spec)
+    assert "служебная разметка" in prompt
+    assert "НЕ формат ответа" in prompt
+
+
+def test_prompt_says_a_snippet_date_describes_only_the_snippet(isolated_agent):
+    """Observed on real hardware: MANA insisted a site had nothing newer
+    than four days, citing a search snippet -- while the user was looking
+    at articles published that day. The snippet's date says nothing about
+    the site; the page was never opened."""
+    from dataclasses import asdict
+
+    from mana.pipeline import PipelineSpec
+
+    spec = PipelineSpec(**asdict(isolated_agent.pipeline)).normalize(isolated_agent.config)
+    prompt = isolated_agent._compose_prompt("какие новости", "", spec)
+    assert "только сам сниппет" in prompt.lower()
+    assert "страницу ты не открывал" in prompt.lower()

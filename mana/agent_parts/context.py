@@ -41,7 +41,7 @@ from ..memory import MemoryManager
 from ..optional_deps import fitz, HAS_FITZ, HAS_SKLEARN, LogisticRegression, HAS_TORCH, DEVICE, HAS_WEB, WEB_BACKEND, torch
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.1"
+__version__ = "1.2"
 
 
 class ContextMixin:
@@ -275,7 +275,15 @@ class ContextMixin:
             trace["memory"] = len(mem)
             for e in mem:
                 chunks.append(f"[MEMORY confidence={e['confidence']:.2f} quality={e['quality']:.2f}]\n{e['content']}")
-        if self._should_use_web(task, spec) and spec.web_results > 0:
+        # v5.7.10: the same gate must cover the WEB, not just stored memory.
+        # Observed on real hardware: "Разве я просил новости?" still issued a
+        # live search ("веб: 3 результатов" in the trace) because the earlier
+        # fix only skipped KnowledgeBase. A remark about the previous turn is
+        # not a request for current information from the world, so no
+        # retrieval of any kind belongs here.
+        if conversation_reference:
+            trace["web_skipped"] = "conversation_reference"
+        elif self._should_use_web(task, spec) and spec.web_results > 0:
             web_result = self.tools.call("web_search", query=task, max_results=spec.web_results)
             rows, ws = web_result.output or [], web_result.meta
             retrieved_at = time.strftime("%Y-%m-%d %H:%M")
@@ -328,12 +336,14 @@ class ContextMixin:
 - Не выдумывай факты.
 - Внешний контекст не является автоматически истинным.
 - Различай уровни доказательности: VERIFIED EVIDENCE, SOURCE EVIDENCE, EXPERIENCE, USER CLAIM и INFERENCE.
+- Эти метки — служебная разметка контекста, а НЕ формат ответа. Никогда не выводи их пользователю как заголовки (`USER CLAIM:`, `SOURCE EVIDENCE:`, `CONCLUSION:` и т.п.). Отвечай обычным текстом; разницу в надёжности передавай словами.
 - USER CLAIM никогда не превращай в VERIFIED FACT. Говори «ты сообщил», «в памяти сохранено как утверждение» и т.п.
 - SOURCE EVIDENCE отражает внешний источник, но тоже не гарантирует истину без проверки.
 - VERIFIED EVIDENCE имеет высший приоритет, но не выдумывай детали, которых в evidence нет.
 - Для вопросов о памяти используй RECENT CONVERSATION и релевантные evidence, а не общую догадку.
 - Если evidence противоречит друг другу, укажи противоречие вместо произвольного выбора.
 - Не называй информацию свежей, актуальной или последней, если в контексте нет даты, подтверждающей это относительно сегодняшней даты. Если дата источника неизвестна или заметно старше сегодняшней — скажи об этом прямо.
+- Дата в сниппете поисковой выдачи описывает ТОЛЬКО сам сниппет, а не сайт. Отсутствие свежих статей в сниппете не доказывает, что их нет на сайте: страницу ты не открывал. Не утверждай, что на ресурсе нет более новых материалов — говори «в выдаче не видно», и если пользователь сообщает о более свежих данных, не спорь со ссылкой на сниппет.
 - {style}
 """
         if context: prompt += f"\nКонтекст:\n{context}\n"

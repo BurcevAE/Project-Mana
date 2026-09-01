@@ -159,3 +159,44 @@ def test_gate_is_inactive_before_any_assistant_turn(isolated_agent):
     _, trace = agent._build_context("Разве я просил новости?", spec)
     assert trace.get("memory_skipped") is None, (
         "with no prior assistant turn this cannot be a correction")
+
+
+def test_conversation_reference_also_skips_web(isolated_agent):
+    """Observed on real hardware in 5.7.9: "Разве я просил новости?" still
+    issued a live web search ("веб: 3 результатов" in the trace), because
+    the first version of this gate only skipped KnowledgeBase. A remark
+    about the previous turn is not a request for current information, so
+    no retrieval of any kind belongs there -- neither stored nor live."""
+    from dataclasses import asdict
+
+    from mana.pipeline import PipelineSpec
+
+    agent = isolated_agent
+    agent.persistent_memory.remember_assistant(agent.session_id, "Вот последние новости про ИИ...")
+    spec = PipelineSpec(**asdict(agent.pipeline))
+    spec.web_mode = "always"
+    spec.use_web = True
+    spec = spec.normalize(agent.config)
+
+    _, trace = agent._build_context("Разве я просил новости?", spec)
+    assert trace["web"] == 0, "a meta-remark triggered a web search"
+    assert trace.get("web_skipped") == "conversation_reference"
+    assert trace.get("memory_skipped") == "conversation_reference"
+
+
+def test_genuine_current_events_question_still_reaches_web_path(isolated_agent):
+    """The gate must not suppress retrieval for real questions."""
+    from dataclasses import asdict
+
+    from mana.pipeline import PipelineSpec
+
+    agent = isolated_agent
+    agent.persistent_memory.remember_assistant(agent.session_id, "Вот последние новости про ИИ...")
+    spec = PipelineSpec(**asdict(agent.pipeline))
+    spec.web_mode = "always"
+    spec.use_web = True
+    spec = spec.normalize(agent.config)
+
+    _, trace = agent._build_context("какие последние новости про ИИ", spec)
+    assert trace.get("web_skipped") is None
+    assert trace.get("memory_skipped") is None
