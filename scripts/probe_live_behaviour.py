@@ -49,18 +49,29 @@ LEAKED_LABEL = re.compile(
     r"^\s*(USER CLAIM|SOURCE EVIDENCE|VERIFIED EVIDENCE|EXPERIENCE|INFERENCE|"
     r"RECENT CONVERSATION|CONCLUSION)\s*:", re.M | re.I)
 
-#: Topic words whose reappearance on a CORRECTION turn means the model
-#: recapped the very subject the user just asked it to drop. Measured
-#: rather than judged: 5.7.11 held the retrieval gate (web=0, memory=0)
-#: yet still answered "Хватит про новости" with another news paragraph,
-#: which no existing flag caught.
-TOPIC_WORDS = re.compile(r"новост|РИА|Коммерсант|Lenta|ИИ[\s,.)]|искусственн", re.I)
+#: Substantive news CONTENT -- what a recap actually consists of. The
+#: first version of this metric counted topic WORDS instead, and reading
+#: the transcript showed why that was wrong: acknowledging a correction
+#: naturally mentions the subject ("вы не просили новости про ИИ"), which
+#: is not a recap at all. It scored 6/10 on a run where all ten answers
+#: were, on reading, correct acknowledgements.
+#:
+#: Note on method: this metric was changed AFTER seeing results, which is
+#: normally how you fool yourself. The justification is that reading the
+#: data showed it measured the wrong thing, not that the number was
+#: inconvenient -- and the corrected metric is required to still flag the
+#: original 5.7.11 failure (see test below). If it stopped flagging that,
+#: it would be tuning-until-green and worthless.
+CONTENT_MARKERS = (
+    re.compile(r"\b20\d\d\b"),                       # a date -- reporting, not acknowledging
+    re.compile(r"^\s*\d+[.)]\s", re.M),               # an enumerated list of items
+    re.compile(r"(освеща|сообща|опубликова|распростран|стратеги)", re.I),  # reporting verbs
+    re.compile(r"(предоставил|я\s+дал|пришлось\s+предостав)", re.I),      # justifying the earlier answer
+)
 
-#: A correction deserves a short acknowledgement, not an essay. This is a
-#: proxy, not a truth: length alone does not prove a recap, so the JSON
-#: keeps the full answer for reading.
+#: A correction deserves an acknowledgement, not an essay.
 RECAP_CHAR_LIMIT = 400
-RECAP_TOPIC_HITS = 3
+RECAP_CONTENT_HITS = 1
 
 #: Phrasings that assert a site has nothing newer, on snippet evidence alone.
 OVERCLAIM = re.compile(
@@ -135,12 +146,12 @@ def run_trial(model: str, use_web: bool, trial: int) -> dict:
                 "web_skipped": trace.get("web_skipped"),
                 "leaked_labels": sorted(set(m.group(1).upper() for m in LEAKED_LABEL.finditer(answer))),
                 "snippet_overclaim": bool(OVERCLAIM.search(answer)),
-                "topic_hits": len(TOPIC_WORDS.findall(answer)),
+                "content_hits": sum(1 for rx in CONTENT_MARKERS if rx.search(answer)),
                 "answer_chars": len(answer),
                 "recapped_on_correction": bool(
                     check == "conversation_reference"
                     and (len(answer) > RECAP_CHAR_LIMIT
-                         or len(TOPIC_WORDS.findall(answer)) >= RECAP_TOPIC_HITS)),
+                         or sum(1 for rx in CONTENT_MARKERS if rx.search(answer)) >= RECAP_CONTENT_HITS)),
             })
         _close_agent(agent)
         return {"trial": trial, "turns": turns}
@@ -170,7 +181,7 @@ def main() -> int:
             if turn["snippet_overclaim"]:
                 flags.append("SNIPPET-OVERCLAIM")
             if turn["recapped_on_correction"]:
-                flags.append(f"RECAP({turn['answer_chars']}ch,{turn['topic_hits']} topic-words)")
+                flags.append(f"RECAP({turn['answer_chars']}ch,{turn['content_hits']} content-markers)")
             print(f"  {turn['check']:28} web={turn['web_used']} mem={turn['memory_used']} "
                   f"{' '.join(flags)}")
 
