@@ -33,7 +33,7 @@ from typing import Dict
 __version__ = "1.0"
 
 #: The release as a whole.
-PRODUCT_VERSION = "5.12.0"
+PRODUCT_VERSION = "5.12.1"
 
 #: Modules that carry their own version. Kept as an explicit list rather
 #: than discovered by scanning, so a module added without a version number
