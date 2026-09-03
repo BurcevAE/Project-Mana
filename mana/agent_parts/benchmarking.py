@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from ..config import Config, RandomManager
+from .. import events
 from ..knowledge import KnowledgeBase
 from ..web import WebSearcher
 from ..llm import LLMClient
@@ -39,8 +40,46 @@ from ..verifier import LocalVerifier
 from ..memory import MemoryManager
 from ..optional_deps import fitz, HAS_FITZ, HAS_SKLEARN, LogisticRegression, HAS_TORCH, DEVICE, HAS_WEB, WEB_BACKEND, torch
 
+from contextlib import ExitStack
+
+from ..core import evaluation as _evaluation
+
+
+#: Open evaluation contexts held for the duration of a benchmark run.
+#: A module-level stack rather than a parameter because the two call sites
+#: that switch modes are separated by the whole benchmark loop, and
+#: threading a context through it would touch code this change has no
+#: reason to disturb.
+_MODE_STACK = ExitStack()
+
+
+def _holdout_mode(holdout: bool, label: str):
+    """Issue (and hold open) a core evaluation context for this run."""
+    _MODE_STACK.close()
+    mode = _evaluation.HELD_OUT if holdout else _evaluation.DEV
+    return _MODE_STACK.enter_context(_evaluation.open_evaluation(mode, label))
+
+
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
+
+def _out(*parts: Any, **_kw: Any) -> None:
+    """print()-shaped adapter onto the event bus.
+
+    Kept print-shaped on purpose: these call sites are status lines whose
+    wording and formatting are already right, and rewriting each one into
+    a bespoke emit() would have been a large diff with no behavioural
+    gain. What changes is where the text goes -- a windowed build has no
+    stdout, and a cp1251 console could not encode the markers these lines
+    use. Severity is taken from the marker the line already carries.
+    """
+    text = " ".join(str(p) for p in parts)
+    stripped = text.lstrip("\n ")
+    if stripped.startswith(("⚠", "❌")):
+        events.emit(events.WARNING, text)
+    else:
+        events.emit(events.STATUS, text)
+
 
 
 class BenchmarkingMixin:
@@ -82,7 +121,11 @@ class BenchmarkingMixin:
         base = PipelineSpec(**asdict(spec or self.pipeline)).normalize(self.config)
         rows=[]
         self._benchmark_learning = True
-        self._benchmark_holdout = bool(holdout)
+        # Was `self._benchmark_holdout = bool(holdout)`. The mode now
+        # comes from core, so a holdout run cannot be declared by the
+        # thing being measured.
+        self.enter_evaluation(
+            _holdout_mode(holdout, "adaptive-holdout" if holdout else "adaptive"))
         try:
             for rep in range(max(1, repetitions)):
                 for tid,q,expected,must,cat in tasks:
@@ -110,7 +153,7 @@ class BenchmarkingMixin:
                         self._learn_stop_outcome(q, int(row["steps"]), score >= 0.75, float(row["confidence"]))
         finally:
             self._benchmark_learning = False
-            self._benchmark_holdout = False
+            self.leave_evaluation()
         n=max(1,len(rows)); webrows=[x for x in rows if x["web_attempted"]]
         bycat={}
         for cat in sorted(set(x["category"] for x in rows)):
@@ -215,7 +258,7 @@ class BenchmarkingMixin:
     def routing_benchmark(self, spec: Optional[PipelineSpec] = None) -> Dict[str, Any]:
         base = PipelineSpec(**asdict(spec or self.pipeline)).normalize(self.config)
         tasks = self._routing_tasks()
-        print("\\n🧭 ROUTING BENCHMARK v3.4.11")
+        _out("\\n🧭 ROUTING BENCHMARK v3.4.11")
         rows = []
         for task in tasks:
             forced = PipelineSpec(**asdict(base)).normalize(self.config)
@@ -257,7 +300,7 @@ class BenchmarkingMixin:
         for cat in sorted(set(x["category"] for x in rows)):
             cr=[x for x in rows if x["category"]==cat]; cats[cat]={"tasks":len(cr),"route_accuracy":float(np.mean([x["route_correct"] for x in cr])),"execution_accuracy":float(np.mean([x["execution_correct"] for x in cr])),"quality":float(np.mean([x["score"] for x in cr])),"web_attempt_rate":float(np.mean([x["web_attempted"] for x in cr]))}
         result={"version":self.VERSION,"arms":by_arm,"auto":{"arm":"AUTO","tasks":len(rows),"quality":quality,"p50_latency":self._quantile([x["latency"] for x in rows],.5),"p95_latency":self._quantile([x["latency"] for x in rows],.95),"route_accuracy":route_acc,"execution_accuracy":exec_acc,"web_attempt_rate":web_rate,"web_success_rate":web_success,"rows":rows,"by_category":cats},"timestamp":time.time()}
-        print(json.dumps(result,ensure_ascii=False,indent=2))
+        _out(json.dumps(result,ensure_ascii=False,indent=2))
         return result
 
     def routing_holdout(self, spec: Optional[PipelineSpec] = None) -> Dict[str, Any]:
@@ -329,9 +372,9 @@ class BenchmarkingMixin:
         return raw * 100.0, m
 
     def benchmark(self) -> Dict[str, Any]:
-        print("\n🧪 BENCHMARK current pipeline")
+        _out("\n🧪 BENCHMARK current pipeline")
         r = self.run_control_benchmark(self.pipeline)
-        print(f"TRAIN: quality={r['train']['quality']:.3f} p50={r['train']['p50_latency']:.2f}s p95={r['train']['p95_latency']:.2f}s timeouts={r['train']['timeouts']}")
-        print(f"GEN:   quality={r['generalization']['quality']:.3f} p50={r['generalization']['p50_latency']:.2f}s p95={r['generalization']['p95_latency']:.2f}s")
-        print(f"HOLD:  quality={r['holdout']['quality']:.3f} p50={r['holdout']['p50_latency']:.2f}s p95={r['holdout']['p95_latency']:.2f}s")
+        _out(f"TRAIN: quality={r['train']['quality']:.3f} p50={r['train']['p50_latency']:.2f}s p95={r['train']['p95_latency']:.2f}s timeouts={r['train']['timeouts']}")
+        _out(f"GEN:   quality={r['generalization']['quality']:.3f} p50={r['generalization']['p50_latency']:.2f}s p95={r['generalization']['p95_latency']:.2f}s")
+        _out(f"HOLD:  quality={r['holdout']['quality']:.3f} p50={r['holdout']['p50_latency']:.2f}s p95={r['holdout']['p95_latency']:.2f}s")
         return r

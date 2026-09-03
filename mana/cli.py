@@ -34,9 +34,10 @@ from .version import PRODUCT_VERSION, format_version_report, version_report
 from .agent import ManaAgent
 from .voice import VoiceInterface
 from .optional_deps import HAS_REQUESTS, HAS_WEB, HAS_SOUNDDEVICE, sd
+from . import events, paths
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.1"
+__version__ = "1.3"
 
 
 # ---------------------------------------------------------------------------
@@ -108,9 +109,16 @@ def format_brains(status: Dict[str, Any]) -> str:
         if b["ready"]:
             note = "ok"
         elif not b["enabled"]:
-            note = "выключен"
+            # A brain can be off because it needs something the user has
+            # not supplied yet (Cloudflare needs an account id as well as
+            # a token). "Выключен" alone is a dead end -- say what is
+            # missing, since that is the only reason anyone reads this
+            # column.
+            note = b.get("setup_hint") or "выключен"
         elif not b["key_present"]:
             note = f"нет ключа ({b['api_key_env']})"
+            if b.get("setup_hint"):
+                note += f" — {b['setup_hint']}"
         elif b["cooldown_for"] > 0:
             note = f"кулдаун {b['cooldown_for']:.0f}с: {b['last_error'][:40]}"
         elif b["rpd"] and b["day_count"] >= b["rpd"]:
@@ -170,6 +178,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-hardware-adapt", action="store_true", help="Не подстраивать Config под текущую машину")
     parser.add_argument("--list-tools", action="store_true", help="Показать зарегистрированные инструменты агента")
     # --- brain pool (mana.brains) ---
+    parser.add_argument("--paths-status", action="store_true",
+                        help="Где MANA ищет состояние, песочницу и собственный код "
+                             "(первое, что нужно смотреть, если память 'потерялась')")
     parser.add_argument("--list-brains", action="store_true",
                         help="Показать все мозги: какие настроены, готовы, в кулдауне или исчерпали free-tier")
     parser.add_argument("--brains-status", action="store_true",
@@ -211,6 +222,17 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+
+    # The console is this process's output device, so say so once. Library
+    # code emits events (see mana/events.py) and no longer assumes a
+    # terminal exists; without a sink installed those events go nowhere,
+    # which is exactly what the windowed app wants and exactly what a CLI
+    # run must not do.
+    events.install_console_sink()
+
+    if args.paths_status:
+        print(json.dumps(paths.status(), ensure_ascii=False, indent=2))
+        return 0
 
     # Handled before any agent is constructed: reporting the version must
     # not require loading embedding models or opening databases.

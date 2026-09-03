@@ -62,7 +62,7 @@ from .config import Config
 from .optional_deps import requests, HAS_REQUESTS
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.1"
+__version__ = "1.4"
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +106,13 @@ class BrainSpec:
     weight: float = 1.0                 # manual preference nudge
     enabled: bool = True
     notes: str = ""
+    #: What is still missing before this brain can be used, in the user's
+    #: words. Shown by --list-brains and by the desktop app instead of a
+    #: bare "disabled", which tells nobody what to do about it. Needed
+    #: because not every brain is configured by an API key alone --
+    #: Cloudflare also needs an account id, and a brain that silently
+    #: reports "disabled" for a missing second value is a dead end.
+    setup_hint: str = ""
 
     #: Resolved at build time from api_key_env; never serialized back out
     #: (see `public_dict`) so a status dump or an evolution report cannot
@@ -170,16 +177,36 @@ def default_catalog(cfg: Config) -> List[BrainSpec]:
             base_url=cfg.gemini_url, api_key_env="GEMINI_API_KEY",
             tier="large", strengths=("reasoning", "general", "synthesis", "planning"),
             free=True, rpm=15, rpd=1000,
+            setup_hint="ключ бесплатно на aistudio.google.com/apikey",
             notes="Google AI Studio free tier.",
         ),
         BrainSpec(
             brain_id="groq", provider="openai_chat",
-            model=env("MANA_GROQ_MODEL", "llama-3.3-70b-versatile"),
+            # Verified against a live free-tier account, not taken from
+            # documentation: llama-3.3-70b-versatile (the previous default
+            # here) returns 404 "model does not exist" -- Groq's catalogue
+            # moved, which is exactly why every model id in this file is
+            # env-overridable. gpt-oss-120b answered a Russian reasoning
+            # prompt in 0.98s.
+            model=env("MANA_GROQ_MODEL", "openai/gpt-oss-120b"),
             base_url=env("MANA_GROQ_URL", "https://api.groq.com/openai/v1/chat/completions"),
             api_key_env="GROQ_API_KEY", tier="large",
             strengths=("general", "reasoning", "synthesis"), free=True, rpm=30, rpd=1000,
             timeout=30.0,
+            setup_hint="ключ бесплатно на console.groq.com/keys (начинается с gsk_)",
             notes="Groq free tier. Fastest remote brain -- preferred when latency matters.",
+        ),
+        BrainSpec(
+            # A second Groq model from a different family, so consensus
+            # between the two is worth something: two answers from one
+            # model are one answer twice.
+            brain_id="groq-qwen", provider="openai_chat",
+            model=env("MANA_GROQ_QWEN_MODEL", "qwen/qwen3.8-27b"),
+            base_url=env("MANA_GROQ_URL", "https://api.groq.com/openai/v1/chat/completions"),
+            api_key_env="GROQ_API_KEY", tier="medium",
+            strengths=("math", "programming", "general"), free=True, rpm=30, rpd=1000,
+            timeout=30.0,
+            notes="Second Groq model, different family -- gives the pool a real second opinion.",
         ),
         BrainSpec(
             brain_id="cerebras", provider="openai_chat",
@@ -187,6 +214,7 @@ def default_catalog(cfg: Config) -> List[BrainSpec]:
             base_url=env("MANA_CEREBRAS_URL", "https://api.cerebras.ai/v1/chat/completions"),
             api_key_env="CEREBRAS_API_KEY", tier="large",
             strengths=("general", "reasoning"), free=True, rpm=30, rpd=900, timeout=30.0,
+            setup_hint="ключ бесплатно на cloud.cerebras.ai",
             notes="Cerebras free tier.",
         ),
         BrainSpec(
@@ -211,7 +239,29 @@ def default_catalog(cfg: Config) -> List[BrainSpec]:
             base_url=env("MANA_GITHUB_MODELS_URL", "https://models.inference.ai.azure.com/chat/completions"),
             api_key_env="GITHUB_TOKEN", tier="medium",
             strengths=("general", "programming"), free=True, rpm=15, rpd=150,
+            setup_hint="любой GitHub PAT подойдёт",
             notes="GitHub Models -- free with any GitHub personal access token.",
+        ),
+        BrainSpec(
+            # Cloudflare Workers AI. Two things make it worth a catalog
+            # entry: a genuinely free daily allocation, and an
+            # OpenAI-compatible route, so it needs no new adapter.
+            #
+            # It is also the first brain that needs more than a key: the
+            # account id is part of the URL and differs per user, so it
+            # cannot be a constant here. Without it the entry stays
+            # disabled with a hint rather than sitting in the pool with a
+            # URL that cannot resolve.
+            brain_id="cloudflare", provider="openai_chat",
+            model=env("MANA_CLOUDFLARE_MODEL", "@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
+            base_url=(f"https://api.cloudflare.com/client/v4/accounts/"
+                      f"{env('MANA_CLOUDFLARE_ACCOUNT_ID', '')}/ai/v1/chat/completions"),
+            api_key_env="CLOUDFLARE_API_TOKEN", tier="large",
+            strengths=("general", "reasoning", "programming"), free=True, rpm=30,
+            enabled=bool(env("MANA_CLOUDFLARE_ACCOUNT_ID", "")),
+            setup_hint=("нужны CLOUDFLARE_API_TOKEN (права Workers AI) и "
+                        "MANA_CLOUDFLARE_ACCOUNT_ID — id аккаунта из URL панели Cloudflare"),
+            notes="Cloudflare Workers AI free allocation, OpenAI-compatible route.",
         ),
         # --- aggregators: several brains behind one key -----------------
         BrainSpec(
@@ -247,6 +297,92 @@ def default_catalog(cfg: Config) -> List[BrainSpec]:
             notes="OpenAI Responses API. Paid -- used only when policy allows non-free brains.",
         ),
     ]
+
+
+#: Parameter-count boundaries for tiering a local model. Rough by nature:
+#: what matters is that a 0.5B and a 32B do not compete for the same work,
+#: not the exact cut-off.
+_LOCAL_TIER_BOUNDS = ((2.0, "small"), (16.0, "medium"))
+
+
+def _tier_for_parameters(param_size: str) -> str:
+    """'7.6B' -> 'medium'. Anything unparseable stays 'small', which is the
+    conservative answer: an unknown local model gets easy work rather than
+    the reasoning tasks a wrong guess would waste."""
+    try:
+        billions = float(str(param_size).upper().rstrip("B").strip())
+    except (TypeError, ValueError):
+        return "small"
+    for bound, tier in _LOCAL_TIER_BOUNDS:
+        if billions < bound:
+            return tier
+    return "large"
+
+
+def probe_ollama(base_url: str, timeout: float = 1.5) -> Dict[str, Any]:
+    """Ask a local Ollama what it actually has.
+
+    Two failures this prevents, both observed on real machines rather than
+    imagined:
+
+      * **A model name nobody pulled.** Config defaults to
+        `qwen2.5:0.5b`; the machine had `qwen2.5:7b-instruct`. Every call
+        would have returned 404 "model not found" while the pool happily
+        listed the brain as ready.
+      * **A brain with no server at all.** `usable()` checked config, key
+        and flag but never reachability, so an uninstalled Ollama
+        outranked working remote brains (it gets the local bonus) and
+        quietly turned a two-brain consensus into one opinion.
+
+    Never raises, and a refused connection to localhost returns
+    immediately -- this runs once per pool, not once per call.
+    """
+    result: Dict[str, Any] = {"reachable": False, "models": [], "error": ""}
+    if not HAS_REQUESTS:
+        result["error"] = "requests not installed"
+        return result
+    # cfg.ollama_url points at /api/generate; the inventory lives next door.
+    tags_url = (base_url.rsplit("/api/", 1)[0] + "/api/tags") if "/api/" in base_url else base_url
+    try:
+        r = requests.get(tags_url, timeout=timeout)
+        r.raise_for_status()
+        result["reachable"] = True
+        for m in r.json().get("models", []) or []:
+            result["models"].append({
+                "name": m.get("name", ""),
+                "parameters": (m.get("details") or {}).get("parameter_size", ""),
+            })
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"[:200]
+    return result
+
+
+def adapt_local_brain(spec: BrainSpec, probe: Dict[str, Any]) -> None:
+    """Reconcile a local brain with what the machine actually runs.
+
+    Mutates in place. An installed configured model always wins -- an
+    explicit `--llm-model` must never be silently overridden. Otherwise
+    the first installed model is adopted and the tier comes from its real
+    parameter count, because a 7B and a 0.5B should not be offered the
+    same work.
+    """
+    if not probe.get("reachable"):
+        spec.enabled = False
+        spec.setup_hint = f"Ollama не отвечает на {spec.base_url} — запустите `ollama serve`"
+        return
+    installed = probe.get("models") or []
+    if not installed:
+        spec.enabled = False
+        spec.setup_hint = "Ollama запущена, но моделей нет — `ollama pull qwen2.5:7b-instruct`"
+        return
+    names = [m["name"] for m in installed]
+    if spec.model in names:
+        chosen = next(m for m in installed if m["name"] == spec.model)
+    else:
+        chosen = installed[0]
+        spec.setup_hint = f"модель {spec.model} не установлена, используется {chosen['name']}"
+        spec.model = chosen["name"]
+    spec.tier = _tier_for_parameters(chosen.get("parameters", ""))
 
 
 def load_catalog(cfg: Config) -> List[BrainSpec]:
@@ -342,7 +478,17 @@ class BrainPool:
         self.calls = 0
         self.failures = 0
         self.timeouts = 0
-        for spec in load_catalog(config):
+        catalog = load_catalog(config)
+        # One probe per pool, not per call, and only when a real network
+        # is in play: an injected transport means a test, and a test must
+        # not depend on whether the developer happens to have Ollama
+        # running. A refused localhost connection returns instantly, so
+        # this costs nothing on a machine without it.
+        if self._transport is None and getattr(config, "brain_probe_local", True):
+            for spec in catalog:
+                if spec.provider == "ollama" and spec.enabled:
+                    adapt_local_brain(spec, probe_ollama(spec.base_url))
+        for spec in catalog:
             self.add(spec)
 
     # ---------- catalog ----------
@@ -542,7 +688,7 @@ class BrainPool:
             self.calls += 1
 
     def _note_failure(self, brain_id: str, error: str, *, timeout: bool, rate_limited: bool,
-                      retry_after: float = 0.0) -> None:
+                      retry_after: float = 0.0, unreachable: bool = False) -> None:
         with self._lock:
             h = self.health[brain_id]
             h.calls += 1
@@ -566,6 +712,13 @@ class BrainPool:
                 wait = retry_after if retry_after > 0 else float(self.config.brain_rate_limit_cooldown)
                 h.cooldown_until = time.time() + wait
                 h.consecutive_failures = max(0, h.consecutive_failures - 1)
+                return
+            if unreachable:
+                # No server on the other end. Waiting for three of these
+                # before stepping aside means three wasted attempts per
+                # call -- and in a consensus it silently turns N opinions
+                # into N-1. One refusal is enough evidence.
+                h.cooldown_until = time.time() + float(self.config.brain_cooldown_seconds)
                 return
             if h.consecutive_failures >= int(self.config.brain_failure_limit):
                 backoff = float(self.config.brain_cooldown_seconds) * (
@@ -715,14 +868,16 @@ class BrainPool:
         except Exception as exc:
             elapsed = time.perf_counter() - t0
             timed_out, limited, retry_after = classify_error(exc)
+            gone = is_unreachable(exc)
             self._note_failure(brain_id, f"{type(exc).__name__}: {exc}",
-                               timeout=timed_out, rate_limited=limited, retry_after=retry_after)
+                               timeout=timed_out, rate_limited=limited, retry_after=retry_after,
+                               unreachable=gone)
             self._log(f"BRAIN FAIL | {brain_id} | tag={context_tag or '-'} | "
-                      f"{'429' if limited else ('timeout' if timed_out else type(exc).__name__)} | "
+                      f"{'429' if limited else ('unreachable' if gone else ('timeout' if timed_out else type(exc).__name__))} | "
                       f"time={elapsed:.2f}s")
             return {"ok": False, "brain": brain_id, "model": spec.model, "text": None,
                     "latency": elapsed, "error": f"{type(exc).__name__}: {exc}",
-                    "timeout": timed_out, "rate_limited": limited}
+                    "timeout": timed_out, "rate_limited": limited, "unreachable": gone}
         finally:
             self._release(brain_id)
 
@@ -839,6 +994,30 @@ class BrainPool:
                                     "error": f"{type(exc).__name__}: {exc}", "latency": 0.0})
         order = {bid: i for i, bid in enumerate(ids)}
         results.sort(key=lambda r: order.get(str(r.get("brain", "")), 99))
+
+        # Top up. Asking N brains and accepting N-minus-the-failures
+        # opinions quietly weakens the thing consensus exists to provide:
+        # the first live run wanted two views, one selected brain had no
+        # server behind it, and the result was a single answer reported --
+        # correctly, but uselessly -- as `single`. If other brains are
+        # ready, ask them rather than returning a thinner ensemble.
+        # Bounded by construction: each round excludes everyone already
+        # tried, so it terminates when the pool runs out.
+        tried = set(ids)
+        wanted = max(1, int(n))
+        rounds = 0
+        while sum(1 for r in results if r.get("ok")) < wanted and rounds < wanted:
+            rounds += 1
+            missing = wanted - sum(1 for r in results if r.get("ok"))
+            extra = self.select(kind=kind, difficulty=difficulty, task=task or prompt,
+                                policy=policy, exclude=sorted(tried), limit=missing)
+            if not extra:
+                break
+            tried.update(extra)
+            for bid in extra:
+                results.append(self.ask_brain(bid, prompt, system=system,
+                                              temperature=temperature,
+                                              context_tag=f"{context_tag} ENS+"))
         return results
 
     def ask_consensus(self, prompt: str, *, n: int = 2, **kwargs: Any) -> Dict[str, Any]:
@@ -908,18 +1087,59 @@ _WORD_RE = re.compile(r"\w+", re.UNICODE)
 _NUM_RE = re.compile(r"-?\d+(?:[.,]\d+)?")
 
 
+#: Verdict words, matched at the start of an answer. Two models that both
+#: answer "нет" and then explain differently AGREE -- see `verdict_of`.
+_VERDICT_RE = re.compile(r"^\W*(нет|да|yes|no|true|false|верно|неверно)\b", re.I | re.UNICODE)
+_VERDICT_CANON = {"нет": "no", "no": "no", "false": "no", "неверно": "no",
+                  "да": "yes", "yes": "yes", "true": "yes", "верно": "yes"}
+
+
+def verdict_of(text: str) -> Optional[str]:
+    """The yes/no verdict an answer opens with, if it opens with one.
+
+    Only the opening is inspected on purpose. "Нет. Модель может ошибаться"
+    is a verdict; a "нет" buried in the middle of an explanation is not,
+    and treating it as one would make two opposite answers look identical.
+    """
+    match = _VERDICT_RE.match((text or "").strip())
+    return _VERDICT_CANON.get(match.group(1).lower()) if match else None
+
+
 def answer_similarity(a: str, b: str) -> float:
     """Agreement between two answers, 0..1.
 
-    Token Jaccard alone rates "391" and "по моим расчётам получается 391"
-    as barely similar, and rates two differently-worded refusals as very
-    similar. So when both answers contain numbers, the numbers dominate:
-    for the kind of task MANA is graded on, agreeing on the number IS the
-    agreement.
+    Token Jaccard alone is wrong in both directions: it rates "391" and
+    "по моим расчётам получается 391" as barely similar, and rates two
+    differently-worded refusals as very similar. So the substance is
+    checked before the wording.
+
+    Two substance channels, in priority order:
+
+      1. **Verdict.** Found on the first live run against two real models:
+         both answered "Нет" to "can an LLM answer be treated as a proven
+         fact", explained it in different words, and scored 0.29 -- which
+         the pool reported as disagreement. They agreed completely on the
+         only thing that mattered. Wording overlap is a poor proxy for
+         agreement on prose, and for a yes/no question it is the wrong
+         measurement entirely.
+      2. **Numbers.** Where both answers contain figures, agreeing on the
+         figures IS the agreement.
+
+    Wording still contributes, but only as a tiebreaker: two answers that
+    reach the same verdict for visibly different reasons are less
+    corroborating than two that reason alike, and that difference should
+    be visible without flipping the verdict.
     """
     ta = {w.lower() for w in _WORD_RE.findall(a or "")}
     tb = {w.lower() for w in _WORD_RE.findall(b or "")}
     jaccard = len(ta & tb) / len(ta | tb) if (ta or tb) else 0.0
+
+    va, vb = verdict_of(a), verdict_of(b)
+    if va and vb:
+        # An explicit contradiction is the strongest signal available:
+        # floor it rather than letting shared vocabulary soften it.
+        return (0.80 + 0.20 * jaccard) if va == vb else min(0.15, jaccard)
+
     na = {x.replace(",", ".") for x in _NUM_RE.findall(a or "")}
     nb = {x.replace(",", ".") for x in _NUM_RE.findall(b or "")}
     if na and nb:
@@ -948,3 +1168,28 @@ def classify_error(exc: Exception) -> Tuple[bool, bool, float]:
         except (TypeError, ValueError):
             retry_after = 0.0
     return timed_out, bool(limited), retry_after
+
+
+def is_unreachable(exc: Exception) -> bool:
+    """Nothing is listening, as opposed to something answering badly.
+
+    The distinction earns its own function because the two deserve
+    opposite treatment. A flaky endpoint should get the benefit of the
+    doubt for a few tries (that is what brain_failure_limit is for); an
+    endpoint that refuses the TCP connection will refuse the next one too,
+    and retrying it wastes an attempt every call.
+
+    Found on the first live run: with no Ollama server installed, the
+    local brain still ranked first (it gets the local bonus) and was still
+    picked for a two-brain consensus. The call failed, one opinion came
+    back instead of two, and the pool honestly reported `single` -- correct
+    behaviour built on a brain that never had a chance of answering.
+    """
+    name = type(exc).__name__
+    text = str(exc).lower()
+    if "ConnectionError" in name or "ConnectionRefused" in name or "NewConnectionError" in name:
+        return True
+    return any(marker in text for marker in (
+        "connection refused", "failed to establish", "max retries exceeded",
+        "actively refused", "name or service not known", "getaddrinfo failed",
+    ))

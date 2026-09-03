@@ -40,12 +40,14 @@ from ..memory import MemoryManager
 from ..version import PRODUCT_VERSION, format_version_report
 from ..hardware import detect_hardware, apply_hardware_profile
 from ..tools import build_default_registry
+from .. import events
+from ..core import evaluation
 from ..graph_memory import GraphMemoryStore, extract_entities
 from ..intent import is_ambiguous_followup, format_clarifying_question
 from ..optional_deps import fitz, HAS_FITZ, HAS_SKLEARN, LogisticRegression, HAS_TORCH, DEVICE, HAS_WEB, WEB_BACKEND, torch
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.3"
+__version__ = "1.4"
 
 
 class CoreMixin:
@@ -118,31 +120,57 @@ class CoreMixin:
         self.learned_router_classes: List[str] = []
         self.mutation_failure_history: List[Dict[str, Any]] = []
         self._benchmark_learning = False
-        self._benchmark_holdout = False
+        # The evaluation mode is NOT a boolean the agent owns any more.
+        # It is a context issued by mana.core.evaluation and handed in;
+        # `_benchmark_holdout` survives as a read-only view so the three
+        # existing readers need no change. See enter_evaluation().
+        self._eval_mode = evaluation.normal()
 
         self._load_state()
         self._load_cache()
         self._load_reports()
 
-        print("=" * 62)
-        print(f"MANA v{self.VERSION}  (подсистемы: --version)")
-        print(f"device={DEVICE if HAS_TORCH else 'cpu/no-torch'}")
+        self._emit_banner()
+
+    def _emit_banner(self) -> None:
+        """Startup identity, as one event instead of 15 prints.
+
+        It moved off `print()` because a windowed build has no stdout to
+        print to, and because the console it does have could not always
+        encode this text -- the same cp1251 failure that turned a stale
+        state file into a crash in `_load_state`. The event carries the
+        same facts as structured data alongside the text, so the desktop
+        app can render a status panel instead of re-parsing lines.
+        """
+        from ..paths import status as paths_status
+        brains = self.llm.pool.available()
+        lines = [
+            "=" * 62,
+            f"MANA v{self.VERSION}  (подсистемы: --version)",
+            f"device={DEVICE if HAS_TORCH else 'cpu/no-torch'}",
+        ]
         if self.hardware_profile is not None:
             hp = self.hardware_profile
             gpu = f", gpu={hp.gpu_name}" if hp.has_cuda else ""
-            print(f"hardware=tier:{hp.tier} cpu:{hp.cpu_count} ram:{hp.total_ram_gb}GB{gpu}")
+            lines.append(f"hardware=tier:{hp.tier} cpu:{hp.cpu_count} ram:{hp.total_ram_gb}GB{gpu}")
             if self.hardware_adaptation:
                 changed = ", ".join(f"{k}={v['before']}->{v['after']}" for k, v in self.hardware_adaptation.items())
-                print(f"hardware_adapted: {changed}")
-        print(f"cycle={self.cycle}")
-        print(f"llm={'on' if self._tool_available('llm_generate') else 'off'} "
-              f"({self.config.llm_backend}:{self.config.ollama_model})")
-        print(f"web={'on' if self._tool_available('web_search') else 'off'} ({WEB_BACKEND or 'none'})")
-        print(f"memory={len(self.memory.entries)}")
-        print(f"memory_db={self.config.memory_db_path} session={self.session_id} events={self._memory_event_count(self.session_id)}")
-        print(f"tools={', '.join(t['name'] for t in self.tools.list_tools())}")
-        print(f"pipeline={self.pipeline.pretty()}")
-        print("=" * 62)
+                lines.append(f"hardware_adapted: {changed}")
+        lines += [
+            f"cycle={self.cycle}",
+            f"llm={'on' if self._tool_available('llm_generate') else 'off'} "
+            f"({len(brains)} мозгов готово: {', '.join(brains) or 'нет'})",
+            f"web={'on' if self._tool_available('web_search') else 'off'} ({WEB_BACKEND or 'none'})",
+            f"memory={len(self.memory.entries)}",
+            f"memory_db={self.config.memory_db_path} session={self.session_id} "
+            f"events={self._memory_event_count(self.session_id)}",
+            f"tools={', '.join(t['name'] for t in self.tools.list_tools())}",
+            f"pipeline={self.pipeline.pretty()}",
+            "=" * 62,
+        ]
+        events.emit(events.BANNER, "\n".join(lines),
+                    version=self.VERSION, cycle=self.cycle, session=self.session_id,
+                    brains=brains, paths=paths_status())
 
     def _memory_event_count(self, session_id: str) -> int:
         try:
@@ -153,8 +181,16 @@ class CoreMixin:
             return 0
 
     def _vlog(self, message: str) -> None:
+        """Verbose trace line.
+
+        Emitted rather than printed: this is the busiest output path in the
+        agent (every brain call, every evolution step logs through it), so
+        it is also the one most likely to hit a console that cannot take
+        it. The verbosity gate stays here so a subscriber never has to
+        filter, and so nothing is built when logging is off.
+        """
         if self.config.verbose_logging:
-            print(f"[MANA {time.strftime('%H:%M:%S')}] {message}", flush=True)
+            events.emit(events.PROGRESS, f"[MANA {time.strftime('%H:%M:%S')}] {message}")
 
 
     @staticmethod
@@ -195,7 +231,10 @@ class CoreMixin:
             rng = d.get("rng_state")
             if rng: self.rm.load_state(rng)
         except Exception as exc:
-            print(f"⚠️ Не удалось восстановить state: {exc}")
+            # Was a print() with an emoji -- which is how a merely stale
+            # state file became a hard crash under a cp1251 console
+            # (UnicodeEncodeError inside the handler for another error).
+            events.emit(events.WARNING, f"Не удалось восстановить state: {exc}", error=str(exc))
 
     def _save_state(self) -> None:
         p = Path(self.config.state_file); tmp = p.with_suffix(p.suffix + ".tmp")
@@ -309,6 +348,39 @@ class CoreMixin:
                                   avoid=tuple(avoid))
         meta = LLMCallMeta(**result.meta) if result.meta else LLMCallMeta(ok=False, error=result.error)
         return result.output, meta
+
+    @property
+    def _benchmark_holdout(self) -> bool:
+        """Read-only view of the evaluation mode.
+
+        Was a plain mutable attribute the agent set on itself, which meant
+        the thing being measured owned the flag saying whether it was
+        being measured. Kept under the old name because three call sites
+        (confidence.py, routing.py, benchmarking.py) read it and their
+        logic is unchanged -- what changed is that nothing can assign to
+        it.
+        """
+        return not self._eval_mode.learning_enabled
+
+    @property
+    def evaluation_mode(self):
+        return self._eval_mode
+
+    def enter_evaluation(self, mode) -> None:
+        """Accept an evaluation context issued by mana.core.evaluation.
+
+        Rejects anything the core did not issue. Not for security -- Python
+        offers none -- but so that an unauthorized context is a visible
+        error at the point of use rather than a silent equivalence.
+        """
+        if mode.is_measured and not mode.authorized:
+            raise PermissionError(
+                "evaluation mode was not issued by mana.core.evaluation; "
+                "use open_evaluation() rather than constructing one")
+        self._eval_mode = mode
+
+    def leave_evaluation(self) -> None:
+        self._eval_mode = evaluation.normal()
 
     def brains_status(self) -> Dict[str, Any]:
         """Everything about the pool: which brains exist, which are ready,

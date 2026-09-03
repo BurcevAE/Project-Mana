@@ -18,3 +18,8 @@ PyMuPDF                  # imported as `fitz`; PDF ingestion
 
 # --- Development / testing ---
 pytest
+
+# --- Desktop application (mana_desktop) ---
+pywebview               # window over the system WebView2; no bundled browser
+keyring                 # API keys in Windows Credential Manager, not env vars
+pyinstaller             # packaging only, never imported at runtime

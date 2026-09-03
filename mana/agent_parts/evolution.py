@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from ..config import Config, RandomManager
+from .. import events
 from ..knowledge import KnowledgeBase
 from ..web import WebSearcher
 from ..llm import LLMClient
@@ -42,6 +43,24 @@ from ..optional_deps import fitz, HAS_FITZ, HAS_SKLEARN, LogisticRegression, HAS
 
 #: Component version -- see mana/version.py for the bump conventions.
 __version__ = "1.1"
+
+def _out(*parts: Any, **_kw: Any) -> None:
+    """print()-shaped adapter onto the event bus.
+
+    Kept print-shaped on purpose: these call sites are status lines whose
+    wording and formatting are already right, and rewriting each one into
+    a bespoke emit() would have been a large diff with no behavioural
+    gain. What changes is where the text goes -- a windowed build has no
+    stdout, and a cp1251 console could not encode the markers these lines
+    use. Severity is taken from the marker the line already carries.
+    """
+    text = " ".join(str(p) for p in parts)
+    stripped = text.lstrip("\n ")
+    if stripped.startswith(("⚠", "❌")):
+        events.emit(events.WARNING, text)
+    else:
+        events.emit(events.STATUS, text)
+
 
 
 class EvolutionMixin:
@@ -868,33 +887,33 @@ class EvolutionMixin:
 
     def run_cycles(self, n: int) -> None:
         n = max(1, int(n)); target = self.cycle + n
-        print(f"\n🚀 Самоулучшение: {n} циклов (до cycle={target})")
+        _out(f"\n🚀 Самоулучшение: {n} циклов (до cycle={target})")
         while self.cycle < target and not self._evolution_stop.is_set():
             event = self.self_improve()
             comp = event["report"]["comparison"]
-            print(
+            _out(
                 f"[{time.strftime('%H:%M:%S')}] cycle={event['cycle']} | "
                 f"fitness={event['fitness']:.3f} | best={event['best_fitness']:.3f} | "
                 f"accepted={'YES' if event['improved'] else 'NO'} | verdict={event['report']['verdict']} | "
                 f"cycle_time={self._fmt_duration(event['elapsed'])}"
             )
             e = comp["effect"]
-            print(
+            _out(
                 f"  quality: {e['train_quality']['before']:.3f} -> {e['train_quality']['after']:.3f} "
                 f"({e['train_quality']['delta']:+.3f}) | "
                 f"holdout: {e['holdout_quality']['before']:.3f} -> {e['holdout_quality']['after']:.3f} "
                 f"({e['holdout_quality']['delta']:+.3f})"
             )
-            print(
+            _out(
                 f"  p50: {e['train_p50_latency']['before']:.2f}s -> {e['train_p50_latency']['after']:.2f}s | "
                 f"p95: {e['train_p95_latency']['before']:.2f}s -> {e['train_p95_latency']['after']:.2f}s | "
                 f"timeouts: {e['train_timeout_rate']['before']:.1%} -> {e['train_timeout_rate']['after']:.1%}"
             )
-            print(
+            _out(
                 f"  decision: {event['report'].get('reason', 'unknown')} | "
                 f"failed_gates={event['report'].get('decision', {}).get('failed_gates', [])}"
             )
-        print("✅ Самоулучшение завершено")
+        _out("✅ Самоулучшение завершено")
 
     def start_evolution_background(self, cycles: int = 3) -> bool:
         if self._evolution_running:
@@ -906,12 +925,12 @@ class EvolutionMixin:
             self._evolution_running = True
             self._evolution_started_at = time.perf_counter()
             try:
-                print(f"\n🚀 Фоновое самоулучшение: {count} циклов (до cycle={self._evolution_target})")
+                _out(f"\n🚀 Фоновое самоулучшение: {count} циклов (до cycle={self._evolution_target})")
                 while self.cycle < self._evolution_target and not self._evolution_stop.is_set():
                     event = self.self_improve()
                     r = event["report"]
                     e = r["comparison"]["effect"]
-                    print(
+                    _out(
                         f"[{time.strftime('%H:%M:%S')}] cycle={event['cycle']} | "
                         f"verdict={r['verdict']} | accepted={'YES' if r['accepted'] else 'NO'} | "
                         f"quality={e['train_quality']['before']:.3f}->{e['train_quality']['after']:.3f} | "
@@ -920,7 +939,7 @@ class EvolutionMixin:
                         f"cycle_time={self._fmt_duration(event['elapsed'])}"
                     )
             except Exception as exc:
-                print(f"❌ Ошибка фонового самоулучшения: {exc}")
+                _out(f"❌ Ошибка фонового самоулучшения: {exc}")
             finally:
                 self._evolution_total_elapsed = time.perf_counter() - self._evolution_started_at
                 self._evolution_running = False
