@@ -238,3 +238,26 @@ def test_custom_brain_id_survives_genome_normalization(isolated_config):
     from mana.pipeline import PipelineSpec
     spec = PipelineSpec(llm_provider="my-own-brain").normalize(isolated_config)
     assert spec.llm_provider == "my-own-brain"
+
+
+def test_critic_prefers_a_brain_that_did_not_write_the_draft(isolated_config):
+    """Regression guard for self-review. With one brain the critic was the
+    author, which systematically under-reports that model's own errors."""
+    from mana.llm import LLMClient
+    from mana.brains import BrainSpec
+
+    isolated_config.enable_llm = True
+    pool = BrainPool(isolated_config, transport=lambda spec, **kw: f"SCORE: 0.9 от {spec.brain_id}")
+    pool.brains.clear(); pool.health.clear()
+    for bid in ("writer", "judge"):
+        pool.add(BrainSpec(brain_id=bid, provider="openai_chat", model=f"m-{bid}",
+                           base_url=f"https://example.invalid/{bid}", tier="large",
+                           strengths=("general", "reasoning")))
+    client = LLMClient(isolated_config, pool=pool)
+
+    _text, meta = client.ask_detailed("критика", kind="reasoning", avoid=("writer",))
+    assert meta.brain == "judge"
+    assert meta.independent is True
+
+    _text, meta = client.ask_detailed("критика", kind="reasoning")
+    assert meta.independent is False, "no avoid requested -> not an independent check"

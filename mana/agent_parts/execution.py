@@ -40,13 +40,26 @@ from ..memory import MemoryManager
 from ..optional_deps import fitz, HAS_FITZ, HAS_SKLEARN, LogisticRegression, HAS_TORCH, DEVICE, HAS_WEB, WEB_BACKEND, torch
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.1"
+__version__ = "1.2"
 
 
 class ExecutionMixin:
-    def _critic(self, task: str, answer: str, spec: PipelineSpec, tag: str) -> Tuple[str, float, Dict[str, Any]]:
+    def _critic(self, task: str, answer: str, spec: PipelineSpec, tag: str,
+                author_brain: str = "") -> Tuple[str, float, Dict[str, Any]]:
+        """Judge the draft, and prefer a brain that did not write it.
+
+        With one brain this was always self-review: the same model that
+        produced the draft was asked whether the draft was good, which
+        systematically under-reports the errors that model is prone to.
+        Now that a pool exists, `author_brain` goes to `avoid` so an
+        independent model does the judging when one is ready. It stays a
+        preference -- if avoiding would leave nothing, the critic still
+        runs, and the trace records `independent: false` so the weaker
+        check is not mistaken for the stronger one.
+        """
         if not spec.use_critic or not self._tool_available("llm_generate"):
             return answer, 0.0, {"called": False, "repaired": False, "timeout": False}
+        avoid = (author_brain,) if author_brain else ()
         rules = {
             "strict": "Проверяй фактическую точность и соответствие требованиям.",
             "balanced": "Проверяй правильность, полноту и уместность.",
@@ -67,18 +80,29 @@ class ExecutionMixin:
             f"или с датой заметно старше сегодняшней — это ошибка.\n"
             f"Проверь ответ.\nЗадача: {task}\nОтвет: {answer}\n"
             f"Первая строка: SCORE: число от 0 до 1. Затем кратко укажи ошибки.",
-            temperature=0.0, provider=spec.llm_provider, context_tag=tag + " CRITIC")
+            temperature=0.0, provider=spec.llm_provider, context_tag=tag + " CRITIC",
+            kind="reasoning", avoid=avoid, policy=spec.brain_policy)
         if not critique:
-            return answer, 0.0, {"called": True, "repaired": False, "failed": True, "timeout": meta.timeout}
+            return answer, 0.0, {"called": True, "repaired": False, "failed": True,
+                                 "timeout": meta.timeout, "independent": False}
         m = re.search(r"SCORE\s*:\s*([01](?:\.\d+)?)", critique, re.I)
         score = float(m.group(1)) if m else 0.5
         score = max(0.0, min(1.0, score))
         if score >= spec.critic_threshold:
-            return answer, score, {"called": True, "repaired": False, "timeout": meta.timeout}
+            return answer, score, {"called": True, "repaired": False, "timeout": meta.timeout,
+                                   "critic_brain": meta.brain, "independent": bool(meta.independent)}
+        # Repair goes back to the drafting brain deliberately: it holds the
+        # context that produced the answer, and the critique it is handed
+        # already came from elsewhere. Avoiding here too would mean a third
+        # model rewriting an answer whose reasoning it never saw.
         repaired, rmeta = self._llm_call(
             f"Исправь ответ по замечаниям критика. Задача: {task}\nЧерновик: {answer}\nКритик: {critique}\nВерни только исправленный ответ.",
-            temperature=min(spec.temperature, .25), provider=spec.llm_provider, context_tag=tag + " REPAIR")
-        return repaired or answer, score, {"called": True, "repaired": bool(repaired), "timeout": bool(meta.timeout or rmeta.timeout)}
+            temperature=min(spec.temperature, .25), provider=spec.llm_provider,
+            context_tag=tag + " REPAIR", policy=spec.brain_policy)
+        return repaired or answer, score, {"called": True, "repaired": bool(repaired),
+                                           "timeout": bool(meta.timeout or rmeta.timeout),
+                                           "critic_brain": meta.brain,
+                                           "independent": bool(meta.independent)}
 
     def _is_code_verifiable_task(self, task: str, answer: str = "") -> bool:
         t=(task or "").lower(); a=(answer or "")
@@ -383,11 +407,20 @@ class ExecutionMixin:
             elif action == "CRITIC" and current:
                 critic_spec = PipelineSpec(**asdict(run_spec)).normalize(self.config)
                 critic_spec.use_critic = True
-                repaired, cscore, ctr = self._critic(task, str(current.get("answer","")),
-                                                     critic_spec, f"{context_tag} V41-S{step}")
+                repaired, cscore, ctr = self._critic(
+                    task, str(current.get("answer","")), critic_spec,
+                    f"{context_tag} V41-S{step}",
+                    author_brain=str((current.get("trace") or {}).get("brain", "")))
                 current["answer"] = repaired
                 current["critic_score"] = cscore
                 current["critic_trace"] = ctr
+                # Surface independence in the same place the single-pass
+                # path does. Without this the graph route reported a
+                # critique with no way to tell whether it was self-review,
+                # which is exactly the distinction the field exists for.
+                if isinstance(current.get("trace"), dict):
+                    current["trace"]["critic_independent"] = bool(ctr.get("independent"))
+                    current["trace"]["critic_brain"] = str(ctr.get("critic_brain") or "")
                 completed.add(action)
             elif action == "REPAIR" and current:
                 current_spec = PipelineSpec(**asdict(run_spec)).normalize(self.config)
@@ -626,8 +659,11 @@ class ExecutionMixin:
                     passes_used = 2
 
             if answer_text and spec.use_critic:
-                answer_text, critic_score, critic_trace = self._critic(task, answer_text, spec, context_tag or "TASK")
+                answer_text, critic_score, critic_trace = self._critic(
+                    task, answer_text, spec, context_tag or "TASK",
+                    author_brain=str(trace.get("brain", "")))
                 timeout_count += int(critic_trace.get("timeout", False))
+                trace["critic_independent"] = bool(critic_trace.get("independent"))
 
         if not answer_text:
             fallback = True

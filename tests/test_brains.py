@@ -351,3 +351,33 @@ def test_llm_client_is_enabled_when_only_a_remote_brain_exists(isolated_config):
                      transport=lambda **kw: "ok")
     client = LLMClient(isolated_config, pool=pool)
     assert client.enabled is True
+
+
+# ---------------------------------------------------------------------------
+# independent critic (5.10.1)
+# ---------------------------------------------------------------------------
+
+def test_avoid_routes_to_a_different_brain(isolated_config):
+    """`avoid` is what lets the critic be someone other than the author."""
+    isolated_config.enable_llm = True
+    pool = make_pool(isolated_config, [
+        spec("author", tier="large", strengths=("reasoning", "general")),
+        spec("other", tier="large", strengths=("reasoning", "general")),
+    ], transport=lambda spec, **kw: f"from {spec.brain_id}")
+    res = pool.ask("судить черновик", kind="reasoning", avoid=["author"])
+    assert res["brain"] == "other"
+    assert res["avoided"] is True
+
+
+def test_avoid_is_a_preference_not_a_constraint(isolated_config):
+    """With one brain there is nobody else to ask. The call must still go
+    through -- an unavailable second opinion is not a reason to produce no
+    critique at all -- but it must report avoided=False so the weaker
+    self-review is not recorded as an independent check."""
+    isolated_config.enable_llm = True
+    pool = make_pool(isolated_config, [spec("only", tier="large")],
+                     transport=lambda **kw: "ok")
+    res = pool.ask("судить черновик", avoid=["only"])
+    assert res["ok"] is True
+    assert res["brain"] == "only"
+    assert res["avoided"] is False

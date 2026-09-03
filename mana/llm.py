@@ -21,14 +21,14 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .brains import BrainPool
 from .config import Config
 from .optional_deps import HAS_REQUESTS
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.1"
+__version__ = "1.2"
 
 
 @dataclass
@@ -46,6 +46,11 @@ class LLMCallMeta:
     attempts: Tuple[str, ...] = ()  # brains tried, in order, including the winner
     agreement: float = 0.0          # set by consensus calls, 0.0 for single-brain
     consensus: bool = False
+    #: True only when the caller asked to avoid some brain (the critic
+    #: avoiding the drafting brain) AND the router could honour it. False
+    #: means the answer and its critique came from the same model, which is
+    #: a materially weaker check -- see ExecutionMixin._critic.
+    independent: bool = False
 
 
 class LLMClient:
@@ -89,7 +94,7 @@ class LLMClient:
     def ask_detailed(self, prompt: str, system: str = "", temperature: float = 0.2,
                      provider: str = "auto", context_tag: str = "", *,
                      kind: str = "general", difficulty: Optional[float] = None,
-                     task: str = "", policy: str = "",
+                     task: str = "", policy: str = "", avoid: Sequence[str] = (),
                      consensus: int = 0) -> Tuple[Optional[str], LLMCallMeta]:
         """Route one prompt to the pool.
 
@@ -120,7 +125,7 @@ class LLMClient:
         else:
             res = self.pool.ask(prompt, system=system, temperature=temperature, kind=kind,
                                 difficulty=difficulty, task=task or prompt, brain=provider,
-                                policy=policy, context_tag=context_tag,
+                                policy=policy, context_tag=context_tag, avoid=avoid,
                                 timeout=None if override is None else float(override))
             meta = LLMCallMeta(
                 ok=bool(res.get("ok")), timeout=bool(res.get("timeout")),
@@ -128,6 +133,7 @@ class LLMClient:
                 model=str(res.get("model") or ""), error=str(res.get("error") or ""),
                 latency=float(res.get("latency_total", res.get("latency", 0.0))),
                 attempts=tuple(res.get("attempts") or ()),
+                independent=bool(res.get("avoided")),
             )
         with self._request_lock:
             self.calls += 1

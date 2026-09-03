@@ -45,7 +45,7 @@ from ..intent import is_ambiguous_followup, format_clarifying_question
 from ..optional_deps import fitz, HAS_FITZ, HAS_SKLEARN, LogisticRegression, HAS_TORCH, DEVICE, HAS_WEB, WEB_BACKEND, torch
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.2"
+__version__ = "1.3"
 
 
 class CoreMixin:
@@ -288,7 +288,7 @@ class CoreMixin:
     def _llm_call(self, prompt: str, *, system: str = "", temperature: float = 0.2,
                   provider: str = "auto", context_tag: str = "", kind: str = "general",
                   difficulty: Optional[float] = None, task: str = "",
-                  policy: str = "") -> Tuple[Optional[str], LLMCallMeta]:
+                  policy: str = "", avoid: Sequence[str] = ()) -> Tuple[Optional[str], LLMCallMeta]:
         """The single choke point for every LLM invocation in the agent.
         Routes through self.tools ('llm_generate') instead of
         self.llm.ask_detailed directly -- the registry is the real dispatch
@@ -305,7 +305,8 @@ class CoreMixin:
         the prompt itself."""
         result = self.tools.call("llm_generate", prompt=prompt, system=system, temperature=temperature,
                                   provider=provider, context_tag=context_tag, kind=kind,
-                                  difficulty=difficulty, task=task, policy=policy)
+                                  difficulty=difficulty, task=task, policy=policy,
+                                  avoid=tuple(avoid))
         meta = LLMCallMeta(**result.meta) if result.meta else LLMCallMeta(ok=False, error=result.error)
         return result.output, meta
 

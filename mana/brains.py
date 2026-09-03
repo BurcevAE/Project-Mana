@@ -62,7 +62,7 @@ from .config import Config
 from .optional_deps import requests, HAS_REQUESTS
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 
 # ---------------------------------------------------------------------------
@@ -729,17 +729,25 @@ class BrainPool:
     def ask(self, prompt: str, *, system: str = "", temperature: float = 0.2, kind: str = "general",
             difficulty: Optional[float] = None, task: str = "", brain: str = "auto",
             policy: str = "", context_tag: str = "", timeout: Optional[float] = None,
-            max_attempts: Optional[int] = None) -> Dict[str, Any]:
+            avoid: Sequence[str] = (), max_attempts: Optional[int] = None) -> Dict[str, Any]:
         """Route to the best brain, failing over down the ranking.
 
         `brain` accepts a brain_id or a legacy provider name -- see
         `resolve_alias`, which is what keeps PipelineSpec.llm_provider
         genomes evolved before 5.10 meaningful.
+
+        `avoid` is a *preference*, not a constraint: it asks the router to
+        pick someone else (the critic uses it so a draft is not judged by
+        the model that wrote it), but if excluding those brains would leave
+        nothing ready, the request still goes through rather than failing.
+        Independence is worth having when it is free; it is not worth
+        turning a working answer into no answer.
         """
         attempts = max(1, int(max_attempts or self.config.brain_max_attempts))
         tried: List[str] = []
         errors: List[Dict[str, str]] = []
         order: List[str] = []
+        avoided = False
         if brain and brain != "auto":
             resolved = self.resolve_alias(brain)
             if resolved and self.ready(resolved):
@@ -747,13 +755,21 @@ class BrainPool:
             elif self.config.brain_strict_selection:
                 return {"ok": False, "text": None, "brain": "", "error": f"brain {brain!r} is not ready",
                         "latency": 0.0, "latency_total": 0.0, "attempts": [], "errors": [],
-                        "timeout": False}
-        order += self.select(kind=kind, difficulty=difficulty, task=task or prompt,
-                             policy=policy, exclude=order, limit=attempts)
+                        "timeout": False, "avoided": False}
+        if avoid and not order:
+            order += self.select(kind=kind, difficulty=difficulty, task=task or prompt,
+                                 policy=policy, exclude=list(avoid), limit=attempts)
+            avoided = bool(order)
+        if not order:
+            order += self.select(kind=kind, difficulty=difficulty, task=task or prompt,
+                                 policy=policy, exclude=order, limit=attempts)
+        elif len(order) < attempts:
+            order += self.select(kind=kind, difficulty=difficulty, task=task or prompt,
+                                 policy=policy, exclude=order, limit=attempts - len(order))
         if not order:
             return {"ok": False, "text": None, "brain": "", "error": "no brain available",
                     "latency": 0.0, "latency_total": 0.0, "attempts": [], "errors": [],
-                    "timeout": False}
+                    "timeout": False, "avoided": False}
         total_latency = 0.0
         last_timeout = False
         for brain_id in order[:attempts]:
@@ -765,13 +781,19 @@ class BrainPool:
                 res["attempts"] = tried
                 res["errors"] = errors
                 res["latency_total"] = total_latency
+                # Did the caller's `avoid` request actually hold? The critic
+                # needs to know: a critique from the same brain that wrote
+                # the draft is worth less than one from a second opinion,
+                # and pretending otherwise would overstate the check.
+                res["avoided"] = avoided and res.get("brain") not in set(avoid)
                 return res
             errors.append({"brain": brain_id, "error": str(res.get("error", ""))})
             last_timeout = bool(res.get("timeout"))
         return {"ok": False, "text": None, "brain": tried[-1] if tried else "",
                 "error": errors[-1]["error"] if errors else "no brain available",
                 "latency": total_latency, "latency_total": total_latency,
-                "attempts": tried, "errors": errors, "timeout": bool(last_timeout)}
+                "attempts": tried, "errors": errors, "timeout": bool(last_timeout),
+                "avoided": False}
 
     def resolve_alias(self, name: str) -> str:
         """Map a legacy provider name onto a brain id.

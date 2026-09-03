@@ -874,18 +874,28 @@ def build_ai_context() -> Dict[str, Any]:
             "clean": git.get("clean"),
         },
 
+        # Hand-maintained: this is the map an external reader trusts to
+        # know what MANA *is*, so a subsystem missing here is worse than a
+        # subsystem missing from a listing -- the reader never learns it
+        # exists. It went stale once already (5.10 added the brain pool and
+        # this still described a single-LLM agent), so anything added under
+        # mana/ that is a subsystem rather than a helper belongs here.
         "architecture": {
             "package": "mana/",
             "entrypoint": "mana_run.py",
             "config": "mana/config.py",
             "agent": "mana/agent.py",
             "memory": "mana/memory.py",
+            "graph_memory": "mana/graph_memory.py",
             "knowledge": "mana/knowledge.py",
             "experience": "mana/experience.py",
             "evolution": "mana/agent_parts/evolution.py",
             "code_evolution": "mana/code_evolution.py",
             "verification": "mana/verifier.py",
             "llm": "mana/llm.py",
+            "brains": "mana/brains.py",
+            "decompose": "mana/decompose.py",
+            "tools": "mana/tools.py",
             "pipeline": "mana/pipeline.py",
             "tests": "tests/",
         },

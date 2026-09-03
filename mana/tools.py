@@ -322,6 +322,7 @@ def make_llm_generate_tool(llm_client: Any) -> BaseTool:
             difficulty=None if difficulty is None else float(difficulty),
             task=str(kwargs.get("task", "") or ""),
             policy=str(kwargs.get("policy", "") or ""),
+            avoid=tuple(kwargs.get("avoid") or ()),
         )
         return ToolResult(ok=bool(text), output=text,
                            error="" if text else (meta.error or "no response"),
@@ -337,7 +338,9 @@ def make_llm_generate_tool(llm_client: Any) -> BaseTool:
         "tool. Args: prompt (str, required); system/provider/context_tag/"
         "kind/policy/task (str, optional); temperature/difficulty (float, "
         "optional). provider='auto' or a brain id (see list_brains); "
-        "legacy provider names still resolve.",
+        "legacy provider names still resolve. avoid (list of brain ids) "
+        "asks for a different brain -- a preference, ignored if honouring "
+        "it would leave no brain ready.",
         _run, requires_llm=True, requires_network=True, cost_hint=5.0,
         available_fn=lambda: llm_client.enabled,
     )
@@ -435,7 +438,7 @@ def make_decompose_tool(agent: Any) -> BaseTool:
     )
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.1"
+__version__ = "1.2"
 
 
 def build_default_registry(agent: Any) -> ToolRegistry:
