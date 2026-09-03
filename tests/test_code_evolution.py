@@ -196,3 +196,40 @@ def test_invalid_llm_candidate_is_rejected_before_evaluation():
     assert result["ok"] is False
     assert result["stage"] == "proposal_validation"
     assert "SyntaxError" in result["reason"]
+
+
+# ---------------------------------------------------------------------------
+# invariant found by the phase-0 architecture audit
+# ---------------------------------------------------------------------------
+
+def test_the_oracle_is_not_reachable_from_the_patchable_surface():
+    """MANA must not be able to improve itself by editing the thing that
+    declares it improved.
+
+    Today WHITELIST holds one pure function and the invariant holds by
+    accident. It is written down as a test because the intended next step
+    is to widen the whitelist -- and BenchmarkSuite lives in pipeline.py,
+    which is NOT in _NEVER_PATCHABLE. Adding a target there would hand the
+    agent its own test set with nothing in the code to object.
+
+    Failing this test means the boundary was crossed, not that the test is
+    stale.
+    """
+    from pathlib import Path
+    from mana import code_evolution
+
+    oracle_files = {"pipeline.py"}          # BenchmarkSuite: tasks + must_contain
+    patchable = {Path(t.file_path).name for t in code_evolution.WHITELIST.values()}
+    overlap = patchable & oracle_files
+    assert not overlap, (
+        f"patchable target lives in an oracle file: {sorted(overlap)}. "
+        "Move the oracle behind the immutable boundary before widening the whitelist.")
+
+
+def test_never_patchable_covers_the_boundary_modules():
+    """paths.py and events.py decide where MANA may write and what it
+    reports about itself. A patch to either could disable the checks the
+    other rules rely on."""
+    from mana import code_evolution
+    for name in ("verifier.py", "code_evolution.py", "config.py", "paths.py", "events.py"):
+        assert name in code_evolution._NEVER_PATCHABLE, f"{name} must never be patchable"
