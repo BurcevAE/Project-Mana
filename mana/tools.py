@@ -311,30 +311,131 @@ def make_llm_generate_tool(llm_client: Any) -> BaseTool:
         prompt = str(kwargs.get("prompt", ""))
         if not prompt:
             return ToolResult(ok=False, error="prompt is required")
+        difficulty = kwargs.get("difficulty")
         text, meta = llm_client.ask_detailed(
             prompt,
             system=str(kwargs.get("system", "") or ""),
             temperature=float(kwargs.get("temperature", 0.2)),
             provider=str(kwargs.get("provider", "auto") or "auto"),
             context_tag=str(kwargs.get("context_tag", "") or ""),
+            kind=str(kwargs.get("kind", "general") or "general"),
+            difficulty=None if difficulty is None else float(difficulty),
+            task=str(kwargs.get("task", "") or ""),
+            policy=str(kwargs.get("policy", "") or ""),
         )
         return ToolResult(ok=bool(text), output=text,
                            error="" if text else (meta.error or "no response"),
                            latency=meta.latency, meta=asdict(meta))
     return FunctionTool(
         "llm_generate",
-        "Generate text from MANA's configured LLM backend (provider="
-        "auto/ollama/gemini/openrouter/openai). Every LLM call in the agent "
-        "(answers, critic, repair, synthesis, verification-bundle generation, "
-        "graph-memory distillation) routes through this one tool. "
-        "Args: prompt (str, required), system/provider/context_tag (str, optional), "
-        "temperature (float, optional).",
-        _run, requires_llm=True, cost_hint=5.0,
+        "Generate text from MANA's brain pool. The pool -- not this caller "
+        "-- decides which model answers, from task kind/difficulty plus "
+        "measured health, and fails over if that brain is down or out of "
+        "free-tier quota. Every LLM call in the agent (answers, critic, "
+        "repair, synthesis, verification-bundle generation, graph-memory "
+        "distillation, self-improvement patches) routes through this one "
+        "tool. Args: prompt (str, required); system/provider/context_tag/"
+        "kind/policy/task (str, optional); temperature/difficulty (float, "
+        "optional). provider='auto' or a brain id (see list_brains); "
+        "legacy provider names still resolve.",
+        _run, requires_llm=True, requires_network=True, cost_hint=5.0,
         available_fn=lambda: llm_client.enabled,
     )
 
+
+def make_llm_consensus_tool(llm_client: Any) -> BaseTool:
+    """Ask several brains the same thing and report their agreement.
+
+    Separate from llm_generate on purpose: this one costs N calls against N
+    free-tier quotas, so a caller must opt into it explicitly rather than
+    getting it as a hidden default. Its distinctive output is `agreement`
+    -- with one brain MANA can only report what a model said; with two
+    independent ones it can report whether they said the same thing.
+    """
+    def _run(**kwargs: Any) -> ToolResult:
+        prompt = str(kwargs.get("prompt", ""))
+        if not prompt:
+            return ToolResult(ok=False, error="prompt is required")
+        difficulty = kwargs.get("difficulty")
+        res = llm_client.ask_consensus(
+            prompt,
+            n=int(kwargs.get("n", 2) or 2),
+            system=str(kwargs.get("system", "") or ""),
+            temperature=float(kwargs.get("temperature", 0.2)),
+            kind=str(kwargs.get("kind", "general") or "general"),
+            difficulty=None if difficulty is None else float(difficulty),
+            task=str(kwargs.get("task", "") or ""),
+            policy=str(kwargs.get("policy", "") or ""),
+            context_tag=str(kwargs.get("context_tag", "") or ""),
+        )
+        return ToolResult(
+            ok=bool(res.get("ok")), output=res.get("text"),
+            error=str(res.get("error") or ""), latency=float(res.get("latency", 0.0)),
+            meta={"agreement": float(res.get("agreement", 0.0)),
+                  "disagreement": bool(res.get("disagreement")),
+                  "brains": list(res.get("brains") or []),
+                  "single": bool(res.get("single")),
+                  "brain": str(res.get("brain") or "")},
+        )
+    return FunctionTool(
+        "llm_consensus",
+        "Ask N different brains the same prompt in parallel and return the "
+        "medoid answer plus an agreement score in meta. Use when being "
+        "wrong is expensive: agreement is weak corroboration, disagreement "
+        "is a strong signal to verify or to say the answer is uncertain. "
+        "Costs N calls. Args: prompt (str, required), n (int, default 2), "
+        "system/kind/policy/task/context_tag (str), temperature/difficulty "
+        "(float).",
+        _run, requires_llm=True, requires_network=True, cost_hint=12.0,
+        available_fn=lambda: llm_client.enabled and len(llm_client.pool.available()) >= 2,
+    )
+
+
+def make_decompose_tool(agent: Any) -> BaseTool:
+    """Split a task, solve the parts on different brains, synthesize.
+
+    Registered as a tool rather than buried in ExecutionMixin so that the
+    same visibility rules as every other capability apply: it shows up in
+    --list-tools, it reports availability honestly (it needs at least two
+    ready brains to be worth anything), and its trace says which brain
+    answered which part.
+    """
+    def _run(**kwargs: Any) -> ToolResult:
+        from .decompose import solve
+        task = str(kwargs.get("task", "") or kwargs.get("prompt", ""))
+        if not task:
+            return ToolResult(ok=False, error="task is required")
+        cfg = agent.config
+        use_planner = bool(kwargs.get("llm_planner", True)) and agent._tool_available("llm_generate")
+        res = solve(
+            task, agent.llm.pool,
+            ask_planner=(agent._llm_call if use_planner else None),
+            temperature=float(kwargs.get("temperature", 0.2)),
+            context_tag=str(kwargs.get("context_tag", "") or "DECOMPOSE"),
+            max_subtasks=int(kwargs.get("max_subtasks", cfg.decompose_max_subtasks)),
+            max_parallel=int(cfg.decompose_max_parallel),
+            policy=str(kwargs.get("policy", "") or ""),
+        )
+        return ToolResult(ok=bool(res.get("ok")), output=res.get("answer"),
+                           error=str(res.get("error") or ""), latency=float(res.get("latency", 0.0)),
+                           meta={k: v for k, v in res.items() if k not in {"answer", "ok"}})
+    return FunctionTool(
+        "decompose_task",
+        "Break a complex task into subtasks, route each subtask to the "
+        "brain best suited to it (running independent ones in parallel on "
+        "different providers), then synthesize one answer. Meta carries the "
+        "plan, per-subtask results and which brain produced each. Args: "
+        "task (str, required), max_subtasks (int), temperature (float), "
+        "llm_planner (bool, default true -- false uses the offline "
+        "heuristic planner), policy/context_tag (str).",
+        _run, requires_llm=True, requires_network=True, cost_hint=20.0,
+        available_fn=lambda: (agent.config.decompose_enabled
+                              and agent.llm.enabled
+                              and len(agent.llm.pool.available()) >= 1),
+    )
+
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 
 def build_default_registry(agent: Any) -> ToolRegistry:
@@ -344,6 +445,8 @@ def build_default_registry(agent: Any) -> ToolRegistry:
     subsystems exist."""
     registry = ToolRegistry()
     registry.register(make_llm_generate_tool(agent.llm))
+    registry.register(make_llm_consensus_tool(agent.llm))
+    registry.register(make_decompose_tool(agent))
     registry.register(make_web_search_tool(agent.web))
     registry.register(make_verify_arithmetic_tool(agent.verifier))
     registry.register(make_verify_answer_tool(agent.verifier))

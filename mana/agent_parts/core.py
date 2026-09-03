@@ -45,7 +45,7 @@ from ..intent import is_ambiguous_followup, format_clarifying_question
 from ..optional_deps import fitz, HAS_FITZ, HAS_SKLEARN, LogisticRegression, HAS_TORCH, DEVICE, HAS_WEB, WEB_BACKEND, torch
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.1.1"
+__version__ = "1.2"
 
 
 class CoreMixin:
@@ -80,6 +80,11 @@ class CoreMixin:
         self.graph_memory = GraphMemoryStore(self.persistent_memory)
         self.session_id = self.config.memory_session_id
         self.llm = LLMClient(self.config, self._vlog)
+        # Tell the genome which brains exist on THIS machine. Done here,
+        # before _load_state() restores a pipeline and before any evolution
+        # runs, so mutations propose providers the user actually has a key
+        # for instead of "learning" that unconfigured ones always fail.
+        self.config.brain_ids = tuple(["auto"] + sorted(self.llm.pool.configured()))
         self.web = WebSearcher(self.config, self._vlog)
         self.experience = ExperienceDB(self.config.experience_db_path)
 
@@ -281,18 +286,49 @@ class CoreMixin:
         return bool(tool and tool.is_available())
 
     def _llm_call(self, prompt: str, *, system: str = "", temperature: float = 0.2,
-                  provider: str = "auto", context_tag: str = "") -> Tuple[Optional[str], LLMCallMeta]:
+                  provider: str = "auto", context_tag: str = "", kind: str = "general",
+                  difficulty: Optional[float] = None, task: str = "",
+                  policy: str = "") -> Tuple[Optional[str], LLMCallMeta]:
         """The single choke point for every LLM invocation in the agent.
         Routes through self.tools ('llm_generate') instead of
         self.llm.ask_detailed directly -- the registry is the real dispatch
         path now, not just an inspectable side list. Preserves the exact
         (text, meta) contract every existing call site already expects, so
         migrating a call site to this is a one-line change, not a rewrite
-        of the logic built around it."""
+        of the logic built around it.
+
+        v5.10: the optional kind/difficulty/task/policy arguments are the
+        only thing a call site needs to add to get brain selection tuned to
+        what it is doing (a critic pass is not the same job as a synthesis
+        pass). Omitting them is fully supported and is what every
+        un-migrated call site does -- the pool then infers difficulty from
+        the prompt itself."""
         result = self.tools.call("llm_generate", prompt=prompt, system=system, temperature=temperature,
-                                  provider=provider, context_tag=context_tag)
+                                  provider=provider, context_tag=context_tag, kind=kind,
+                                  difficulty=difficulty, task=task, policy=policy)
         meta = LLMCallMeta(**result.meta) if result.meta else LLMCallMeta(ok=False, error=result.error)
         return result.output, meta
+
+    def brains_status(self) -> Dict[str, Any]:
+        """Everything about the pool: which brains exist, which are ready,
+        which are cooling down or out of free-tier quota, and their measured
+        latency/quality. API keys are never included (BrainSpec.public_dict
+        drops them) so this is safe to print, log and put in a report."""
+        return self.llm.pool.status()
+
+    def ask_consensus(self, task: str, n: int = 2, **kwargs: Any) -> Dict[str, Any]:
+        """Ask N brains the same question and report their agreement.
+        Exposed on the agent (not only as a tool) because the interactive
+        REPL and the CLI both need it as a first-class operation."""
+        result = self.tools.call("llm_consensus", prompt=task, n=int(n), task=task, **kwargs)
+        return {"answer": result.output, "ok": result.ok, "error": result.error,
+                "latency": result.latency, **result.meta}
+
+    def solve_decomposed(self, task: str, **kwargs: Any) -> Dict[str, Any]:
+        """Split a task across brains and synthesize. See mana.decompose."""
+        result = self.tools.call("decompose_task", task=task, **kwargs)
+        return {"answer": result.output, "ok": result.ok, "error": result.error,
+                "latency": result.latency, **result.meta}
 
     def _verify_answer(self, task: str, answer: str, category: str) -> Dict[str, Any]:
         """Choke point for the 'does this claimed answer match an
