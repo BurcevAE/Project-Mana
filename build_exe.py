@@ -43,6 +43,13 @@ EXCLUDED = [
     "pytest", "PyInstaller",
 ]
 
+#: pywebview reaches its backend through late imports PyInstaller's
+#: analyser cannot see, so the Windows one has to be named explicitly.
+#: Without this the packaged app raises "no suitable GUI toolkit" on a
+#: machine where the source version works perfectly.
+HIDDEN = ["webview.platforms.edgechromium", "webview.platforms.winforms",
+          "clr_loader", "keyring.backends.Windows"]
+
 
 def build(windowed: bool) -> int:
     if not EMBED.is_dir():
@@ -61,6 +68,11 @@ def build(windowed: bool) -> int:
         # replaces sys.executable in a frozen build.
         "--add-data", f"{ROOT / 'mana'}{';'}mana",
         "--add-data", f"{EMBED}{';'}python",
+        # The window shell and its page. Unlike mana/, this one IS frozen
+        # into the bundle: nothing rewrites it at runtime, so there is no
+        # reason to ship it as loose files. web/ still has to be declared
+        # as data -- PyInstaller collects .py, never .html.
+        "--add-data", f"{ROOT / 'mana_desktop' / 'web'}{';'}mana_desktop/web",
         # Flat layout: PyInstaller 6 puts collected files under
         # _internal/ by default, which would put mana/ and python/ one
         # level below where paths.install_root() looks for them. Keeping
@@ -76,6 +88,9 @@ def build(windowed: bool) -> int:
     ]
     for module in EXCLUDED:
         cmd += ["--exclude-module", module]
+    if windowed:
+        for module in HIDDEN:
+            cmd += ["--hidden-import", module]
     cmd.append(str(ROOT / "app.py"))
 
     print("$", " ".join(cmd[:6]), "...")
