@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.3"
+__version__ = "1.4"
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 HISTORY_ROOT = PACKAGE_ROOT.parent / "mana_code_history"
@@ -55,6 +55,23 @@ HISTORY_ROOT = PACKAGE_ROOT.parent / "mana_code_history"
 # safe entries.
 _NEVER_PATCHABLE = {"verifier.py", "hardware.py", "code_evolution.py", "config.py", "cli.py",
                     "optional_deps.py", "paths.py", "events.py"}
+
+
+def _is_forbidden_target(file_path: Path) -> str:
+    """Why this file may not be patched, or "" if it may.
+
+    Two rules, and the second is the one that scales. The name list above
+    has to be edited by hand every time a boundary module appears -- the
+    kind of protection that erodes silently. `mana/core/` is protected by
+    directory: putting an oracle there is enough, and forgetting to update
+    a list cannot expose it.
+    """
+    from .core import is_immutable_path
+    if is_immutable_path(file_path):
+        return "lives in mana/core/, the immutable boundary"
+    if file_path.name in _NEVER_PATCHABLE:
+        return f"{file_path.name} is never patchable"
+    return ""
 
 
 def self_patching_available() -> Dict[str, Any]:
@@ -109,8 +126,13 @@ class CodeTarget:
     test_cases: List[CodeTestCase] = field(default_factory=list)
 
     def __post_init__(self) -> None:
-        if Path(self.file_path).name in _NEVER_PATCHABLE:
-            raise ValueError(f"{self.file_path} is not a patchable target (see _NEVER_PATCHABLE)")
+        # Checked when the target is declared, not only when a patch is
+        # applied: a forbidden entry must be impossible to add to the
+        # whitelist at all, so the mistake surfaces at import time rather
+        # than at the moment a patch is about to be written.
+        reason = _is_forbidden_target(PACKAGE_ROOT / self.file_path)
+        if reason:
+            raise ValueError(f"{self.file_path} is not a patchable target: {reason}")
 
 
 def _fallback_test_cases() -> List[CodeTestCase]:
@@ -336,8 +358,9 @@ def apply_patch(target_id: str, candidate_source: str, evaluation: Dict[str, Any
     if not decision.get("accepted"):
         return {"applied": False, "reason": "decision not accepted; call decide() first"}
     file_path = PACKAGE_ROOT / target.file_path
-    if file_path.name in _NEVER_PATCHABLE:  # defense in depth, see module docstring
-        return {"applied": False, "reason": f"{file_path.name} is never patchable"}
+    forbidden = _is_forbidden_target(file_path)  # defense in depth, see module docstring
+    if forbidden:
+        return {"applied": False, "reason": forbidden}
     # Checked here, not only at startup: an install can become read-only
     # between launch and the moment a patch is accepted, and writing the
     # changelog before discovering that would leave a record of a change

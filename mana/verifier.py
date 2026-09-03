@@ -33,7 +33,7 @@ from .config import Config
 from .paths import sandbox_python, sandbox_python_available
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.1"
+__version__ = "1.2"
 
 
 # ---------------------------------------------------------------------------
@@ -59,24 +59,72 @@ class LocalVerifier:
         if self.vlog:
             self.vlog(msg)
 
+    #: Ceiling on how large an intermediate integer may get. Exact
+    #: arithmetic removes the float rounding, but it also removes the
+    #: overflow that used to cap the work: 9**9**9 is a valid expression
+    #: whose exact value would occupy gigabytes. Digits, not magnitude,
+    #: because that is what actually costs time and memory.
+    MAX_INT_DIGITS = 4000
+
     @staticmethod
-    def _safe_math_node(node: ast.AST) -> float:
-        if isinstance(node, ast.Expression): return LocalVerifier._safe_math_node(node.body)
-        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and math.isfinite(float(node.value)):
-            return float(node.value)
+    def _guard_int(value: Any) -> Any:
+        if isinstance(value, int) and value.bit_length() > LocalVerifier.MAX_INT_DIGITS * 4:
+            raise ValueError("intermediate integer too large")
+        return value
+
+    @staticmethod
+    def _safe_math_node(node: ast.AST) -> Any:
+        """Evaluate a constant arithmetic expression EXACTLY.
+
+        This used to coerce everything to float, which quietly made the
+        one component MANA treats as ground truth wrong on integers:
+
+            999999999999999999 * 3  ->  3e+18   (correct: 2999999999999999997)
+
+        and it reported ok:true. A verifier that is confidently wrong is
+        worse than no verifier, because every layer above it -- the trust
+        levels, the acceptance gates, the fitness that drives evolution --
+        is built on believing this number.
+
+        Integers now stay integers, and float appears only where the
+        expression genuinely produces one (true division, a float
+        literal). The result type is therefore int|float rather than
+        float; callers already stringify it, and `verify()` compares
+        against both the exact form and the integral form.
+        """
+        if isinstance(node, ast.Expression):
+            return LocalVerifier._safe_math_node(node.body)
+        if isinstance(node, ast.Constant) and isinstance(node.value, bool):
+            raise ValueError("unsupported expression")     # True/False are ints in Python
+        if isinstance(node, ast.Constant) and isinstance(node.value, int):
+            return LocalVerifier._guard_int(node.value)
+        if isinstance(node, ast.Constant) and isinstance(node.value, float) and math.isfinite(node.value):
+            return node.value
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
-            v=LocalVerifier._safe_math_node(node.operand); return +v if isinstance(node.op, ast.UAdd) else -v
+            v = LocalVerifier._safe_math_node(node.operand)
+            return +v if isinstance(node.op, ast.UAdd) else -v
         if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow)):
-            a=LocalVerifier._safe_math_node(node.left); b=LocalVerifier._safe_math_node(node.right)
-            if isinstance(node.op, ast.Add): return a+b
-            if isinstance(node.op, ast.Sub): return a-b
-            if isinstance(node.op, ast.Mult): return a*b
-            if isinstance(node.op, ast.Div): return a/b
-            if isinstance(node.op, ast.FloorDiv): return a//b
-            if isinstance(node.op, ast.Mod): return a%b
+            a = LocalVerifier._safe_math_node(node.left)
+            b = LocalVerifier._safe_math_node(node.right)
+            if isinstance(node.op, ast.Add): return LocalVerifier._guard_int(a + b)
+            if isinstance(node.op, ast.Sub): return LocalVerifier._guard_int(a - b)
+            if isinstance(node.op, ast.Mult): return LocalVerifier._guard_int(a * b)
+            if isinstance(node.op, ast.Div): return a / b
+            if isinstance(node.op, ast.FloorDiv): return a // b
+            if isinstance(node.op, ast.Mod): return a % b
             if isinstance(node.op, ast.Pow):
-                if abs(b) > 12 or abs(a) > 1e6: raise ValueError("unsafe exponent")
-                return a**b
+                # The old bound compared against 1e6 on the base, which a
+                # float comparison made approximate. Exact arithmetic lets
+                # the limit be stated in the terms that matter: how big
+                # can the answer get.
+                if not isinstance(b, int) or b < 0:
+                    raise ValueError("unsafe exponent")
+                if b > 64:
+                    raise ValueError("unsafe exponent")
+                base_bits = a.bit_length() if isinstance(a, int) else 64
+                if base_bits * max(1, b) > LocalVerifier.MAX_INT_DIGITS * 4:
+                    raise ValueError("unsafe exponent")
+                return LocalVerifier._guard_int(a ** b)
         raise ValueError("unsupported expression")
 
     def verify_expression(self, expr: str) -> Dict[str, Any]:
@@ -85,7 +133,10 @@ class LocalVerifier:
         try:
             tree=ast.parse(expr, mode="eval")
             value=self._safe_math_node(tree)
-            ok=math.isfinite(float(value))
+            # float(value) on a large exact integer raises OverflowError,
+            # which the old code could never hit because everything was
+            # already a float. An int is finite by construction.
+            ok = True if isinstance(value, int) else math.isfinite(value)
             result={"kind":"arithmetic","ok":ok,"value":value,"expression":expr,"executor":"ast"}
         except Exception as exc:
             result={"kind":"arithmetic","ok":False,"expression":expr,"error":f"{type(exc).__name__}: {exc}","executor":"ast"}
@@ -223,6 +274,21 @@ class LocalVerifier:
         out = re.sub(r"(\d+(?:\.\d+)?)\s*в\s+кубе\b", r"\1**3", out, flags=re.I)
         return re.sub(r"\s{2,}", " ", out)
 
+    @staticmethod
+    def _expected_forms(value: Any) -> List[str]:
+        """Every spelling of the answer an answer might legitimately use.
+
+        `391` and `391.0` are the same result; so are `2999999999999999997`
+        and its comma-grouped form. This replaced a float round-trip that
+        raised OverflowError once the verifier started computing exactly.
+        """
+        forms: List[str] = [str(value)]
+        if isinstance(value, int):
+            forms.append(f"{value}.0")
+        elif isinstance(value, float) and value.is_integer():
+            forms.append(str(int(value)))
+        return [f for f in forms if f]
+
     def verify(self, task: str, answer: str, category: str) -> Dict[str, Any]:
         """Verify simple claims. It intentionally refuses to execute arbitrary answer text."""
         t=(task or "").strip().lower(); a=(answer or "").strip()
@@ -235,8 +301,8 @@ class LocalVerifier:
             if m:
                 vr=self.verify_expression(m.group(1))
                 if vr.get("ok"):
-                    got=repr(vr.get("value")); compact=re.sub(r"\s+","",a.lower())
-                    expected_tokens=[str(vr["value"]), str(int(vr["value"])) if float(vr["value"]).is_integer() else ""]
+                    compact = re.sub(r"\s+", "", a.lower())
+                    expected_tokens = LocalVerifier._expected_forms(vr["value"])
                     answer_mentions=any(x and x in compact for x in expected_tokens)
                     vr["answer_mentions_value"]=answer_mentions; vr["verified"]=answer_mentions
                     return vr
