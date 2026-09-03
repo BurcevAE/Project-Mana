@@ -32,7 +32,7 @@ import numpy as np
 from .optional_deps import torch, HAS_TORCH
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.3"
+__version__ = "1.4"
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -352,10 +352,40 @@ class Config:
     # Logging
     verbose_logging: bool = False
 
+    #: Every field that names a file or directory MANA writes to. Listed
+    #: once so `ensure_dirs()` and the desktop app agree on the set --
+    #: `local_exec_workdir` was missing from the old loop, which is why the
+    #: sandbox directory was created lazily somewhere else entirely.
+    STATE_PATH_FIELDS = ("knowledge_db_path", "state_file", "history_file", "cache_file",
+                         "experience_db_path", "evolution_report_file", "memory_db_path",
+                         "memory_root", "local_exec_workdir")
+
     def ensure_dirs(self) -> None:
-        for p in [self.knowledge_db_path, self.state_file, self.history_file,
-                  self.cache_file, self.experience_db_path, self.evolution_report_file, self.memory_db_path]:
-            Path(p).parent.mkdir(parents=True, exist_ok=True)
+        """Resolve every state path and create its parent.
+
+        Relative defaults ("mana_memory/...", "mana_v3_4_state.pkl") used to
+        resolve against the current working directory. Started from a
+        desktop shortcut that is an arbitrary folder, so MANA would open an
+        empty database and appear to have lost its memory. `resolve_data_path`
+        anchors them to the per-user data directory *when frozen or when
+        MANA_DATA_DIR is set*, and leaves a development checkout resolving
+        against the CWD exactly as before -- so this changes nothing for
+        `python mana_run.py`, the CLI flags, or tests/conftest.py, all of
+        which pass absolute paths or rely on the old behaviour.
+
+        Resolution is written back onto the fields, so everything
+        downstream (MemoryManager, ExperienceDB, LocalVerifier) sees one
+        settled absolute path instead of re-deriving it.
+        """
+        from .paths import resolve_data_path
+        for name in self.STATE_PATH_FIELDS:
+            value = getattr(self, name, "")
+            if not value:
+                continue
+            setattr(self, name, str(resolve_data_path(value)))
+        for name in ("knowledge_db_path", "state_file", "history_file", "cache_file",
+                     "experience_db_path", "evolution_report_file", "memory_db_path"):
+            Path(getattr(self, name)).parent.mkdir(parents=True, exist_ok=True)
         Path(self.memory_root).mkdir(parents=True, exist_ok=True)
 
 

@@ -43,15 +43,46 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.2"
+__version__ = "1.3"
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 HISTORY_ROOT = PACKAGE_ROOT.parent / "mana_code_history"
 
 # Files a patch may never target, even in principle: the sandbox/security
-# policy itself, config, this module, and the CLI. Checked defensively in
-# apply() in addition to WHITELIST only ever containing safe entries.
-_NEVER_PATCHABLE = {"verifier.py", "hardware.py", "code_evolution.py", "config.py", "cli.py", "optional_deps.py"}
+# policy itself, config, this module, the CLI, and the location/output
+# layers a patch could use to escape the rest of these rules. Checked
+# defensively in apply() in addition to WHITELIST only ever containing
+# safe entries.
+_NEVER_PATCHABLE = {"verifier.py", "hardware.py", "code_evolution.py", "config.py", "cli.py",
+                    "optional_deps.py", "paths.py", "events.py"}
+
+
+def self_patching_available() -> Dict[str, Any]:
+    """Can an accepted patch actually survive being applied?
+
+    This has to be asked before the gate runs, not after, because the
+    failure it guards against is invisible: under PyInstaller's onefile
+    mode the package is extracted to a temporary directory that Windows
+    deletes at exit. `apply_patch` would write the file, record the diff in
+    the changelog and report success -- and the next launch would run the
+    original code with a changelog claiming otherwise. A self-improvement
+    log that disagrees with the running code is worse than no
+    self-improvement at all.
+    """
+    from . import paths
+    if paths.package_is_ephemeral():
+        return {"ok": False,
+                "reason": "package runs from a temporary extraction directory (onefile build); "
+                          "an applied patch would be discarded at exit -- build with --onedir "
+                          "and ship mana/ as real files",
+                "package_root": str(PACKAGE_ROOT)}
+    if not paths.package_is_writable():
+        return {"ok": False,
+                "reason": f"package directory is not writable: {PACKAGE_ROOT}. Install MANA "
+                          "somewhere the current user can write (e.g. %LOCALAPPDATA%\\MANA) "
+                          "rather than Program Files",
+                "package_root": str(PACKAGE_ROOT)}
+    return {"ok": True, "package_root": str(PACKAGE_ROOT)}
 
 
 @dataclass
@@ -307,6 +338,13 @@ def apply_patch(target_id: str, candidate_source: str, evaluation: Dict[str, Any
     file_path = PACKAGE_ROOT / target.file_path
     if file_path.name in _NEVER_PATCHABLE:  # defense in depth, see module docstring
         return {"applied": False, "reason": f"{file_path.name} is never patchable"}
+    # Checked here, not only at startup: an install can become read-only
+    # between launch and the moment a patch is accepted, and writing the
+    # changelog before discovering that would leave a record of a change
+    # that never happened.
+    location = self_patching_available()
+    if not location.get("ok"):
+        return {"applied": False, "reason": location["reason"], "location": location}
     original = file_path.read_text(encoding="utf-8")
     loc = _locate_function(original, target.class_name, target.function_name)
     lines = original.split("\n")

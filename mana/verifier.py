@@ -30,9 +30,10 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from .config import Config
+from .paths import sandbox_python, sandbox_python_available
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +125,16 @@ class LocalVerifier:
         policy = self._static_policy(code)
         if not policy.get("ok"):
             return {"kind":"code","ok":False,"enabled":True,"policy_blocked":True,"error":policy.get("reason","blocked by policy")}
+        # The interpreter, not `sys.executable`. In a frozen build the
+        # latter is MANA.exe: this line would have re-launched the whole
+        # agent instead of running the snippet, and the "verification"
+        # would have reported whatever the agent printed. Refusing up
+        # front is the only safe answer -- a missing sandbox interpreter
+        # must look like a missing sandbox, not like a passing test.
+        interpreter = sandbox_python()
+        if not sandbox_python_available():
+            return {"kind": "code", "ok": False, "enabled": True, "sandbox_missing": True,
+                    "error": f"sandbox interpreter not found at {interpreter}"}
         with self.lock: self.stats["checks"] += 1; self.stats["code"] += 1
         root=Path(self.config.local_exec_workdir); root.mkdir(parents=True, exist_ok=True)
         work=Path(tempfile.mkdtemp(prefix="mana_", dir=str(root)))
@@ -143,7 +154,7 @@ class LocalVerifier:
                 resource.setrlimit(resource.RLIMIT_NPROC,(self.config.local_exec_max_processes,self.config.local_exec_max_processes))
             creationflags=0
         try:
-            cp=subprocess.run([sys.executable,"-I","-S",str(script)],cwd=str(work),env=env,
+            cp=subprocess.run([interpreter,"-I","-S",str(script)],cwd=str(work),env=env,
                               stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
                               text=True,encoding="utf-8",errors="replace",timeout=self.config.local_exec_timeout,
                               shell=False,creationflags=creationflags,preexec_fn=preexec if os.name != "nt" else None)

@@ -31,7 +31,7 @@ def test_product_version_is_declared_once():
     """Pinned deliberately: the product version must be bumped as part of
     a change, not drift. Update this line in the same commit that changes
     PRODUCT_VERSION -- the failure is the reminder."""
-    assert PRODUCT_VERSION == "5.10.1"
+    assert PRODUCT_VERSION == "5.11.0"
 
 
 def test_every_listed_module_declares_a_version():
@@ -56,7 +56,8 @@ def test_modules_changed_in_this_release_were_bumped():
     for name in ("knowledge", "agent_parts.context", "config", "graph_memory", "intent",
                  "agent_parts.routing", "llm", "tools", "pipeline", "cli",
                  "agent_parts.core", "agent_parts.execution", "brains",
-                 "agent_parts.evolution"):
+                 "agent_parts.evolution", "verifier",
+                 "code_evolution"):
         assert versions[name] != "1.0", (
             f"{name} changed in this release but still reports 1.0 -- bump it")
 

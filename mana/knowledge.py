@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from .config import Config
+from . import events
 from .optional_deps import (
     SentenceTransformer, HAS_SENTENCE_TRANSFORMERS,
     TfidfVectorizer, cosine_similarity, HAS_SKLEARN,
@@ -87,6 +88,24 @@ class KnowledgeEntry:
 #: Component version -- see mana/version.py for the bump conventions.
 __version__ = "1.1"
 
+def _out(*parts: Any, **_kw: Any) -> None:
+    """print()-shaped adapter onto the event bus.
+
+    Kept print-shaped on purpose: these call sites are status lines whose
+    wording and formatting are already right, and rewriting each one into
+    a bespoke emit() would have been a large diff with no behavioural
+    gain. What changes is where the text goes -- a windowed build has no
+    stdout, and a cp1251 console could not encode the markers these lines
+    use. Severity is taken from the marker the line already carries.
+    """
+    text = " ".join(str(p) for p in parts)
+    stripped = text.lstrip("\n ")
+    if stripped.startswith(("⚠", "❌")):
+        events.emit(events.WARNING, text)
+    else:
+        events.emit(events.STATUS, text)
+
+
 
 class KnowledgeBase:
     def __init__(self, config: Config):
@@ -105,9 +124,9 @@ class KnowledgeBase:
             self.embedder = SentenceTransformer(self.config.embedding_model)
             if HAS_TORCH:
                 self.embedder.to(DEVICE)
-            print(f"Эмбеддинги: {self.config.embedding_model}")
+            _out(f"Эмбеддинги: {self.config.embedding_model}")
         except Exception as exc:
-            print(f"⚠️ Не удалось загрузить embeddings: {exc}")
+            _out(f"⚠️ Не удалось загрузить embeddings: {exc}")
             self.embedder = None
 
     def _embed(self, text: str) -> Optional[np.ndarray]:
@@ -257,6 +276,6 @@ class KnowledgeBase:
                 data = pickle.load(fh)
             self.entries = [KnowledgeEntry.from_dict(x) for x in data]
             self._rebuild_tfidf()
-            print(f"Память: {len(self.entries)} записей")
+            _out(f"Память: {len(self.entries)} записей")
         except Exception as exc:
-            print(f"⚠️ Ошибка загрузки памяти: {exc}")
+            _out(f"⚠️ Ошибка загрузки памяти: {exc}")
