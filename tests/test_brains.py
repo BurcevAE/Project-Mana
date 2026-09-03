@@ -477,3 +477,37 @@ def test_top_up_stops_when_the_pool_is_exhausted(isolated_config):
     res = pool.ask_consensus("вопрос", n=2)
     assert res["ok"] is False
     assert len(res["responses"]) <= 4
+
+
+def test_a_brain_needing_more_than_a_key_says_what_is_missing(monkeypatch):
+    """Cloudflare needs an account id in the URL as well as a token. A
+    brain that reports a bare "disabled" for a missing second value is a
+    dead end -- the status column exists to be acted on."""
+    from mana.brains import default_catalog
+    from mana.config import Config
+    monkeypatch.delenv("MANA_CLOUDFLARE_ACCOUNT_ID", raising=False)
+    cf = next(b for b in default_catalog(Config()) if b.brain_id == "cloudflare")
+    assert cf.enabled is False
+    assert "MANA_CLOUDFLARE_ACCOUNT_ID" in cf.setup_hint
+
+
+def test_that_brain_switches_on_once_the_account_id_exists(monkeypatch):
+    from mana.brains import default_catalog
+    from mana.config import Config
+    monkeypatch.setenv("MANA_CLOUDFLARE_ACCOUNT_ID", "abc123")
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "tok")
+    cf = next(b for b in default_catalog(Config()) if b.brain_id == "cloudflare")
+    assert cf.enabled is True
+    assert "abc123" in cf.base_url
+    assert cf.base_url.endswith("/ai/v1/chat/completions")
+
+
+def test_setup_hints_never_leak_into_the_key_field():
+    """public_dict() feeds --list-brains, the desktop panel and reports.
+    The hint belongs there; the key never does."""
+    from mana.brains import default_catalog
+    from mana.config import Config
+    for b in default_catalog(Config()):
+        d = b.public_dict()
+        assert "api_key" not in d
+        assert isinstance(d.get("setup_hint", ""), str)

@@ -62,7 +62,7 @@ from .config import Config
 from .optional_deps import requests, HAS_REQUESTS
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.2"
+__version__ = "1.3"
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +106,13 @@ class BrainSpec:
     weight: float = 1.0                 # manual preference nudge
     enabled: bool = True
     notes: str = ""
+    #: What is still missing before this brain can be used, in the user's
+    #: words. Shown by --list-brains and by the desktop app instead of a
+    #: bare "disabled", which tells nobody what to do about it. Needed
+    #: because not every brain is configured by an API key alone --
+    #: Cloudflare also needs an account id, and a brain that silently
+    #: reports "disabled" for a missing second value is a dead end.
+    setup_hint: str = ""
 
     #: Resolved at build time from api_key_env; never serialized back out
     #: (see `public_dict`) so a status dump or an evolution report cannot
@@ -170,6 +177,7 @@ def default_catalog(cfg: Config) -> List[BrainSpec]:
             base_url=cfg.gemini_url, api_key_env="GEMINI_API_KEY",
             tier="large", strengths=("reasoning", "general", "synthesis", "planning"),
             free=True, rpm=15, rpd=1000,
+            setup_hint="ключ бесплатно на aistudio.google.com/apikey",
             notes="Google AI Studio free tier.",
         ),
         BrainSpec(
@@ -185,6 +193,7 @@ def default_catalog(cfg: Config) -> List[BrainSpec]:
             api_key_env="GROQ_API_KEY", tier="large",
             strengths=("general", "reasoning", "synthesis"), free=True, rpm=30, rpd=1000,
             timeout=30.0,
+            setup_hint="ключ бесплатно на console.groq.com/keys (начинается с gsk_)",
             notes="Groq free tier. Fastest remote brain -- preferred when latency matters.",
         ),
         BrainSpec(
@@ -205,6 +214,7 @@ def default_catalog(cfg: Config) -> List[BrainSpec]:
             base_url=env("MANA_CEREBRAS_URL", "https://api.cerebras.ai/v1/chat/completions"),
             api_key_env="CEREBRAS_API_KEY", tier="large",
             strengths=("general", "reasoning"), free=True, rpm=30, rpd=900, timeout=30.0,
+            setup_hint="ключ бесплатно на cloud.cerebras.ai",
             notes="Cerebras free tier.",
         ),
         BrainSpec(
@@ -229,7 +239,29 @@ def default_catalog(cfg: Config) -> List[BrainSpec]:
             base_url=env("MANA_GITHUB_MODELS_URL", "https://models.inference.ai.azure.com/chat/completions"),
             api_key_env="GITHUB_TOKEN", tier="medium",
             strengths=("general", "programming"), free=True, rpm=15, rpd=150,
+            setup_hint="любой GitHub PAT подойдёт",
             notes="GitHub Models -- free with any GitHub personal access token.",
+        ),
+        BrainSpec(
+            # Cloudflare Workers AI. Two things make it worth a catalog
+            # entry: a genuinely free daily allocation, and an
+            # OpenAI-compatible route, so it needs no new adapter.
+            #
+            # It is also the first brain that needs more than a key: the
+            # account id is part of the URL and differs per user, so it
+            # cannot be a constant here. Without it the entry stays
+            # disabled with a hint rather than sitting in the pool with a
+            # URL that cannot resolve.
+            brain_id="cloudflare", provider="openai_chat",
+            model=env("MANA_CLOUDFLARE_MODEL", "@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
+            base_url=(f"https://api.cloudflare.com/client/v4/accounts/"
+                      f"{env('MANA_CLOUDFLARE_ACCOUNT_ID', '')}/ai/v1/chat/completions"),
+            api_key_env="CLOUDFLARE_API_TOKEN", tier="large",
+            strengths=("general", "reasoning", "programming"), free=True, rpm=30,
+            enabled=bool(env("MANA_CLOUDFLARE_ACCOUNT_ID", "")),
+            setup_hint=("нужны CLOUDFLARE_API_TOKEN (права Workers AI) и "
+                        "MANA_CLOUDFLARE_ACCOUNT_ID — id аккаунта из URL панели Cloudflare"),
+            notes="Cloudflare Workers AI free allocation, OpenAI-compatible route.",
         ),
         # --- aggregators: several brains behind one key -----------------
         BrainSpec(

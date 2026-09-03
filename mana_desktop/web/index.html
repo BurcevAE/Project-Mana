@@ -276,8 +276,8 @@ document.querySelectorAll(".tabs button").forEach(btn => {
 
 function brainNote(b) {
   if (b.ready) return "";
-  if (!b.enabled) return "выключен";
-  if (!b.key_present) return "нет ключа";
+  if (!b.enabled) return b.setup_hint || "выключен";
+  if (!b.key_present) return b.setup_hint || "нет ключа";
   if (b.cooldown_for > 0) return "кулдаун " + Math.round(b.cooldown_for) + "с";
   if (b.rpd && b.day_count >= b.rpd) return "дневной лимит исчерпан";
   if (!b.usable) return "недоступен";

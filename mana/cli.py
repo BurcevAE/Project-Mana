@@ -37,7 +37,7 @@ from .optional_deps import HAS_REQUESTS, HAS_WEB, HAS_SOUNDDEVICE, sd
 from . import events, paths
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.2"
+__version__ = "1.3"
 
 
 # ---------------------------------------------------------------------------
@@ -109,9 +109,16 @@ def format_brains(status: Dict[str, Any]) -> str:
         if b["ready"]:
             note = "ok"
         elif not b["enabled"]:
-            note = "выключен"
+            # A brain can be off because it needs something the user has
+            # not supplied yet (Cloudflare needs an account id as well as
+            # a token). "Выключен" alone is a dead end -- say what is
+            # missing, since that is the only reason anyone reads this
+            # column.
+            note = b.get("setup_hint") or "выключен"
         elif not b["key_present"]:
             note = f"нет ключа ({b['api_key_env']})"
+            if b.get("setup_hint"):
+                note += f" — {b['setup_hint']}"
         elif b["cooldown_for"] > 0:
             note = f"кулдаун {b['cooldown_for']:.0f}с: {b['last_error'][:40]}"
         elif b["rpd"] and b["day_count"] >= b["rpd"]:
