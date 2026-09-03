@@ -33,7 +33,7 @@ from typing import Dict
 __version__ = "1.0"
 
 #: The release as a whole.
-PRODUCT_VERSION = "5.18.0"
+PRODUCT_VERSION = "5.19.0"
 
 #: Modules that carry their own version. Kept as an explicit list rather
 #: than discovered by scanning, so a module added without a version number
@@ -47,6 +47,7 @@ VERSIONED_MODULES = (
     "cognition", "cognition.ir", "cognition.genome",
     "cognition.programs", "cognition.compiler", "cognition.runtime",
     "cognition.self_model", "cognition.gaps", "cognition.experiments",
+    "cognition.laws", "cognition.counterexamples",
     "pipeline", "experience", "verifier", "memory", "graph_memory", "intent",
     "tools", "code_evolution", "voice", "cli", "version", "episode_affinity",
     "agent_parts.core", "agent_parts.context", "agent_parts.routing",
