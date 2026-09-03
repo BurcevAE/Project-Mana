@@ -41,12 +41,13 @@ from ..version import PRODUCT_VERSION, format_version_report
 from ..hardware import detect_hardware, apply_hardware_profile
 from ..tools import build_default_registry
 from .. import events
+from ..core import evaluation
 from ..graph_memory import GraphMemoryStore, extract_entities
 from ..intent import is_ambiguous_followup, format_clarifying_question
 from ..optional_deps import fitz, HAS_FITZ, HAS_SKLEARN, LogisticRegression, HAS_TORCH, DEVICE, HAS_WEB, WEB_BACKEND, torch
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.3"
+__version__ = "1.4"
 
 
 class CoreMixin:
@@ -119,7 +120,11 @@ class CoreMixin:
         self.learned_router_classes: List[str] = []
         self.mutation_failure_history: List[Dict[str, Any]] = []
         self._benchmark_learning = False
-        self._benchmark_holdout = False
+        # The evaluation mode is NOT a boolean the agent owns any more.
+        # It is a context issued by mana.core.evaluation and handed in;
+        # `_benchmark_holdout` survives as a read-only view so the three
+        # existing readers need no change. See enter_evaluation().
+        self._eval_mode = evaluation.normal()
 
         self._load_state()
         self._load_cache()
@@ -343,6 +348,39 @@ class CoreMixin:
                                   avoid=tuple(avoid))
         meta = LLMCallMeta(**result.meta) if result.meta else LLMCallMeta(ok=False, error=result.error)
         return result.output, meta
+
+    @property
+    def _benchmark_holdout(self) -> bool:
+        """Read-only view of the evaluation mode.
+
+        Was a plain mutable attribute the agent set on itself, which meant
+        the thing being measured owned the flag saying whether it was
+        being measured. Kept under the old name because three call sites
+        (confidence.py, routing.py, benchmarking.py) read it and their
+        logic is unchanged -- what changed is that nothing can assign to
+        it.
+        """
+        return not self._eval_mode.learning_enabled
+
+    @property
+    def evaluation_mode(self):
+        return self._eval_mode
+
+    def enter_evaluation(self, mode) -> None:
+        """Accept an evaluation context issued by mana.core.evaluation.
+
+        Rejects anything the core did not issue. Not for security -- Python
+        offers none -- but so that an unauthorized context is a visible
+        error at the point of use rather than a silent equivalence.
+        """
+        if mode.is_measured and not mode.authorized:
+            raise PermissionError(
+                "evaluation mode was not issued by mana.core.evaluation; "
+                "use open_evaluation() rather than constructing one")
+        self._eval_mode = mode
+
+    def leave_evaluation(self) -> None:
+        self._eval_mode = evaluation.normal()
 
     def brains_status(self) -> Dict[str, Any]:
         """Everything about the pool: which brains exist, which are ready,

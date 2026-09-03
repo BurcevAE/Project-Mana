@@ -31,7 +31,7 @@ def test_product_version_is_declared_once():
     """Pinned deliberately: the product version must be bumped as part of
     a change, not drift. Update this line in the same commit that changes
     PRODUCT_VERSION -- the failure is the reminder."""
-    assert PRODUCT_VERSION == "5.13.0"
+    assert PRODUCT_VERSION == "5.14.0"
 
 
 def test_every_listed_module_declares_a_version():

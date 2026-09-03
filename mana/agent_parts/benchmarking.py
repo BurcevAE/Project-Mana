@@ -40,8 +40,28 @@ from ..verifier import LocalVerifier
 from ..memory import MemoryManager
 from ..optional_deps import fitz, HAS_FITZ, HAS_SKLEARN, LogisticRegression, HAS_TORCH, DEVICE, HAS_WEB, WEB_BACKEND, torch
 
+from contextlib import ExitStack
+
+from ..core import evaluation as _evaluation
+
+
+#: Open evaluation contexts held for the duration of a benchmark run.
+#: A module-level stack rather than a parameter because the two call sites
+#: that switch modes are separated by the whole benchmark loop, and
+#: threading a context through it would touch code this change has no
+#: reason to disturb.
+_MODE_STACK = ExitStack()
+
+
+def _holdout_mode(holdout: bool, label: str):
+    """Issue (and hold open) a core evaluation context for this run."""
+    _MODE_STACK.close()
+    mode = _evaluation.HELD_OUT if holdout else _evaluation.DEV
+    return _MODE_STACK.enter_context(_evaluation.open_evaluation(mode, label))
+
+
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 def _out(*parts: Any, **_kw: Any) -> None:
     """print()-shaped adapter onto the event bus.
@@ -101,7 +121,11 @@ class BenchmarkingMixin:
         base = PipelineSpec(**asdict(spec or self.pipeline)).normalize(self.config)
         rows=[]
         self._benchmark_learning = True
-        self._benchmark_holdout = bool(holdout)
+        # Was `self._benchmark_holdout = bool(holdout)`. The mode now
+        # comes from core, so a holdout run cannot be declared by the
+        # thing being measured.
+        self.enter_evaluation(
+            _holdout_mode(holdout, "adaptive-holdout" if holdout else "adaptive"))
         try:
             for rep in range(max(1, repetitions)):
                 for tid,q,expected,must,cat in tasks:
@@ -129,7 +153,7 @@ class BenchmarkingMixin:
                         self._learn_stop_outcome(q, int(row["steps"]), score >= 0.75, float(row["confidence"]))
         finally:
             self._benchmark_learning = False
-            self._benchmark_holdout = False
+            self.leave_evaluation()
         n=max(1,len(rows)); webrows=[x for x in rows if x["web_attempted"]]
         bycat={}
         for cat in sorted(set(x["category"] for x in rows)):
