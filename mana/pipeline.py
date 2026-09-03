@@ -32,7 +32,7 @@ import numpy as np
 from .config import Config, RandomManager
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 
 # ---------------------------------------------------------------------------
@@ -73,6 +73,13 @@ class PipelineSpec:
     # v4.6 learned routing / verification genome
     verification_policy: str = "adaptive"
     generated_test_cases: int = 5
+    # v5.10 multi-brain genome. `llm_provider` above already chose *a*
+    # backend; these choose how the pool is used, which is the part that
+    # was previously not evolvable at all: how to rank brains, whether to
+    # pay for a second opinion, and whether to split the task up.
+    brain_policy: str = "capability_first"   # + fastest/cheapest/least_loaded/strongest/round_robin
+    brain_ensemble: int = 1                  # 1 = single brain; >1 = consensus across N brains
+    decompose_mode: str = "never"            # never/auto/always
 
     def normalize(self, cfg: Config) -> "PipelineSpec":
         self.memory_top_k = max(1, min(8, int(self.memory_top_k)))
@@ -120,12 +127,30 @@ class PipelineSpec:
         if self.verification_mode not in {"never", "adaptive", "always"}: self.verification_mode = "adaptive"
         if self.architecture not in {"adaptive", "minimal", "verify", "research", "deep"}: self.architecture = "adaptive"
         if self.second_pass_mode not in {"auto", "always", "never"}: self.second_pass_mode = "auto"
-        if self.llm_provider not in {"auto", "ollama", "gemini", "openrouter", "openai"}: self.llm_provider = "auto"
+        # v5.10: llm_provider is no longer a closed set. It names a brain
+        # in the pool, and the pool's catalog is user-extensible (a JSON
+        # file can add brains this file has never heard of), so validating
+        # against a hardcoded list here would silently rewrite every custom
+        # brain to "auto". Shape is still enforced -- it must be a
+        # non-empty single token -- and BrainPool.resolve_alias is what
+        # decides whether the name means anything, falling back to "auto"
+        # ranking when it does not.
+        provider = str(self.llm_provider or "auto").strip()
+        self.llm_provider = provider if provider and " " not in provider else "auto"
         if self.web_provider not in {"auto", "ddgs"}: self.web_provider = "auto"
         if self.prompt_strategy not in cfg.prompt_strategies: self.prompt_strategy = "direct"
         if self.critic_prompt_strategy not in cfg.critic_prompt_strategies: self.critic_prompt_strategy = "balanced"
         if self.verification_policy not in {"adaptive", "never", "always", "code_only", "arithmetic_only"}: self.verification_policy = "adaptive"
         self.generated_test_cases = max(1, min(20, int(self.generated_test_cases)))
+        if self.brain_policy not in {"capability_first", "fastest", "cheapest",
+                                      "least_loaded", "strongest", "round_robin"}:
+            self.brain_policy = "capability_first"
+        # Capped at 3: consensus spends one free-tier call per brain per
+        # question, and a genome that drifted to 6 would exhaust a daily
+        # quota inside one benchmark run -- the cost would land on the next
+        # session, long after the cycle that caused it was scored.
+        self.brain_ensemble = max(1, min(3, int(self.brain_ensemble)))
+        if self.decompose_mode not in {"never", "auto", "always"}: self.decompose_mode = "never"
         return self
 
     def key(self) -> str:
@@ -140,6 +165,8 @@ class PipelineFactory:
     WEB_MODES = ["auto", "always", "never"]
     ROUTE_MODES = ["auto", "local", "web", "mixed"]
     PASS_MODES = ["auto", "always", "never"]
+    BRAIN_POLICIES = ["capability_first", "fastest", "cheapest", "least_loaded", "strongest", "round_robin"]
+    DECOMPOSE_MODES = ["never", "auto", "always"]
 
     # Computation-graph genome. MEMORY/WEB only do useful work *before* the
     # first LLM call (they materialize retrieval context the LLM consumes);
@@ -299,6 +326,18 @@ class PipelineFactory:
                 ("max_context_chars", lambda: setattr(s, "max_context_chars", s.max_context_chars + rm.choice([-400, 400]))),
                 ("prompt_strategy", lambda: setattr(s, "prompt_strategy", rm.choice(cfg.prompt_strategies))),
                 ("critic_threshold", lambda: setattr(s, "critic_threshold", s.critic_threshold + rm.uniform(-.06, .06))),
+            ],
+            # v5.10: how the brain pool is used is now part of the genome,
+            # so "is a second opinion worth its cost here?" and "is this
+            # task better split up?" become measured questions with a
+            # before/after and a holdout, instead of a switch someone sets
+            # by intuition. Each mutation changes exactly one aspect, same
+            # locality rule as every other group in this table.
+            "brains": [
+                ("brain_policy", lambda: setattr(s, "brain_policy", rm.choice(PipelineFactory.BRAIN_POLICIES))),
+                ("brain_ensemble", lambda: setattr(s, "brain_ensemble", s.brain_ensemble + rm.choice([-1, 1]))),
+                ("decompose_mode", lambda: setattr(s, "decompose_mode", rm.choice(PipelineFactory.DECOMPOSE_MODES))),
+                ("llm_provider", lambda: setattr(s, "llm_provider", rm.choice(list(cfg.brain_ids) or ["auto"]))),
             ],
             "memory": [
                 ("memory_top_k", lambda: setattr(s, "memory_top_k", s.memory_top_k + rm.choice([-1, 1]))),

@@ -126,3 +126,73 @@ def test_unknown_target_id_rejected():
     evaluation = ce.evaluate_candidate("not_a_real_target", "def x(): pass", verifier=None)
     assert evaluation["ok"] is False
     assert "unknown target_id" in evaluation["reason"]
+
+
+def test_current_target_source_contains_existing_fallback_logic():
+    target = ce.WHITELIST["local_fallback"]
+    source = ce._current_target_source(target)
+
+    assert "def _local_fallback" in source
+    assert "17 * 23" in source
+    assert "Недостаточно данных" in source
+    assert "@staticmethod" not in source
+
+
+def test_proposal_prompt_includes_current_source_and_benchmark():
+    captured = {}
+
+    class Meta:
+        latency = 0.0
+
+    def fake_llm(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return (
+            'def _local_fallback(task: str) -> str:\n'
+            '    t = task.lower()\n'
+            '    if "17 * 23" in t or "17*23" in t:\n'
+            '        return "391"\n'
+            '    return "Недостаточно данных для надёжного ответа без внешней модели."',
+            Meta(),
+        )
+
+    result = ce.propose_patch_llm(
+        "local_fallback",
+        fake_llm,
+        "Улучшай только подтверждённые benchmark-кейсы.",
+    )
+
+    assert result["ok"] is True, result
+
+    prompt = captured["prompt"]
+
+    assert "CURRENT IMPLEMENTATION:" in prompt
+    assert "def _local_fallback" in prompt
+    assert "17 * 23" in prompt
+    assert "FAILING CASES - TARGET FOR IMPROVEMENT:" in prompt
+    assert "Maximum candidate length: 6000 characters." in prompt
+    assert (
+        "Do not add branches for arbitrary Git or deployment commands."
+        in prompt
+    )
+
+
+def test_invalid_llm_candidate_is_rejected_before_evaluation():
+    class Meta:
+        latency = 0.0
+
+    def fake_llm(prompt, **kwargs):
+        return (
+            'def _local_fallback(task: str) -> str:\n'
+            '    return "unterminated',
+            Meta(),
+        )
+
+    result = ce.propose_patch_llm(
+        "local_fallback",
+        fake_llm,
+        "Improve benchmark coverage.",
+    )
+
+    assert result["ok"] is False
+    assert result["stage"] == "proposal_validation"
+    assert "SyntaxError" in result["reason"]

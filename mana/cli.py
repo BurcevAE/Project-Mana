@@ -36,7 +36,7 @@ from .voice import VoiceInterface
 from .optional_deps import HAS_REQUESTS, HAS_WEB, HAS_SOUNDDEVICE, sd
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 
 # ---------------------------------------------------------------------------
@@ -73,7 +73,56 @@ def build_config(args: argparse.Namespace) -> Config:
     if getattr(args, "llm_url", None):
         cfg.ollama_url = args.llm_url
     cfg.hardware_auto_adapt = not getattr(args, "no_hardware_adapt", False)
+    # --- brain pool ---------------------------------------------------
+    # NOTE: --no-llm keeps its original meaning (no local backend, see
+    # BrainPool.usable) and additionally disables remote brains, because a
+    # user typing --no-llm to run offline must get an offline run, not a
+    # run that quietly reaches four cloud APIs instead of one local model.
+    if getattr(args, "no_llm", False):
+        cfg.brain_external_enabled = False
+    if getattr(args, "no_external_brains", False):
+        cfg.brain_external_enabled = False
+    if getattr(args, "brain_policy", None):
+        cfg.brain_policy = args.brain_policy
+    if getattr(args, "brains_file", None):
+        cfg.brains_file = args.brains_file
+    if getattr(args, "allow_paid_brains", False):
+        cfg.brain_allow_paid = True
+    if getattr(args, "consensus", None):
+        cfg.brain_consensus_n = max(2, int(args.consensus))
     return cfg
+
+
+def format_brains(status: Dict[str, Any]) -> str:
+    """Human-readable brain table for --list-brains.
+
+    A brain that is configured but not ready is the interesting case (no
+    key, cooling down, quota spent), so the reason is shown in-line rather
+    than making the user diff two JSON blobs to find it.
+    """
+    lines = [f"policy={status['policy']}  готовы: {len(status['available'])}/{len(status['brains'])}", ""]
+    header = f"{'BRAIN':<18}{'MODEL':<34}{'TIER':<8}{'READY':<7}{'CALLS':<7}{'LAT':<8}{'Q':<6}СТАТУС"
+    lines.append(header)
+    lines.append("-" * len(header))
+    for b in status["brains"]:
+        if b["ready"]:
+            note = "ok"
+        elif not b["enabled"]:
+            note = "выключен"
+        elif not b["key_present"]:
+            note = f"нет ключа ({b['api_key_env']})"
+        elif b["cooldown_for"] > 0:
+            note = f"кулдаун {b['cooldown_for']:.0f}с: {b['last_error'][:40]}"
+        elif b["rpd"] and b["day_count"] >= b["rpd"]:
+            note = f"исчерпан дневной лимит ({b['rpd']})"
+        elif not b["usable"]:
+            note = "недоступен (сеть/режим)"
+        else:
+            note = "лимит запросов в минуту"
+        lines.append(f"{b['brain_id']:<18}{b['model'][:33]:<34}{b['tier']:<8}"
+                     f"{('да' if b['ready'] else 'нет'):<7}{b['calls']:<7}"
+                     f"{b['ewma_latency']:<8.2f}{b['ewma_quality']:<6.2f}{note}")
+    return "\n".join(lines)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -120,6 +169,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--hardware-status", action="store_true", help="Показать определённый профиль машины и что было адаптировано")
     parser.add_argument("--no-hardware-adapt", action="store_true", help="Не подстраивать Config под текущую машину")
     parser.add_argument("--list-tools", action="store_true", help="Показать зарегистрированные инструменты агента")
+    # --- brain pool (mana.brains) ---
+    parser.add_argument("--list-brains", action="store_true",
+                        help="Показать все мозги: какие настроены, готовы, в кулдауне или исчерпали free-tier")
+    parser.add_argument("--brains-status", action="store_true",
+                        help="Полный JSON-статус пула мозгов (замеренные латентность и качество)")
+    parser.add_argument("--brain-policy", default=None,
+                        choices=["capability_first", "fastest", "cheapest", "least_loaded", "strongest", "round_robin"],
+                        help="Как пул ранжирует мозги при выборе")
+    parser.add_argument("--brains-file", default=None, metavar="PATH",
+                        help="JSON-файл, дополняющий/переопределяющий каталог мозгов")
+    parser.add_argument("--no-external-brains", action="store_true",
+                        help="Только локальные мозги: ни один внешний API не вызывается")
+    parser.add_argument("--allow-paid-brains", action="store_true",
+                        help="Разрешить платные мозги (по умолчанию используются только бесплатные и локальные)")
+    parser.add_argument("--ask", metavar="TASK", default=None,
+                        help="Задать один вопрос и выйти (обычный путь solve_task)")
+    parser.add_argument("--consensus", type=int, default=None, metavar="N",
+                        help="Спросить N мозгов параллельно и показать ответ вместе со степенью их согласия")
+    parser.add_argument("--decompose", metavar="TASK", default=None,
+                        help="Разложить задачу на подзадачи, решить их на разных мозгах и собрать ответ")
     parser.add_argument("--list-code-targets", action="store_true", help="Показать список whitelisted целей для self-improve-code")
     parser.add_argument("--self-improve-code", metavar="TARGET_ID", default=None, help="Предложить и (при принятии gate'ом) применить патч кода для указанной цели")
     parser.add_argument("--code-instruction", default="", help="Инструкция для LLM при --self-improve-code")
@@ -166,6 +235,18 @@ def main() -> int:
         print(json.dumps(agent._json_safe(agent.hardware_status()), ensure_ascii=False, indent=2)); return 0
     if args.list_tools:
         print(json.dumps(agent.tools_status(), ensure_ascii=False, indent=2)); return 0
+    if args.list_brains:
+        print(format_brains(agent.brains_status())); return 0
+    if args.brains_status:
+        print(json.dumps(agent._json_safe(agent.brains_status()), ensure_ascii=False, indent=2)); return 0
+    if args.decompose is not None:
+        print(json.dumps(agent._json_safe(agent.solve_decomposed(args.decompose)),
+                          ensure_ascii=False, indent=2)); return 0
+    if args.consensus is not None and args.ask is not None:
+        print(json.dumps(agent._json_safe(agent.ask_consensus(args.ask, n=int(args.consensus))),
+                          ensure_ascii=False, indent=2)); return 0
+    if args.ask is not None:
+        print(json.dumps(agent._json_safe(agent.solve_task(args.ask)), ensure_ascii=False, indent=2)); return 0
     if args.list_code_targets:
         print(json.dumps(agent.list_code_targets(), ensure_ascii=False, indent=2)); return 0
     if args.code_history is not None:

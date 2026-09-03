@@ -41,7 +41,7 @@ from .. import code_evolution as _code_evolution
 from ..optional_deps import fitz, HAS_FITZ, HAS_SKLEARN, LogisticRegression, HAS_TORCH, DEVICE, HAS_WEB, WEB_BACKEND, torch
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 
 class EvolutionMixin:
@@ -74,7 +74,20 @@ class EvolutionMixin:
         if candidate_source is None:
             if not self._tool_available("llm_generate"):
                 return {"ok": False, "reason": "no candidate_source given and LLM is disabled"}
-            proposal = _code_evolution.propose_patch_llm(target_id, self._llm_call, instruction)
+            # Route the patch proposal to a brain that declares strength in
+            # programming, at the top tier: this is the highest-stakes
+            # generation MANA performs -- its output is written into MANA's
+            # own source -- so it should not land on whichever brain the
+            # prompt-length difficulty heuristic happened to pick. The
+            # acceptance gate is unchanged; a better proposer only means
+            # fewer candidates rejected for being nonsense.
+            def _ask_code_brain(prompt, **kwargs):
+                kwargs.setdefault("kind", "programming")
+                kwargs.setdefault("difficulty", 0.9)
+                kwargs.setdefault("policy", "strongest")
+                return self._llm_call(prompt, **kwargs)
+
+            proposal = _code_evolution.propose_patch_llm(target_id, _ask_code_brain, instruction)
             if not proposal.get("ok"):
                 return proposal
             candidate_source = proposal["candidate_source"]

@@ -1,0 +1,31 @@
+__pycache__/
+*.py[cod]
+*.class
+.pytest_cache/
+.venv/
+venv/
+env/
+.vscode/
+.idea/
+*.log
+*.tmp
+*.bak
+
+# MANA runtime state
+mana_memory/
+mana_v3_4_*.sqlite3
+mana_v3_4_*.pkl
+mana_v3_4_*.json
+mana_v4_6_evolution_reports.json
+mana_code_history/
+mana_exec_sandbox/
+mana_diagnostic_report.txt
+*.pre_593_backup
+
+# Brain pool: a local catalog override (--brains-file / MANA_BRAINS_FILE).
+# Only the root-level one is ignored, so a deliberately committed example
+# catalog elsewhere in the tree stays tracked. API keys never live in this
+# file (they come from the env vars named by api_key_env), but endpoints
+# and model choices are per-machine.
+/brains.json
+brains.local.json
