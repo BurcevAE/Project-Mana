@@ -32,7 +32,18 @@ import numpy as np
 from .optional_deps import torch, HAS_TORCH
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.2"
+__version__ = "1.3"
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    """Read a boolean from the environment without importing mana.brains
+    (which imports this module). Same accepted spellings as brains._env_flag
+    -- kept in both places on purpose rather than creating a circular
+    import for four lines."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 # ---------------------------------------------------------------------------
@@ -73,6 +84,40 @@ class Config:
     openai_timeout: int = 60
     openai_max_output_tokens: int = 700
     openai_web_enabled: bool = True
+
+    # Brain pool (mana.brains) -- MANA reasons with several models instead
+    # of one. The fields above still describe *individual* endpoints; the
+    # ones below describe how the pool built from them behaves. A brain
+    # whose API-key env var is unset is simply absent from the pool, so
+    # these defaults are safe on a machine with nothing but Ollama.
+    brain_pool_enabled: bool = True
+    brain_external_enabled: bool = True        # --no-external-brains kills every remote brain
+    brain_allow_paid: bool = _env_flag("MANA_ALLOW_PAID_BRAINS", False)
+    brains_file: str = os.environ.get("MANA_BRAINS_FILE", "")
+    #: capability_first | fastest | cheapest | least_loaded | strongest | round_robin
+    brain_policy: str = os.environ.get("MANA_BRAIN_POLICY", "capability_first")
+    brain_max_attempts: int = 3                # how far down the ranking failover walks
+    brain_strict_selection: bool = False       # explicit brain unavailable -> fail, don't substitute
+    brain_local_bonus: float = 0.15            # prefer local when nothing else separates candidates
+    brain_failure_limit: int = 3               # consecutive failures before the breaker trips
+    brain_cooldown_seconds: float = 45.0
+    brain_max_cooldown_seconds: float = 900.0
+    brain_rate_limit_cooldown: float = 60.0    # used when a 429 carries no Retry-After
+    brain_latency_ewma_alpha: float = 0.30
+    brain_quality_ewma_alpha: float = 0.20
+    #: Populated at startup from the brain pool that was actually built, so
+    #: PipelineFactory can mutate `llm_provider` toward brains that exist on
+    #: THIS machine. A hardcoded list here would make evolution propose
+    #: providers the user has no key for and then "learn" that they fail.
+    brain_ids: Tuple[str, ...] = ("auto",)
+
+    # Consensus / decomposition (mana.decompose)
+    brain_consensus_threshold: float = 0.55    # below this, brains are treated as disagreeing
+    brain_consensus_n: int = 2
+    decompose_enabled: bool = True
+    decompose_min_difficulty: float = 0.55     # 'auto' mode splits only above this
+    decompose_max_subtasks: int = 4
+    decompose_max_parallel: int = 4
 
     # Web
     enable_web: bool = True

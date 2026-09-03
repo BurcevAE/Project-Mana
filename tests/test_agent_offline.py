@@ -72,4 +72,5 @@ def test_hardware_status_and_tools_status_shapes(isolated_agent):
     hw = isolated_agent.hardware_status()
     assert "profile" in hw and "adapted" in hw and "auto_adapt_enabled" in hw
     tools = isolated_agent.tools_status()
-    assert len(tools["tools"]) == 9
+    # 9 before 5.10, + llm_consensus and decompose_task with the brain pool.
+    assert len(tools["tools"]) == 11

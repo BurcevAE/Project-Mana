@@ -40,7 +40,7 @@ from ..memory import MemoryManager
 from ..optional_deps import fitz, HAS_FITZ, HAS_SKLEARN, LogisticRegression, HAS_TORCH, DEVICE, HAS_WEB, WEB_BACKEND, torch
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 
 class ExecutionMixin:
@@ -458,6 +458,12 @@ class ExecutionMixin:
         current["verification_trust"] = trust_level
         if not self._benchmark_learning:
             self._record_route_outcome(task, final_route, proxy_quality, execution_success, bool(trace.get("web_ok",False)), total_latency)
+            # Same outcome, second consumer: the brain that produced this
+            # answer earns or loses reputation by the same proxy_quality the
+            # route does. Without this the pool would rank brains forever by
+            # the catalog's declared strengths -- i.e. by an assumption --
+            # instead of by how they actually perform on this user's tasks.
+            self._record_brain_outcome(trace, proxy_quality)
         counterfactual = self._counterfactual_estimates(task, final_route)
         current["adaptive_confidence"] = float(ev.get("confidence",0.0))
         current["adaptive"] = {"enabled":True,"budget":budget,"threshold":threshold,"steps_used":len(attempts),
@@ -488,6 +494,55 @@ class ExecutionMixin:
             return self._adaptive_answer_v41(task, spec, save_memory, context_tag)
         return self._answer_routed(task, spec, save_memory, context_tag)
 
+    def _record_brain_outcome(self, trace: Dict[str, Any], quality: float) -> None:
+        """Credit/debit whichever brains contributed to this answer.
+
+        Never raises and never blocks the answer path: a reputation update
+        failing is not a reason for a user-facing call to fail, which is the
+        same contract every other side-channel write in this file follows.
+        """
+        try:
+            brains = []
+            if trace.get("brain"):
+                brains.append(str(trace["brain"]))
+            brains += [str(b) for b in (trace.get("consensus", {}) or {}).get("brains", [])]
+            brains += [str(b) for b in (trace.get("decompose", {}) or {}).get("brains_used", [])]
+            for brain_id in dict.fromkeys(b for b in brains if b):
+                self.llm.record_outcome(brain_id, quality)
+        except Exception as exc:
+            self._vlog(f"brain outcome write failed: {exc}")
+
+    def _brain_strategy(self, task: str, spec: PipelineSpec) -> str:
+        """Decide between one brain, several in consensus, or decomposition.
+
+        Every branch below falls back to "single", which is byte-for-byte
+        the pre-5.10 behaviour. That is deliberate: a multi-brain strategy
+        that fires when only one brain is configured would spend two calls
+        on the same model and call the result a consensus, which is worse
+        than useless -- it would manufacture agreement out of nothing.
+        So both alternatives require at least two *distinct* ready brains.
+        """
+        try:
+            pool = self.llm.pool
+            ready = pool.available()
+        except Exception:
+            return "single"
+        if len(ready) < 2:
+            return "single"
+        mode = getattr(spec, "decompose_mode", "never")
+        if mode != "never" and self.config.decompose_enabled and self._tool_available("decompose_task"):
+            if mode == "always":
+                return "decompose"
+            # 'auto': only for tasks the difficulty proxy calls hard. The
+            # proxy is a heuristic (see BrainPool.estimate_difficulty) --
+            # using it to spend more compute is a safe use of a rough
+            # signal; it is never used to decide whether an answer is true.
+            if pool.estimate_difficulty(task) >= float(self.config.decompose_min_difficulty):
+                return "decompose"
+        if int(getattr(spec, "brain_ensemble", 1)) > 1 and self._tool_available("llm_consensus"):
+            return "consensus"
+        return "single"
+
     def _answer_core(self, task: str, spec: PipelineSpec, save_memory: bool = True, context_tag: str = "") -> Dict[str, Any]:
         spec = PipelineSpec(**asdict(spec or self.pipeline)).normalize(self.config)
         started = time.perf_counter()
@@ -516,13 +571,45 @@ class ExecutionMixin:
 
         if spec.use_llm and self._tool_available("llm_generate"):
             prompt = self._compose_prompt(task, context, spec)
-            text, meta = self._llm_call(prompt, temperature=spec.temperature, provider=spec.llm_provider,
-                                        context_tag=context_tag)
-            llm_latency += meta.latency
-            answer_text = text
-            llm_ok = bool(text)
-            timeout_count += int(meta.timeout)
-            passes_used = 1
+            strategy = self._brain_strategy(task, spec)
+            trace["brain_strategy"] = strategy
+            if strategy == "decompose":
+                dec = self.solve_decomposed(task, temperature=spec.temperature,
+                                             context_tag=f"{context_tag} DECOMP",
+                                             policy=spec.brain_policy)
+                llm_latency += float(dec.get("latency", 0.0))
+                answer_text = dec.get("answer") or None
+                llm_ok = bool(answer_text)
+                passes_used = max(1, int(dec.get("subtasks", 1)))
+                trace["decompose"] = {k: dec.get(k) for k in
+                                      ("subtasks", "brains_used", "synthesis_brain",
+                                       "failed_subtasks", "degraded")}
+            elif strategy == "consensus":
+                con = self.ask_consensus(prompt, n=spec.brain_ensemble, temperature=spec.temperature,
+                                          kind=self._task_category(task),
+                                          context_tag=f"{context_tag} CONS")
+                llm_latency += float(con.get("latency", 0.0))
+                answer_text = con.get("answer") or None
+                llm_ok = bool(answer_text)
+                passes_used = len(con.get("brains") or []) or 1
+                # Recorded, not acted on: disagreement between brains is
+                # evidence about confidence, and ConfidenceMixin is where
+                # that belongs. Silently overriding the answer here would
+                # hide the signal in exactly the place it is most useful.
+                trace["consensus"] = {"agreement": float(con.get("agreement", 0.0)),
+                                      "disagreement": bool(con.get("disagreement")),
+                                      "brains": list(con.get("brains") or [])}
+            else:
+                text, meta = self._llm_call(prompt, temperature=spec.temperature, provider=spec.llm_provider,
+                                            context_tag=context_tag, kind=self._task_category(task),
+                                            task=task, policy=spec.brain_policy)
+                llm_latency += meta.latency
+                answer_text = text
+                llm_ok = bool(text)
+                timeout_count += int(meta.timeout)
+                trace["brain"] = meta.brain or meta.provider
+                trace["brain_attempts"] = list(meta.attempts)
+            passes_used = passes_used or 1
 
             second = False
             if answer_text and spec.second_pass_mode == "always": second = True

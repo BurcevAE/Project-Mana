@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# Runtime state — these are per-machine data, not source. They were
+# committed before 5.10 (including a real conversation log in
+# mana_memory/mana_memory.sqlite3).
+mana_memory/
+mana_code_history/
+mana_exec_sandbox/
+*.sqlite3
+*.pkl
+brains.json
