@@ -32,7 +32,7 @@ import numpy as np
 from .optional_deps import torch, HAS_TORCH
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.4"
+__version__ = "1.5"
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -103,6 +103,10 @@ class Config:
     brain_cooldown_seconds: float = 45.0
     brain_max_cooldown_seconds: float = 900.0
     brain_rate_limit_cooldown: float = 60.0    # used when a 429 carries no Retry-After
+    #: Ask a local Ollama what models it actually has, once per pool.
+    #: Off makes MANA trust the configured model name blindly -- useful
+    #: only for reproducing a fixed configuration.
+    brain_probe_local: bool = True
     brain_latency_ewma_alpha: float = 0.30
     brain_quality_ewma_alpha: float = 0.20
     #: Populated at startup from the brain pool that was actually built, so

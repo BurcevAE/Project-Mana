@@ -62,7 +62,7 @@ from .config import Config
 from .optional_deps import requests, HAS_REQUESTS
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.3"
+__version__ = "1.4"
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +299,92 @@ def default_catalog(cfg: Config) -> List[BrainSpec]:
     ]
 
 
+#: Parameter-count boundaries for tiering a local model. Rough by nature:
+#: what matters is that a 0.5B and a 32B do not compete for the same work,
+#: not the exact cut-off.
+_LOCAL_TIER_BOUNDS = ((2.0, "small"), (16.0, "medium"))
+
+
+def _tier_for_parameters(param_size: str) -> str:
+    """'7.6B' -> 'medium'. Anything unparseable stays 'small', which is the
+    conservative answer: an unknown local model gets easy work rather than
+    the reasoning tasks a wrong guess would waste."""
+    try:
+        billions = float(str(param_size).upper().rstrip("B").strip())
+    except (TypeError, ValueError):
+        return "small"
+    for bound, tier in _LOCAL_TIER_BOUNDS:
+        if billions < bound:
+            return tier
+    return "large"
+
+
+def probe_ollama(base_url: str, timeout: float = 1.5) -> Dict[str, Any]:
+    """Ask a local Ollama what it actually has.
+
+    Two failures this prevents, both observed on real machines rather than
+    imagined:
+
+      * **A model name nobody pulled.** Config defaults to
+        `qwen2.5:0.5b`; the machine had `qwen2.5:7b-instruct`. Every call
+        would have returned 404 "model not found" while the pool happily
+        listed the brain as ready.
+      * **A brain with no server at all.** `usable()` checked config, key
+        and flag but never reachability, so an uninstalled Ollama
+        outranked working remote brains (it gets the local bonus) and
+        quietly turned a two-brain consensus into one opinion.
+
+    Never raises, and a refused connection to localhost returns
+    immediately -- this runs once per pool, not once per call.
+    """
+    result: Dict[str, Any] = {"reachable": False, "models": [], "error": ""}
+    if not HAS_REQUESTS:
+        result["error"] = "requests not installed"
+        return result
+    # cfg.ollama_url points at /api/generate; the inventory lives next door.
+    tags_url = (base_url.rsplit("/api/", 1)[0] + "/api/tags") if "/api/" in base_url else base_url
+    try:
+        r = requests.get(tags_url, timeout=timeout)
+        r.raise_for_status()
+        result["reachable"] = True
+        for m in r.json().get("models", []) or []:
+            result["models"].append({
+                "name": m.get("name", ""),
+                "parameters": (m.get("details") or {}).get("parameter_size", ""),
+            })
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"[:200]
+    return result
+
+
+def adapt_local_brain(spec: BrainSpec, probe: Dict[str, Any]) -> None:
+    """Reconcile a local brain with what the machine actually runs.
+
+    Mutates in place. An installed configured model always wins -- an
+    explicit `--llm-model` must never be silently overridden. Otherwise
+    the first installed model is adopted and the tier comes from its real
+    parameter count, because a 7B and a 0.5B should not be offered the
+    same work.
+    """
+    if not probe.get("reachable"):
+        spec.enabled = False
+        spec.setup_hint = f"Ollama не отвечает на {spec.base_url} — запустите `ollama serve`"
+        return
+    installed = probe.get("models") or []
+    if not installed:
+        spec.enabled = False
+        spec.setup_hint = "Ollama запущена, но моделей нет — `ollama pull qwen2.5:7b-instruct`"
+        return
+    names = [m["name"] for m in installed]
+    if spec.model in names:
+        chosen = next(m for m in installed if m["name"] == spec.model)
+    else:
+        chosen = installed[0]
+        spec.setup_hint = f"модель {spec.model} не установлена, используется {chosen['name']}"
+        spec.model = chosen["name"]
+    spec.tier = _tier_for_parameters(chosen.get("parameters", ""))
+
+
 def load_catalog(cfg: Config) -> List[BrainSpec]:
     """Built-in catalog, optionally extended/overridden by a JSON file.
 
@@ -392,7 +478,17 @@ class BrainPool:
         self.calls = 0
         self.failures = 0
         self.timeouts = 0
-        for spec in load_catalog(config):
+        catalog = load_catalog(config)
+        # One probe per pool, not per call, and only when a real network
+        # is in play: an injected transport means a test, and a test must
+        # not depend on whether the developer happens to have Ollama
+        # running. A refused localhost connection returns instantly, so
+        # this costs nothing on a machine without it.
+        if self._transport is None and getattr(config, "brain_probe_local", True):
+            for spec in catalog:
+                if spec.provider == "ollama" and spec.enabled:
+                    adapt_local_brain(spec, probe_ollama(spec.base_url))
+        for spec in catalog:
             self.add(spec)
 
     # ---------- catalog ----------

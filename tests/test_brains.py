@@ -511,3 +511,68 @@ def test_setup_hints_never_leak_into_the_key_field():
         d = b.public_dict()
         assert "api_key" not in d
         assert isinstance(d.get("setup_hint", ""), str)
+
+
+# ---------------------------------------------------------------------------
+# local model discovery (5.12.3)
+# ---------------------------------------------------------------------------
+
+def test_configured_model_wins_when_it_is_installed():
+    """An explicit --llm-model must never be silently overridden."""
+    from mana.brains import adapt_local_brain
+    s = BrainSpec(brain_id="ollama", provider="ollama", model="qwen2.5:7b-instruct",
+                  base_url="http://localhost:11434/api/generate", local=True)
+    adapt_local_brain(s, {"reachable": True, "models": [
+        {"name": "llama3:8b", "parameters": "8.0B"},
+        {"name": "qwen2.5:7b-instruct", "parameters": "7.6B"}]})
+    assert s.model == "qwen2.5:7b-instruct"
+    assert s.enabled is True
+    assert s.setup_hint == ""
+
+
+def test_a_model_nobody_pulled_is_replaced_and_the_swap_is_stated():
+    """The live case: config said qwen2.5:0.5b, the machine had
+    qwen2.5:7b-instruct, and every call would have 404'd while the pool
+    listed the brain as ready."""
+    from mana.brains import adapt_local_brain
+    s = BrainSpec(brain_id="ollama", provider="ollama", model="qwen2.5:0.5b",
+                  base_url="http://localhost:11434/api/generate", local=True, tier="small")
+    adapt_local_brain(s, {"reachable": True,
+                          "models": [{"name": "qwen2.5:7b-instruct", "parameters": "7.6B"}]})
+    assert s.model == "qwen2.5:7b-instruct"
+    assert s.tier == "medium", "a 7B must not be offered the work of a 0.5B"
+    assert "0.5b" in s.setup_hint and "7b-instruct" in s.setup_hint
+
+
+def test_an_absent_ollama_is_disabled_with_something_actionable():
+    from mana.brains import adapt_local_brain
+    s = BrainSpec(brain_id="ollama", provider="ollama", model="x",
+                  base_url="http://localhost:11434/api/generate", local=True)
+    adapt_local_brain(s, {"reachable": False, "error": "ConnectionError"})
+    assert s.enabled is False
+    assert "ollama serve" in s.setup_hint
+
+
+def test_a_running_ollama_with_no_models_is_not_treated_as_usable():
+    from mana.brains import adapt_local_brain
+    s = BrainSpec(brain_id="ollama", provider="ollama", model="x",
+                  base_url="http://localhost:11434/api/generate", local=True)
+    adapt_local_brain(s, {"reachable": True, "models": []})
+    assert s.enabled is False
+    assert "pull" in s.setup_hint
+
+
+def test_tier_follows_the_real_parameter_count():
+    from mana.brains import _tier_for_parameters
+    assert _tier_for_parameters("0.5B") == "small"
+    assert _tier_for_parameters("7.6B") == "medium"
+    assert _tier_for_parameters("70B") == "large"
+    assert _tier_for_parameters("") == "small", "unknown size gets easy work, not hard work"
+
+
+def test_probe_never_raises_on_a_dead_endpoint():
+    from mana.brains import probe_ollama
+    result = probe_ollama("http://127.0.0.1:9/api/generate", timeout=0.5)
+    assert result["reachable"] is False
+    assert result["models"] == []
+    assert result["error"]
