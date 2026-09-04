@@ -254,3 +254,97 @@ def test_the_baseline_representation_can_actually_be_measured(isolated_config):
     result = measure_insufficiency(baseline, observations, texts)
     assert result.observations == 12
     assert 0.0 <= result.rate <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# the description space stops being a list
+# ---------------------------------------------------------------------------
+
+def _corpus(n=30):
+    from mana.cognition.self_model import Observation
+    from mana.core import tasks as core_tasks
+    observations, texts = [], {}
+    for domain in ("arithmetic", "logic", "text_ops"):
+        for task in core_tasks.generate(domain, n, seed=21):
+            texts[task.task_id] = task.prompt
+            observations.append(Observation(task.task_id, domain, task.difficulty,
+                                            task.difficulty < 0.5, calls=1))
+    return observations, texts
+
+
+def test_a_generated_threshold_is_not_in_the_hand_written_library():
+    """Eleven extractors were the whole space. A cutoff chosen from the
+    observations is a field nobody wrote."""
+    from mana.cognition import fields as field_gen
+    observations, texts = _corpus()
+    generated = field_gen.generate(observations, texts, limit=8)
+    assert generated
+    assert any(g.kind == "threshold" for g in generated)
+    assert not any(g.name in FIELD_LIBRARY for g in generated)
+
+
+def test_a_field_can_ask_which_cheap_mechanism_handles_the_task():
+    """A boolean nothing in the library expresses, costing microseconds,
+    and the single most useful thing to know in a system whose design is
+    routing to the cheapest sufficient mechanism."""
+    from mana.cognition import fields as field_gen
+    extract = field_gen.mechanism_field("arithmetic")
+    assert extract("Вычисли: 2 + 2") is True
+    assert extract("Объясни, почему небо синее") is False
+
+
+def test_a_generated_field_is_scored_where_it_was_not_fitted():
+    """A cutoff chosen to separate the observed collisions will separate
+    the observed collisions. Only the held-out half says whether it found
+    anything."""
+    from mana.cognition import fields as field_gen
+    observations, texts = _corpus()
+    for generated in field_gen.generate(observations, texts, limit=8):
+        assert generated.held_out_pairs > 0
+        assert generated.separates_held_out <= generated.held_out_pairs
+
+
+def test_proposals_are_ranked_by_the_held_out_score():
+    """Ranking by the fitted score puts the best-overfitted field first
+    every time, which is exactly the ordering that makes fitting
+    invisible."""
+    from mana.cognition import fields as field_gen
+    observations, texts = _corpus()
+    generated = field_gen.generate(observations, texts, limit=8)
+    scores = [g.separates_held_out for g in generated]
+    assert scores == sorted(scores, reverse=True)
+
+
+def test_a_field_that_only_fits_is_not_reported_as_generalising():
+    from mana.cognition.fields import GeneratedField
+    fitted_only = GeneratedField(name="x>=1", kind="threshold", source="words",
+                                 threshold=1.0, separates_fitted=50,
+                                 separates_held_out=0, held_out_pairs=40)
+    assert fitted_only.generalises is False
+
+
+def test_the_generator_is_deterministic():
+    """A generator whose output moves between runs cannot be audited, and
+    two runs disagreeing about what the vocabulary needs is worse than
+    either answer."""
+    from mana.cognition import fields as field_gen
+    observations, texts = _corpus()
+    first = [g.name for g in field_gen.generate(observations, texts, limit=8)]
+    second = [g.name for g in field_gen.generate(list(reversed(observations)),
+                                                 texts, limit=8)]
+    assert first == second
+
+
+def test_the_generator_needs_no_model():
+    import inspect
+    from mana.cognition import fields as field_gen
+    source = inspect.getsource(field_gen).lower()
+    for forbidden in (".ask(", "llm", "prompt"):
+        assert forbidden not in source
+
+
+def test_too_few_observations_generate_nothing():
+    """A cutoff derived from four tasks describes those four tasks."""
+    from mana.cognition import fields as field_gen
+    observations, texts = _corpus(n=1)
+    assert field_gen.generate(observations, texts) == []

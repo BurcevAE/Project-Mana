@@ -52,7 +52,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "2.6"
+__version__ = "2.7"
 
 #: Independent task distributions. Kept small and genuinely different --
 #: five weak domains would measure less than four separated ones.
@@ -298,7 +298,16 @@ _GENERATORS: Dict[str, Callable[[random.Random, float, int], Task]] = {
 #: ordering or matches one regex. A variant surface separates the two.
 CANONICAL = "canonical"
 VARIANT = "variant"
-SURFACES = (CANONICAL, VARIANT)
+#: A third wording, written AFTER the structural solvers and never used
+#: to change them. The order matters: a surface authored before the code
+#: it tests can shape that code, and then the measurement is of a fit
+#: rather than of a generalisation. Whatever this one shows stands.
+#:
+#: It stresses what the earlier surfaces did not: a label the solver has
+#: never seen, distractor numbers and names around the payload, clauses
+#: joined on one line, and different relation words.
+STRESS = "stress"
+SURFACES = (CANONICAL, VARIANT, STRESS)
 
 
 def _reword(task: Task, rng: random.Random) -> Task:
@@ -346,6 +355,53 @@ def _reword(task: Task, rng: random.Random) -> Task:
     return replace(task, prompt=prompt)
 
 
+def _stress(task: Task, rng: random.Random) -> Task:
+    """The same problem again, worded by someone who never read the code.
+
+    Every change here is a wording change: answer, checker, difficulty
+    and metadata are untouched.
+    """
+    prompt = task.prompt
+    number = rng.randint(2, 99)
+    if task.domain == "arithmetic":
+        expression = prompt.split(":", 1)[1].split("\n")[0].strip()
+        prompt = (f"Пункт {number}. Найди значение: {expression}. "
+                  f"Округление не требуется.")
+    elif task.domain == "sequence":
+        body = prompt.split(":", 1)[1].split("\n")[0].strip()
+        prompt = (f"Упражнение {number}. Ряд из 6 чисел: {body}. "
+                  f"Назови седьмое число.")
+    elif task.domain == "logic":
+        facts = []
+        asked = 1
+        for line in prompt.splitlines():
+            match = re.match(r"-\s*(\w+)\s+стоит раньше, чем\s+(\w+)", line)
+            if match:
+                facts.append(f"{match.group(2)} идёт после того, как прошёл "
+                             f"{match.group(1)}")
+            found = re.match(r"Кто стоит на позиции (\d+)", line)
+            if found:
+                asked = int(found.group(1))
+        prompt = (f"Очередь, задание {number}. " + "; ".join(facts) + ". "
+                  f"Укажи, кто занимает место {asked}.")
+    elif task.domain == "text_ops":
+        lines = prompt.splitlines()
+        body = lines[0].split(":", 1)[1].strip()
+        question = " ".join(l for l in lines[1:] if l.strip())
+        if "буква" in question:
+            letter = re.search(r"«(\w)»", question)
+            question = (f"Определи число вхождений символа "
+                        f"«{letter.group(1) if letter else 'а'}».")
+        elif "длинное" in question:
+            question = "Укажи слово наибольшей длины; при равенстве — первое."
+        else:
+            question = "Сколько всего слов?"
+        prompt = f"Набор {number} для анализа — {body}\n{question}"
+    elif task.domain == "code":
+        prompt = prompt.replace("Напиши функцию", f"Задание {number}. Оформи функцию")
+    return replace(task, prompt=prompt)
+
+
 def generate(domain: str, count: int, seed: int,
              difficulty_range: Tuple[float, float] = (0.1, 0.9),
              surface: str = CANONICAL) -> List[Task]:
@@ -366,8 +422,15 @@ def generate(domain: str, count: int, seed: int,
         # covers the range instead of clustering by chance.
         difficulty = lo + (hi - lo) * (i / max(1, count - 1)) if count > 1 else (lo + hi) / 2
         task = _GENERATORS[domain](rng, round(difficulty, 3), i)
-        if surface == VARIANT:
-            task = _reword(task, rng)
+        if surface != CANONICAL:
+            # A SEPARATE generator, seeded from the task. Rendering used
+            # to draw from `rng`, so a surface that consumed randomness
+            # shifted every task after it and the "same problem, different
+            # words" comparison silently became a comparison of different
+            # problems. Found by a test asserting the answers match.
+            surface_rng = random.Random(f"surface:{surface}:{domain}:{seed}:{i}")
+            task = (_reword(task, surface_rng) if surface == VARIANT
+                    else _stress(task, surface_rng))
         tasks.append(task)
     return tasks
 

@@ -60,7 +60,7 @@ from .genome import Representation
 from .self_model import Observation, band_of
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "2.0"
+__version__ = "2.9"
 
 #: A field extractor: task text in, a hashable bucket out. Bucketed rather
 #: than continuous because a description is only useful if different tasks

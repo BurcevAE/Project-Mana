@@ -292,3 +292,85 @@ def test_exactness_holds_across_the_whole_generator(isolated_config):
         if not oracle.grade(task, answer).correct:
             wrong.append((task.prompt.splitlines()[0], answer, task.answer))
     assert not wrong, f"confidently wrong on {len(wrong)}: {wrong[:3]}"
+
+
+# ---------------------------------------------------------------------------
+# generalisation is relative to the surfaces tested
+# ---------------------------------------------------------------------------
+
+def _score(brain, domain, surface, n=40, seed=77):
+    from mana.core import oracle, tasks
+    right = wrong = refused = 0
+    for task in tasks.generate(domain, n, seed=seed, surface=surface):
+        try:
+            answer = arithmetic_answer(task.prompt) if brain == "arithmetic" else None
+        except BrainRefusal:
+            refused += 1
+            continue
+        if answer is None:
+            from mana import substrates
+            try:
+                answer = substrates.call(brain, task.prompt)
+            except BrainRefusal:
+                refused += 1
+                continue
+        if oracle.grade(task, answer).correct:
+            right += 1
+        else:
+            wrong += 1
+    return right, wrong, refused
+
+
+def test_the_solvers_never_answer_wrongly_on_any_surface():
+    """The property that makes every other failure here safe: when a
+    wording is unrecognised they go silent, and silence falls through to
+    the model. A wrong answer would not."""
+    from mana.core import tasks
+    for brain, domain in (("arithmetic", "arithmetic"),
+                          ("sequence-solver", "sequence"),
+                          ("text-ops", "text_ops"),
+                          ("order-logic", "logic")):
+        for surface in tasks.SURFACES:
+            _right, wrong, _refused = _score(brain, domain, surface, n=20)
+            assert wrong == 0, f"{brain} answered wrongly on {surface}"
+
+
+def test_arithmetic_and_sequence_survive_a_surface_written_after_them():
+    """The honest test: the stress surface was authored AFTER these
+    solvers were rewritten structurally, and they were not touched
+    afterwards. A surface written before the code it tests can shape that
+    code, and the measurement is then of a fit rather than of a
+    generalisation."""
+    from mana.core import tasks
+    assert _score("arithmetic", "arithmetic", tasks.STRESS)[0] == 40
+    assert _score("sequence-solver", "sequence", tasks.STRESS)[0] >= 30
+
+
+def test_text_ops_and_logic_assume_a_layout_and_that_is_recorded():
+    """They survived REWORDING and still fail a change of LAYOUT: the
+    ordering solver reads one constraint per line, and the text solver
+    wants a label ending in a colon. The stress surface puts every
+    constraint on one line and separates the label with a dash.
+
+    Left failing on purpose. Fixing them against a surface I have already
+    seen would be the same fitting the last two phases were about, and
+    the honest reading is that "generalises" is bounded by the surfaces
+    tested rather than being a property a solver simply has.
+    """
+    from mana.core import tasks
+    right, wrong, refused = _score("order-logic", "logic", tasks.STRESS)
+    assert right == 0 and wrong == 0 and refused == 40
+    right, wrong, refused = _score("text-ops", "text_ops", tasks.STRESS)
+    assert right == 0 and wrong == 0 and refused == 40
+
+
+def test_every_surface_asks_the_same_question():
+    """A variant that changed the answer would be a harder test, not a
+    fairer one."""
+    from mana.core import tasks
+    for domain in tasks.DOMAINS:
+        base = tasks.generate(domain, 5, seed=3)
+        for surface in tasks.SURFACES:
+            for a, b in zip(base, tasks.generate(domain, 5, seed=3, surface=surface)):
+                assert a.answer == b.answer
+                assert a.difficulty == b.difficulty

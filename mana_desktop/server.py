@@ -96,6 +96,10 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send(200, self.session.evolution())
             if route == "/api/code-history":
                 return self._send(200, {"entries": self.session.code_history()})
+            if route == "/api/cycle":
+                return self._send(200, self.session.cycle_status())
+            if route == "/api/genome":
+                return self._send(200, self.session.genome())
             if route == "/api/paths":
                 return self._send(200, paths.status())
             if route == "/api/events":
@@ -119,6 +123,12 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send(200, self.session.start_evolution(int(body.get("cycles", 1))))
             if route == "/api/evolution/stop":
                 return self._send(200, self.session.stop_evolution())
+            if route == "/api/cycle/start":
+                return self._send(200, self.session.start_cycle(
+                    int(body.get("budget", 200)), int(body.get("steps", 6)),
+                    str(body.get("genome_path", ""))))
+            if route == "/api/cycle/stop":
+                return self._send(200, self.session.stop_cycle())
             if route == "/api/key":
                 return self._send(200, save_api_key(str(body.get("env", "")), str(body.get("value", ""))))
             return self._send(404, {"error": "not found"})

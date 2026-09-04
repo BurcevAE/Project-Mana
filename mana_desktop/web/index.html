@@ -73,6 +73,26 @@
   .msg.user .bubble { background: var(--accent); border-color: var(--accent); color: #fff; }
   .msg.error .bubble { border-color: var(--crit); color: var(--crit); }
 
+  .cycle-controls {
+    display: flex; gap: .6rem; align-items: center; flex-wrap: wrap;
+    padding-bottom: .7rem; margin-bottom: .7rem; border-bottom: 1px solid var(--line);
+  }
+  .cycle-controls label { font-size: .78rem; color: var(--ink-faint); display: flex;
+                          align-items: center; gap: .3rem; }
+  .cycle-controls input { width: 4.5rem; background: var(--panel-2); color: var(--ink);
+                          border: 1px solid var(--line); border-radius: 5px;
+                          padding: .25rem .4rem; font-family: var(--mono); font-size: .78rem; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: .2rem .7rem;
+        font-family: var(--mono); font-size: .74rem; margin-bottom: .8rem; }
+  .kv b { color: var(--ink-faint); font-weight: 500; }
+  .slice { display: grid; grid-template-columns: 9rem 3rem 1fr;
+           gap: .4rem; align-items: center; font-family: var(--mono);
+           font-size: .72rem; padding: .15rem 0; }
+  .bar { height: .5rem; background: var(--panel-2); border-radius: 3px; position: relative; }
+  .bar > i { position: absolute; top: 0; bottom: 0; background: var(--ok);
+             border-radius: 3px; display: block; }
+  .bar > u { position: absolute; top: -2px; bottom: -2px; width: 1px;
+             background: var(--ink-faint); }
   .prov {
     display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .45rem;
     font-family: var(--mono); font-size: .7rem;
@@ -171,11 +191,27 @@
 <aside>
   <nav class="tabs">
     <button class="on" data-pane="brains">Мозги</button>
+    <button data-pane="cycle">Цикл</button>
+    <button data-pane="genome">Геном</button>
     <button data-pane="log">Журнал</button>
     <button data-pane="system">Система</button>
   </nav>
 
   <section class="pane on" id="pane-brains"><div id="brains" class="hint">Загрузка…</div></section>
+  <section class="pane" id="pane-cycle">
+    <div class="cycle-controls">
+      <label>бюджет <input id="cycle-budget" type="number" value="200" min="12" step="12"></label>
+      <label>шагов <input id="cycle-steps" type="number" value="6" min="1" max="30"></label>
+      <button id="cycle-start">Запустить</button>
+      <button id="cycle-stop" disabled>Остановить</button>
+    </div>
+    <div id="cycle-note" class="hint">Цикл сам решает, что мерить и что проверять.
+      Шаги идут в Журнал.</div>
+    <div id="cycle-out"></div>
+  </section>
+  <section class="pane" id="pane-genome">
+    <div id="genome-out" class="hint">Загрузка…</div>
+  </section>
   <section class="pane" id="pane-log"><pre id="logstream"></pre></section>
   <section class="pane" id="pane-system">
     <dl class="kv" id="paths"></dl>
@@ -232,6 +268,30 @@ function provenance(wrap, p) {
   if (row.children.length) wrap.appendChild(row);
 }
 
+/* What THIS answer cost, in units that mean something. A call count made
+   a 120B remote model and a local 7B the same number; an answer that came
+   from an algorithmic brain costs no tokens at all, and that is the fact
+   worth seeing under every reply. */
+function costRow(wrap, c) {
+  if (!c || !c.calls) return;
+  const row = document.createElement("div");
+  row.className = "prov";
+  const mix = Object.entries(c.by_substrate || {})
+    .map(([k, v]) => k + "×" + v).join(", ");
+  tag(row, c.calls + " вызовов");
+  tag(row, (c.wall_seconds || 0).toFixed(2) + " с");
+  if (c.tokens_in + c.tokens_out > 0) {
+    tag(row, (c.tokens_in + c.tokens_out) + " токенов",
+        c.unmeasured_token_calls ? "warn" : "");
+  } else if (c.unmeasured_token_calls) {
+    tag(row, "токены не измерены", "warn");
+  } else {
+    tag(row, "0 токенов", "good");
+  }
+  if (mix) tag(row, mix);
+  wrap.appendChild(row);
+}
+
 let busy = false;
 function setBusy(v) {
   busy = v;
@@ -259,6 +319,7 @@ $("composer").addEventListener("submit", async (e) => {
   if (res.ok) {
     const wrap = bubble(res.answer || "(пустой ответ)");
     provenance(wrap, res.provenance || {});
+    costRow(wrap, res.cost || {});
   } else if (res.cancelled) {
     bubble("Ответ отменён.", "error");
   } else {
@@ -400,6 +461,124 @@ refreshBrains();
 refreshSystem();
 setInterval(pollState, 2000);
 setInterval(refreshSystem, 5000);
+
+/* ---------- cognitive cycle ---------- */
+
+function sliceRow(parent, s) {
+  const row = document.createElement("div");
+  row.className = "slice";
+  const name = document.createElement("span");
+  name.textContent = s.slice;
+  const score = document.createElement("span");
+  score.textContent = s.score.toFixed(2);
+  const bar = document.createElement("div");
+  bar.className = "bar";
+  /* The INTERVAL, not just the score: a 1.00 from four observations and a
+     1.00 from forty are different claims, and a bare number hides that. */
+  const fill = document.createElement("i");
+  fill.style.left = (s.low * 100) + "%";
+  fill.style.width = Math.max(1, (s.high - s.low) * 100) + "%";
+  const mark = document.createElement("u");
+  mark.style.left = (s.score * 100) + "%";
+  bar.appendChild(fill); bar.appendChild(mark);
+  bar.title = "n=" + s.observations + ", интервал " +
+              s.low.toFixed(2) + "–" + s.high.toFixed(2);
+  row.appendChild(name); row.appendChild(score); row.appendChild(bar);
+  parent.appendChild(row);
+}
+
+function renderCycle(state) {
+  const out = $("cycle-out");
+  const running = !!state.running;
+  $("cycle-start").disabled = running;
+  $("cycle-stop").disabled = !running;
+  if (running) { $("cycle-note").textContent = "Цикл идёт. Шаги — в Журнале."; return; }
+  if (state.note) { $("cycle-note").textContent = state.note; return; }
+  const r = state.report;
+  if (!r) return;
+  $("cycle-note").textContent = "Остановка: " + r.stop_reason;
+  out.textContent = "";
+  const kv = document.createElement("div");
+  kv.className = "kv";
+  const put = (k, v) => {
+    const b = document.createElement("b"); b.textContent = k;
+    const s = document.createElement("span"); s.textContent = v;
+    kv.appendChild(b); kv.appendChild(s);
+  };
+  put("шагов", r.steps);
+  put("снято неопределённости", r.total_resolution);
+  const c = r.cost || {};
+  if (c.calls) {
+    const mix = Object.entries(c.by_substrate || {}).map(([k, v]) => k + "×" + v).join(", ");
+    put("стоило", c.calls + " вызовов, " + (c.wall_seconds || 0).toFixed(1) + " с, " +
+        (c.tokens_in + c.tokens_out) + " токенов");
+    if (mix) put("субстраты", mix);
+  }
+  if ((r.adopted_capabilities || []).length) put("принято", r.adopted_capabilities.join(", "));
+  out.appendChild(kv);
+  (r.profile || []).forEach(s => sliceRow(out, s));
+}
+
+async function refreshCycle() {
+  try { renderCycle(await api("/api/cycle")); } catch (e) {}
+}
+
+$("cycle-start").addEventListener("click", async () => {
+  $("cycle-out").textContent = "";
+  $("cycle-note").textContent = "Запускаю…";
+  const res = await api("/api/cycle/start", {
+    budget: Number($("cycle-budget").value) || 200,
+    steps: Number($("cycle-steps").value) || 6,
+  });
+  if (!res.ok) $("cycle-note").textContent = res.error || "не удалось запустить";
+  refreshCycle();
+});
+
+$("cycle-stop").addEventListener("click", async () => {
+  const res = await api("/api/cycle/stop", {});
+  $("cycle-note").textContent = res.note || res.error || "";
+});
+
+/* ---------- genome ---------- */
+
+async function refreshGenome() {
+  const out = $("genome-out");
+  let g;
+  try { g = await api("/api/genome"); } catch (e) { return; }
+  out.textContent = "";
+  out.className = "";
+  const kv = document.createElement("div");
+  kv.className = "kv";
+  const put = (k, v) => {
+    const b = document.createElement("b"); b.textContent = k;
+    const s = document.createElement("span"); s.textContent = v;
+    kv.appendChild(b); kv.appendChild(s);
+  };
+  put("файл", g.path);
+  put("состояние", g.note);
+  if (g.present) {
+    put("геном", g.genome_id + (g.parent_id ? " ← " + g.parent_id : ""));
+    if (g.mutation) put("мутация", g.mutation);
+    Object.entries(g.size || {}).forEach(([k, v]) => put(k, v));
+  }
+  out.appendChild(kv);
+  (g.brains || []).forEach(b => {
+    const row = document.createElement("div");
+    row.className = "prov";
+    tag(row, b.brain_id, "good");
+    tag(row, b.substrate);
+    tag(row, "доказан на: " + (b.applicability.join(", ") || "—"));
+    out.appendChild(row);
+  });
+}
+
+setInterval(() => {
+  if (document.querySelector('[data-pane="cycle"]').classList.contains("on")) refreshCycle();
+}, 2000);
+document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", () => {
+  if (b.dataset.pane === "cycle") refreshCycle();
+  if (b.dataset.pane === "genome") refreshGenome();
+}));
 </script>
 </body>
 </html>

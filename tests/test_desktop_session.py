@@ -213,3 +213,67 @@ def test_key_storage_failure_is_reported_rather_than_raised(monkeypatch):
     result = save_api_key("SOME_KEY", "value")
     assert result["ok"] is False
     assert "credential store locked" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# the window as an instrument
+# ---------------------------------------------------------------------------
+
+def test_an_answer_reports_what_it_cost_not_the_running_total(isolated_config):
+    """A running total says nothing about the question just asked, and
+    the substrate mix is the interesting part: an answer from an
+    algorithmic brain cost no tokens at all, which a call count hides."""
+    from mana.core.cost import CostVector
+    from mana_desktop.session import AgentSession
+
+    class FakePool:
+        def __init__(self):
+            self.total = CostVector()
+
+        def total_cost(self):
+            return self.total
+
+    session = AgentSession.__new__(AgentSession)
+    session._cost_mark = None
+    pool = FakePool()
+    session._pool = lambda: pool
+
+    pool.total = CostVector(calls=10, tokens_in=500, by_substrate={"remote_llm": 10})
+    first = session._cost_since_mark()
+    assert first["calls"] == 10
+
+    pool.total = CostVector(calls=13, tokens_in=500,
+                            by_substrate={"remote_llm": 10, "algorithmic": 3})
+    second = session._cost_since_mark()
+    assert second["calls"] == 3, "the second answer must not be charged for the first"
+    assert second["tokens_in"] == 0
+    assert second["by_substrate"] == {"algorithmic": 3}
+
+
+def test_a_cycle_does_not_charge_its_cost_to_the_next_answer(isolated_config):
+    """Otherwise someone asks one question after a cycle and sees a
+    hundred calls under it, spent on something else."""
+    import inspect
+    from mana_desktop.session import AgentSession
+    source = inspect.getsource(AgentSession._run_cycle)
+    assert "self._cost_mark = spent" in source
+
+
+def test_stopping_a_cycle_promises_only_what_it_can_do(isolated_config):
+    """A step is a batch of brain calls with no interruption point, so
+    the current one finishes and is paid for. Promising otherwise would
+    be the lie `cancel` already refuses to tell."""
+    import inspect
+    from mana_desktop.session import AgentSession
+    doc = inspect.getdoc(AgentSession.stop_cycle) or ""
+    assert "after the step it is on" in doc
+
+
+def test_the_genome_view_reads_rather_than_builds(isolated_config, tmp_path):
+    """A window that constructed a fresh genome to display would show a
+    baseline and call it the system's state."""
+    from mana_desktop.session import AgentSession
+    session = AgentSession.__new__(AgentSession)
+    view = session.genome(str(tmp_path / "absent.json"))
+    assert view["present"] is False
+    assert "нет сохранённого" in view["note"]

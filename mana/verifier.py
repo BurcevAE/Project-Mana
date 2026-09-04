@@ -33,7 +33,7 @@ from .config import Config
 from .paths import sandbox_python, sandbox_python_available
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "2.2"
+__version__ = "2.10"
 
 
 # ---------------------------------------------------------------------------
@@ -297,40 +297,62 @@ class LocalVerifier:
     #: claimed by the arithmetic path.
     _HAS_OPERATOR = re.compile(r"[+\-*/%]")
 
+    #: Words that introduce the expression being asked about. The
+    #: anchor matters more than it looks: a real prompt carries a system
+    #: preamble, a date and instructions, and the longest run of
+    #: arithmetic characters in it is not the question.
+    _ASKS = re.compile(
+        r"(вычисли|найди\s+значение|сколько\s+будет|чему\s+равн\w*|посчитай|calculate)",
+        re.I)
+
     @classmethod
     def extract_expression(cls, task: str) -> str:
-        r"""The complete arithmetic expression in this task, or "".
+        r"""The arithmetic expression this task is ASKING about, or "".
 
-        Returns the LONGEST balanced run, and refuses a truncated one --
-        which is the whole point of the rewrite. The previous version
-        matched `[0-9.\s+\-*/%()]+` only after a keyword, and the colon in
-        "Вычисли: (987 + 33) * 11" stopped it dead, so it fell through to
-        a pattern with no parentheses at all and captured `987 + 33`.
+        Three rules, each of which exists because breaking it produced a
+        wrong answer with no uncertainty attached:
 
-        That produced an exact answer to a fragment: 1020 instead of
-        11220, with no uncertainty attached anywhere. And because
-        `verify` uses the same extraction, the arithmetic verifier had
-        the truth inverted on every parenthesised expression -- the
-        correct answer failed verification and the wrong one was stamped
-        INDEPENDENTLY_VERIFIED. Found by making the parser answer
-        questions instead of only checking them, which exposed it to
-        grading against ground truth.
+        **Whole, not truncated.** The first version matched only after a
+        keyword and could not see parentheses, so "Вычисли: (987 + 33) * 11"
+        yielded `987 + 33` and answered 1020. Because `verify` shares this
+        code, the arithmetic verifier then called the correct answer wrong
+        and stamped the wrong one INDEPENDENTLY_VERIFIED.
 
-        An unbalanced run is refused rather than repaired: "(2 + 3" could
-        be a truncated expression or a typo, and guessing which one turns
-        a parse failure into a wrong answer.
+        **Anchored, not longest.** Replacing that with "the longest
+        balanced run" fixed truncation and created a worse failure: in a
+        real agent prompt -- system preamble, today's date, tool list --
+        the longest run is the date. `2026-09-04` was refused only because
+        a leading zero is a syntax error in Python; `2026-9-4` evaluates
+        to 2013, and the brain would have answered 2013 to an arithmetic
+        question, exactly.
+
+        **Ambiguous means refuse.** Where no asking word anchors it and
+        several runs would evaluate, there is no way to tell which one was
+        the question, and picking one is a guess wearing a proof's
+        clothes.
         """
         text = cls._normalize_word_arithmetic((task or "").strip().lower())
-        best = ""
+        candidates = []
         for match in cls._EXPR_CHARS.finditer(text):
             candidate = match.group(0).strip()
             if not cls._HAS_OPERATOR.search(candidate):
                 continue
             if candidate.count("(") != candidate.count(")"):
                 continue
-            if len(candidate) > len(best):
-                best = candidate
-        return best
+            if not cls.evaluate_expression(candidate).get("ok"):
+                continue
+            candidates.append((match.start(), candidate))
+        if not candidates:
+            return ""
+
+        asked = cls._ASKS.search(text)
+        if asked:
+            after = [c for start, c in candidates if start >= asked.end()]
+            if after:
+                return max(after, key=len)
+        if len(candidates) == 1:
+            return candidates[0][1]
+        return ""
 
     @classmethod
     def evaluate_expression(cls, expr: str) -> Dict[str, Any]:
