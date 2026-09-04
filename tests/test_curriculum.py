@@ -209,6 +209,20 @@ def test_a_task_that_cannot_be_run_counts_as_wrong_not_as_missing():
     assert lesson.correct == 0
 
 
+def test_a_task_that_could_not_be_run_is_recorded_as_an_error_not_a_wrong_answer():
+    """Recording both the same way hid an unwired runner behind a
+    capability profile of solid zeros that read like a weak model."""
+    model = SelfModel()
+    c = Curriculum(model, lesson_size=6)
+
+    def broken(task):
+        raise RuntimeError("brain died")
+
+    c.run_lesson(c.plan_lesson(LearningGoal("g", "arithmetic", EASY, "w")), broken)
+    modes = {m for o in model.observations for m in [o.reason] if m}
+    assert modes == {"error"}, "a dead brain is not a wrong answer"
+
+
 def test_the_curriculum_finds_a_real_ceiling():
     """The point of the whole thing: run easy and hard, and the evidence
     should show where the system stops working."""

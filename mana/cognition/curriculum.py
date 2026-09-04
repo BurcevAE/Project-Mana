@@ -284,14 +284,21 @@ class Curriculum:
                                         difficulty_range=lesson.difficulty)
         started = time.perf_counter()
         for task in generated:
+            failed = False
             try:
                 correct, brain, calls = runner(task)
             except Exception:
                 # A failed attempt is a wrong answer, not a lost lesson --
                 # dropping it would quietly bias the sample toward the
                 # tasks that happened to run.
-                correct, brain, calls = False, "", 0
-            grade_reason = "" if correct else "wrong"
+                correct, brain, calls, failed = False, "", 0, True
+            # But it is not the SAME kind of wrong answer, and recording
+            # it as one hid a completely unwired runner behind a
+            # plausible result: 72 observations, zero calls, a capability
+            # profile of solid zeros that read like a weak model. The
+            # failure mode goes into the record, so reading it back
+            # separates "answered incorrectly" from "never answered".
+            grade_reason = "error" if failed else ("" if correct else "wrong")
             self.model.record(Observation(
                 task_id=task.task_id, domain=task.domain, difficulty=task.difficulty,
                 correct=bool(correct), reason=grade_reason, brain=brain, calls=int(calls)))
