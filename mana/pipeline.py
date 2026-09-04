@@ -32,7 +32,7 @@ import numpy as np
 from .config import Config, RandomManager
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.1"
+__version__ = "2.0"
 
 
 # ---------------------------------------------------------------------------

@@ -42,7 +42,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "2.0"
 
 OPENED = "OPENED"
 SNAPSHOT = "SNAPSHOT"

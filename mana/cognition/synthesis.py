@@ -51,7 +51,7 @@ from .genome import CognitiveGenome, MutationProposal, NotAccepted
 from .self_model import MIN_OBSERVATIONS, SelfModel
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "2.0"
 
 PROPOSED = "PROPOSED"
 CONFIRMED = "CONFIRMED"

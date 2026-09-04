@@ -33,7 +33,7 @@ from .config import Config
 from .paths import sandbox_python, sandbox_python_available
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.2"
+__version__ = "2.0"
 
 
 # ---------------------------------------------------------------------------

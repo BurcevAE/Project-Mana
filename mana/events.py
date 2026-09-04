@@ -45,7 +45,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "2.0"
 
 #: Event kinds. Keep this list short: a sink should be able to style every
 #: one of them without a lookup table full of one-offs.

@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "2.0"
 
 #: Difficulty bands. Three, because two hides the interesting middle and
 #: five splits the evidence too thin to say anything about any of them.

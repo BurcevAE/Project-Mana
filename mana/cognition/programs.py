@@ -42,7 +42,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from .ir import ANSWER, TASK, CognitiveOperator, CompositionError, check_chain
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "2.0"
 
 
 @dataclass(frozen=True)

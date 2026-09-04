@@ -45,7 +45,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "2.0"
 
 #: Minimum paired observations before any verdict is meaningful. Chosen
 #: against what the tests can actually deliver (100+ per split), not

@@ -58,7 +58,7 @@ from .gaps import COMPETENCE, KNOWLEDGE, Gap, detect
 from .self_model import MIN_OBSERVATIONS, Observation, SelfModel, band_of
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "2.0"
 
 #: Stages in order. Difficulty first, then the two that are not about
 #: difficulty at all: adversarial material aimed at a known failure

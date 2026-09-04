@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Iterator, Optional
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "2.0"
 
 #: What the agent is doing right now, from the evaluator's point of view.
 NORMAL = "normal"          # ordinary work; learn from everything

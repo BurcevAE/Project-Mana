@@ -45,7 +45,7 @@ from .ir import COSTS, CognitiveOperator
 from .programs import Budget, CognitiveProgram
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "2.0"
 
 #: Roughly how many brain calls each cost class implies. Declared, and
 #: used only for fitting a program to a budget before it runs -- measured

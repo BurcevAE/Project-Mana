@@ -50,7 +50,7 @@ from . import oracle
 from .tasks import DOMAINS, Task, generate_mixed
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "2.0"
 
 #: Seeds are constants inside the immutable core, not configuration. A
 #: configurable hidden seed is a hidden set an agent can re-derive.

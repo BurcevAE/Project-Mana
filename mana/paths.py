@@ -53,7 +53,7 @@ from pathlib import Path
 from typing import Optional
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "2.0"
 
 #: Set by a packaged launcher (or a test) to override the data location.
 DATA_DIR_ENV = "MANA_DATA_DIR"

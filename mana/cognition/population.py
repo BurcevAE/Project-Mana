@@ -54,7 +54,7 @@ from .novelty import Behaviour, NoveltyArchive, distance
 from .self_model import BANDS, band_of
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "2.0"
 
 #: A candidate must reach this in a niche before the niche counts as
 #: covered *competently*. Occupancy and competence are reported

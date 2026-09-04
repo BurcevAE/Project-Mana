@@ -64,7 +64,7 @@ from .self_model import Observation, SelfModel
 from .synthesis import CapabilitySynthesizer
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "2.0"
 
 #: Gates that can only pass if the caller supplied the evidence for
 #: them. Without a hidden-set scorer and a counterexample search, every

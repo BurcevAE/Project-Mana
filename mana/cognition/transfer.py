@@ -50,7 +50,7 @@ from ..core import gates, splits
 from ..core.gates import PairedOutcome
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "2.0"
 
 CROSS_DOMAIN = "cross_domain"     # another development domain
 HELD_OUT = "held_out"             # a domain development never touched

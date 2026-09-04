@@ -37,7 +37,7 @@ from .optional_deps import (
 )
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "2.0"
 
 
 # ---------------------------------------------------------------------------

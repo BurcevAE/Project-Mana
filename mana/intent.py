@@ -43,7 +43,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Sequence
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.1.1"
+__version__ = "2.0"
 
 
 #: Markers that a turn is commenting on the exchange rather than asking

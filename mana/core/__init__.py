@@ -43,7 +43,7 @@ from __future__ import annotations
 from pathlib import Path
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "2.0"
 
 #: The protected directory itself.
 CORE_ROOT = Path(__file__).resolve().parent

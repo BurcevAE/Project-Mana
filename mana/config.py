@@ -32,7 +32,7 @@ import numpy as np
 from .optional_deps import torch, HAS_TORCH
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.5"
+__version__ = "2.0"
 
 
 def _env_flag(name: str, default: bool) -> bool:

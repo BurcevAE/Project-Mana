@@ -438,7 +438,7 @@ def make_decompose_tool(agent: Any) -> BaseTool:
     )
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.2"
+__version__ = "2.0"
 
 
 def build_default_registry(agent: Any) -> ToolRegistry:

@@ -51,7 +51,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "2.0"
 
 #: Independent task distributions. Kept small and genuinely different --
 #: five weak domains would measure less than four separated ones.

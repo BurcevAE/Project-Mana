@@ -32,7 +32,7 @@ import numpy as np
 from .pipeline import PipelineSpec
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "2.0"
 
 
 # ---------------------------------------------------------------------------

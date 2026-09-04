@@ -37,7 +37,7 @@ from .optional_deps import HAS_REQUESTS, HAS_WEB, HAS_SOUNDDEVICE, sd
 from . import events, paths
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.3"
+__version__ = "2.0"
 
 
 # ---------------------------------------------------------------------------

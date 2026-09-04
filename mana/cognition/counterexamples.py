@@ -48,7 +48,7 @@ from ..core.gates import PairedOutcome
 from .laws import CognitiveLaw, Condition
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "2.0"
 
 BOUNDARY = "boundary"
 ADJACENT_DOMAIN = "adjacent_domain"
