@@ -35,7 +35,7 @@ from .programs import (Budget, CognitiveProgram, ProgramResult, ProgramState,
                        StepRecord)
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "2.0"
 
 #: An operator implementation: given the table, produce new values.
 #: Returning {} means "ran, produced nothing" -- different from raising,

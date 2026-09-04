@@ -33,7 +33,7 @@ from .config import Config
 from .version import PRODUCT_VERSION
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "2.0"
 
 
 # ---------------------------------------------------------------------------

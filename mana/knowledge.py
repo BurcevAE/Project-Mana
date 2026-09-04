@@ -86,7 +86,7 @@ class KnowledgeEntry:
         )
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.1"
+__version__ = "2.0"
 
 def _out(*parts: Any, **_kw: Any) -> None:
     """print()-shaped adapter onto the event bus.

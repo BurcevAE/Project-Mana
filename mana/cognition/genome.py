@@ -50,7 +50,7 @@ from .ir import (COSTS, TYPES, CognitiveOperator, CompositionError,
                  check_chain, compose, primitive_operators)
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "2.0"
 
 #: Names a genome may not define, because core already means something by
 #: them. Not a safety list -- a circularity list: a genome that could

@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Sequence
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "2.0"
 
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
 

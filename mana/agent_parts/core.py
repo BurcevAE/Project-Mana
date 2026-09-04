@@ -47,7 +47,7 @@ from ..intent import is_ambiguous_followup, format_clarifying_question
 from ..optional_deps import fitz, HAS_FITZ, HAS_SKLEARN, LogisticRegression, HAS_TORCH, DEVICE, HAS_WEB, WEB_BACKEND, torch
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.4"
+__version__ = "2.0"
 
 
 class CoreMixin:

@@ -28,7 +28,7 @@ from .config import Config
 from .optional_deps import HAS_REQUESTS
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.2"
+__version__ = "2.0"
 
 
 @dataclass

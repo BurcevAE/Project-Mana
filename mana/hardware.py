@@ -129,7 +129,7 @@ def detect_hardware() -> HardwareProfile:
     )
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "2.0"
 
 
 def apply_hardware_profile(cfg: "Config", profile: HardwareProfile) -> Dict[str, Any]:

@@ -62,7 +62,7 @@ from .config import Config
 from .optional_deps import requests, HAS_REQUESTS
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.4"
+__version__ = "2.0"
 
 
 # ---------------------------------------------------------------------------

@@ -25,4 +25,4 @@ current genome. Proposing is free; being adopted is not.
 from __future__ import annotations
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "2.0"

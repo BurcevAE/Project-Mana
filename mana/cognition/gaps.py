@@ -42,7 +42,7 @@ from .self_model import (MIN_OBSERVATIONS, Capability, SelfModel,
                          wilson_interval)
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "2.0"
 
 COMPETENCE = "competence"      # measured, and low
 KNOWLEDGE = "knowledge"        # not measured well enough to say

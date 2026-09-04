@@ -11,7 +11,7 @@ Adding support for a new optional library means editing this file only.
 from __future__ import annotations
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "2.0"
 
 try:
     import fitz  # PyMuPDF, optional for PDF knowledge acquisition

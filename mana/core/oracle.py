@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional, Sequence
 from .tasks import Task
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "2.0"
 
 _NUM_RE = re.compile(r"^-?\d+(?:\.\d+)?$")
 _TRIM = " \t\n\r\"'«»`.,;:"

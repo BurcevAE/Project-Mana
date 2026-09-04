@@ -42,7 +42,7 @@ from .. import code_evolution as _code_evolution
 from ..optional_deps import fitz, HAS_FITZ, HAS_SKLEARN, LogisticRegression, HAS_TORCH, DEVICE, HAS_WEB, WEB_BACKEND, torch
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.1"
+__version__ = "2.0"
 
 def _out(*parts: Any, **_kw: Any) -> None:
     """print()-shaped adapter onto the event bus.
