@@ -60,12 +60,13 @@ from .representations import (FIELD_LIBRARY, insufficiency_gap,
                               measure_insufficiency, propose_fields)
 from ..core import tasks as core_tasks
 from . import self_model
+from . import genome as genome_mod
 from .genome import CognitiveGenome
 from .self_model import Observation, SelfModel
 from .synthesis import CapabilitySynthesizer
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "2.0"
+__version__ = "2.8"
 
 #: Gates that can only pass if the caller supplied the evidence for
 #: them. Without a hidden-set scorer and a counterexample search, every
@@ -314,6 +315,7 @@ class ResearchCycle:
     def __init__(self, model: SelfModel, task_texts: Optional[Dict[str, str]] = None,
                  budget_calls: int = 600, max_steps: int = 12,
                  genome: Optional[CognitiveGenome] = None,
+                 genome_path: Optional[Any] = None,
                  hidden_fn: Optional[Callable[[Sequence[str]], float]] = None,
                  counterexample_fn: Optional[Callable[[Any], Tuple[int, int]]] = None,
                  ) -> None:
@@ -339,7 +341,17 @@ class ResearchCycle:
         # visible to the step after the one that adopted it -- otherwise
         # the cycle proves something and then compiles from the genome it
         # had before, which is the gap this whole layer exists to close.
-        self.synthesizer = CapabilitySynthesizer(genome or CognitiveGenome())
+        #: Где геном живёт между запусками. Без этого принятая способность
+        #: существует только в памяти процесса, который её принял, — а
+        #: механизм сохранения был бы четвёртым в проекте, который
+        #: написан, покрыт тестами и никем не вызывается.
+        self.genome_path = Path(genome_path) if genome_path else None
+        loaded = None
+        self.genome_note = ""
+        if self.genome_path is not None:
+            loaded, self.genome_note = genome_mod.load_report(self.genome_path)
+        self.synthesizer = CapabilitySynthesizer(
+            genome or loaded or CognitiveGenome())
         self.task_texts: Dict[str, str] = dict(task_texts or {})
         self.budget_calls = budget_calls
         self.max_steps = max_steps
@@ -425,6 +437,20 @@ class ResearchCycle:
             self.steps.append(record)
             txn.commit(result=outcome, resolution=round(resolution, 4))
         return record
+
+    def _persist_genome(self) -> str:
+        """Записать геном сразу после принятия, а не в конце прогона.
+
+        Прогон, прерванный после принятия и до сохранения, теряет ровно
+        то, что было доказано дороже всего.
+        """
+        if self.genome_path is None:
+            return " (геном не сохраняется: путь не задан)"
+        try:
+            genome_mod.save(self.synthesizer.genome, self.genome_path)
+        except Exception as exc:                       # pragma: no cover
+            return f" (СОХРАНИТЬ НЕ УДАЛОСЬ: {type(exc).__name__})"
+        return " и сохранена"
 
     def _uncertainty(self) -> float:
         """Total width of every interval over a *fixed* set of slices.
@@ -553,7 +579,8 @@ class ResearchCycle:
             **install_evidence)
         if installed:
             self.adopted.append(proposal.name)
-            return f"; принята способность {proposal.name}"
+            saved = self._persist_genome()
+            return f"; принята способность {proposal.name}{saved}"
         return (f"; способность {proposal.name} отклонена на подтверждении: "
                 f"{proposal.confirmation.get('reason', '?')[:60]}")
 
@@ -583,6 +610,8 @@ class ResearchCycle:
             "representation_findings": self.representation_findings,
             "adopted_capabilities": list(self.adopted),
             "genome": self.synthesizer.genome.signature(),
+            "genome_note": self.genome_note,
+            "genome_path": str(self.genome_path) if self.genome_path else "",
             "history": [s.as_dict() for s in self.steps],
         }
 

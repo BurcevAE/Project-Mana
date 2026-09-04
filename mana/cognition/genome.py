@@ -43,6 +43,7 @@ import hashlib
 import json
 import time
 import uuid
+from pathlib import Path
 from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -50,7 +51,7 @@ from .ir import (COSTS, TYPES, CognitiveOperator, CompositionError,
                  check_chain, compose, primitive_operators)
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "2.5"
+__version__ = "2.8"
 
 #: Names a genome may not define, because core already means something by
 #: them. Not a safety list -- a circularity list: a genome that could
@@ -327,6 +328,7 @@ class CognitiveGenome:
                 "representations": len(self.representations),
                 "representation_fields": sum(len(r.fields) for r in self.representations.values()),
                 "templates": len(self.program_templates),
+                "brains": len(self.brains),
                 "rules": len(self.learning_rules)}
 
     # ---------- persistence ----------
@@ -339,6 +341,7 @@ class CognitiveGenome:
             "operators": {k: v.as_dict() for k, v in self.operators.items()},
             "representations": {k: asdict(v) for k, v in self.representations.items()},
             "program_templates": {k: asdict(v) for k, v in self.program_templates.items()},
+            "brains": {k: asdict(v) for k, v in self.brains.items()},
             "learning_rules": {k: asdict(v) for k, v in self.learning_rules.items()},
         }
 
@@ -369,6 +372,19 @@ class CognitiveGenome:
                                                   applicability=tuple(v.get("applicability") or ()),
                                                   description=v.get("description", ""))
                                for k, v in (data.get("program_templates") or {}).items()},
+            brains={k: BrainGene(
+                brain_id=v["brain_id"], substrate=v["substrate"],
+                applicability=tuple(v.get("applicability") or ()),
+                architecture=v.get("architecture", ""),
+                representation=v.get("representation", ""),
+                operators=tuple(v.get("operators") or ()),
+                learning_policy=v.get("learning_policy", "none"),
+                verifier=v.get("verifier", ""),
+                parent_ids=tuple(v.get("parent_ids") or ()),
+                artifact_ref=v.get("artifact_ref", ""),
+                measured_cost=dict(v.get("measured_cost") or {}),
+                notes=v.get("notes", ""))
+                for k, v in (data.get("brains") or {}).items()},
             learning_rules={k: LearningRule(**v) for k, v in (data.get("learning_rules") or {}).items()},
             selection_policy=data.get("selection_policy", "capability_first"),
             genome_id=data.get("genome_id") or uuid.uuid4().hex[:12],
@@ -381,6 +397,59 @@ class CognitiveGenome:
 # ---------------------------------------------------------------------------
 # mutation
 # ---------------------------------------------------------------------------
+
+def save(genome: CognitiveGenome, path: Any) -> None:
+    """Write a genome so it outlives the process that adopted it.
+
+    Nothing called `to_dict` before phase 20. Every capability MANA had
+    ever accepted -- an adopted brain, a synthesised program template,
+    every mutation the gates had admitted -- existed only in the memory
+    of the process that accepted it, and was gone on exit. The project's
+    own sentence ends in "persistent capability", and that word had never
+    been true.
+
+    Written to a temporary file and renamed, so an interrupted save
+    leaves the previous genome intact rather than a half-written one. A
+    truncated genome is worse than an old one: it would load, validate,
+    and quietly be missing whatever the write had not reached.
+    """
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_text(json.dumps(genome.to_dict(), ensure_ascii=False, indent=2),
+                   encoding="utf-8")
+    tmp.replace(target)
+
+
+def load(path: Any) -> Optional[CognitiveGenome]:
+    """Read a genome back, or None if there is none to read.
+
+    A malformed file returns None rather than raising: starting from the
+    baseline genome is a defensible state, and refusing to start because
+    a saved file is corrupt turns a recoverable situation into a dead
+    one. It is NOT silent -- `load_report` says which happened, because
+    "started fresh" and "restored 14 operators" must never look alike to
+    whoever is reading the log.
+    """
+    return load_report(path)[0]
+
+
+def load_report(path: Any) -> Tuple[Optional[CognitiveGenome], str]:
+    source = Path(path)
+    if not source.exists():
+        return None, "нет сохранённого генома"
+    try:
+        data = json.loads(source.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return None, f"геном не прочитан ({type(exc).__name__}), старт с базового"
+    try:
+        genome = CognitiveGenome.from_dict(data)
+    except Exception as exc:
+        return None, f"геном не восстановлен ({type(exc).__name__}), старт с базового"
+    size = genome.size()
+    return genome, (f"восстановлен {genome.genome_id}: "
+                    + ", ".join(f"{k} {v}" for k, v in sorted(size.items())))
+
 
 @dataclass(frozen=True)
 class MutationProposal:

@@ -616,3 +616,48 @@ def test_nothing_is_installed_when_the_gates_cannot_be_measured(isolated_config)
                        lambda d, n: core_tasks.generate(d, n, seed=8,
                                                         difficulty_range=(0.65, 1.01)))
     assert report["adopted_capabilities"] == []
+
+
+# ---------------------------------------------------------------------------
+# the genome outlives the process
+# ---------------------------------------------------------------------------
+
+def test_a_cycle_starts_from_the_saved_genome(isolated_config, tmp_path):
+    """Without this the persistence would be the fourth mechanism in this
+    project written, tested and called by nobody."""
+    from mana.cognition import genome as genome_mod
+    from mana.cognition.genome import BrainGene, CognitiveGenome
+    path = tmp_path / "genome.json"
+    adopted = genome_mod.propose(
+        CognitiveGenome(), "create_brain", rationale="t",
+        gene=BrainGene("b1", "algorithmic",
+                       applicability=("arithmetic/hard",))).candidate
+    genome_mod.save(adopted, path)
+
+    cycle = ResearchCycle(SelfModel(), genome_path=path)
+    assert "b1" in cycle.synthesizer.genome.brains
+    assert "восстановлен" in cycle.genome_note
+
+
+def test_a_cycle_without_a_path_still_runs(isolated_config):
+    """Persistence is optional; a run that cannot save must not be a run
+    that cannot happen."""
+    cycle = ResearchCycle(SelfModel(), budget_calls=60, max_steps=1)
+    report = cycle.run(always(True))
+    assert report["steps"] >= 1
+    assert report["genome_path"] == ""
+
+
+def test_a_missing_genome_file_starts_from_the_baseline(isolated_config, tmp_path):
+    cycle = ResearchCycle(SelfModel(), genome_path=tmp_path / "absent.json")
+    assert "нет сохранённого" in cycle.genome_note
+    assert cycle.synthesizer.genome.brains == {}
+
+
+def test_the_genome_is_written_at_adoption_not_at_the_end(isolated_config):
+    """A run interrupted after adoption and before saving loses exactly
+    what was proved most expensively."""
+    import inspect
+    source = inspect.getsource(ResearchCycle._maybe_synthesize)
+    assert "_persist_genome" in source
+    assert "_persist_genome" not in inspect.getsource(ResearchCycle.run)

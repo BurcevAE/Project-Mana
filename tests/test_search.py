@@ -156,3 +156,87 @@ def test_the_enumeration_stays_affordable():
     depth increase quietly turning search into an all-night job."""
     genome = CognitiveGenome()
     assert len(enumerate_chains(genome, max_depth=4, limit=10000)) < 1000
+
+
+# ---------------------------------------------------------------------------
+# a capability that does not survive the process is not a capability
+# ---------------------------------------------------------------------------
+
+def test_serialisation_carries_every_field_of_the_genome():
+    """The guard that would have caught it.
+
+    `brains` was added to the genome in phase 17 and `to_dict` was not
+    extended, so an adopted brain vanished through a round-trip without
+    an error. Comparing the dataclass fields against what serialisation
+    emits makes the next such omission fail loudly instead of silently.
+    """
+    import dataclasses
+    declared = {f.name for f in dataclasses.fields(CognitiveGenome)}
+    emitted = set(CognitiveGenome().to_dict())
+    missing = declared - emitted
+    assert not missing, f"to_dict drops: {sorted(missing)}"
+
+
+def test_an_adopted_brain_survives_a_round_trip():
+    from mana.cognition.genome import BrainGene
+    gene = BrainGene(brain_id="b1", substrate="algorithmic",
+                     applicability=("arithmetic/hard",),
+                     measured_cost={"calls": 1}, notes="тест")
+    original = genome_mod.propose(CognitiveGenome(), "create_brain",
+                                  rationale="t", gene=gene).candidate
+    restored = CognitiveGenome.from_dict(original.to_dict())
+    assert restored.brains["b1"].applicability == ("arithmetic/hard",)
+    assert restored.brains["b1"].measured_cost == {"calls": 1}
+
+
+def test_lineage_survives_a_round_trip():
+    """Родословная is what lets a discovery be traced to the change that
+    caused it. A genome that forgets its parent on save has a lineage
+    only for as long as the process lives."""
+    original = genome_mod.propose(
+        CognitiveGenome(), "compose_operators", rationale="t",
+        steps=("GENERATE", "CRITIQUE", "REPAIR"), op_id="DRAFT_FIX").candidate
+    restored = CognitiveGenome.from_dict(original.to_dict())
+    assert restored.genome_id == original.genome_id
+    assert restored.parent_id == original.parent_id
+    assert restored.mutation == "compose_operators"
+    assert restored.signature() == original.signature()
+
+
+def test_saving_is_atomic(tmp_path):
+    """An interrupted save must leave the previous genome intact. A
+    truncated one would load, validate, and quietly be missing whatever
+    the write did not reach."""
+    import inspect
+    source = inspect.getsource(genome_mod.save)
+    assert ".tmp" in source and "replace(" in source
+
+
+def test_a_missing_genome_starts_from_the_baseline_and_says_so(tmp_path):
+    genome, note = genome_mod.load_report(tmp_path / "absent.json")
+    assert genome is None
+    assert "нет сохранённого" in note
+
+
+def test_a_corrupt_genome_does_not_stop_startup_and_does_not_pass_silently(tmp_path):
+    """Refusing to start because a saved file is corrupt turns a
+    recoverable situation into a dead one. Starting silently would make
+    "restored 14 operators" and "started fresh" look alike in the log."""
+    path = tmp_path / "broken.json"
+    path.write_text("{ not json", encoding="utf-8")
+    genome, note = genome_mod.load_report(path)
+    assert genome is None
+    assert "не прочитан" in note
+
+
+def test_the_expanded_space_is_still_expanded_after_a_restart():
+    """The claim the project rests on, across a process boundary: an
+    adopted operator has to still enlarge the reachable space when the
+    genome comes back from disk."""
+    base = CognitiveGenome()
+    before = reachable_space(base, max_depth=4)
+    grown = genome_mod.propose(
+        base, "compose_operators", rationale="t",
+        steps=("GENERATE", "CRITIQUE", "REPAIR"), op_id="DRAFT_FIX").candidate
+    restored = CognitiveGenome.from_dict(grown.to_dict())
+    assert reachable_space(restored, max_depth=4) > before
