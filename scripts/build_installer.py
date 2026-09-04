@@ -37,21 +37,35 @@ DIST = ROOT / "dist"
 APP_DIR = DIST / "MANA"
 SCRIPT = ROOT / "installer" / "mana.iss"
 
-#: Where Inno Setup 6 installs by default. Searched only after PATH, so a
-#: deliberately chosen copy wins over the default one.
-CANDIDATES = (
-    r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
-    r"C:\Program Files\Inno Setup 6\ISCC.exe",
-)
+#: Where Inno Setup lands. The LocalAppData entry is first because it is
+#: what `winget install JRSoftware.InnoSetup` produces -- winget installs
+#: per-user by default, so the machine-wide paths are the less likely
+#: ones, not the other way round. Searched only after PATH, so a
+#: deliberately chosen copy still wins.
+def _candidates() -> "list[Path]":
+    import os
+    roots = [os.environ.get("LOCALAPPDATA", ""),
+             os.environ.get("ProgramFiles(x86)", ""),
+             os.environ.get("ProgramFiles", "")]
+    out = []
+    for index, root in enumerate(roots):
+        if not root:
+            continue
+        base = Path(root) / ("Programs" if index == 0 else "")
+        # Inno Setup 7 exists; the directory name carries the major
+        # version, so both are looked for rather than one hard-coded.
+        for version in ("Inno Setup 6", "Inno Setup 7"):
+            out.append(base / version / "ISCC.exe")
+    return out
 
 
 def find_compiler() -> str:
     found = shutil.which("ISCC") or shutil.which("ISCC.exe")
     if found:
         return found
-    for candidate in CANDIDATES:
-        if Path(candidate).is_file():
-            return candidate
+    for candidate in _candidates():
+        if candidate.is_file():
+            return str(candidate)
     return ""
 
 
@@ -90,8 +104,9 @@ def main() -> int:
     if not compiler:
         print("не найден ISCC.exe — компилятор Inno Setup 6.")
         print("  скачать: https://jrsoftware.org/isdl.php")
-        print("  после установки он обычно здесь:")
-        for candidate in CANDIDATES:
+        print("  winget install --id JRSoftware.InnoSetup -e")
+        print("  искали здесь:")
+        for candidate in _candidates():
             print(f"    {candidate}")
         return 1
 
