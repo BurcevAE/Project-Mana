@@ -43,14 +43,14 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from . import oracle
-from .tasks import DOMAINS, Task, generate_mixed
+from .tasks import DOMAINS, Task, generate, generate_mixed
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "2.4"
+__version__ = "2.6"
 
 #: Seeds are constants inside the immutable core, not configuration. A
 #: configurable hidden seed is a hidden set an agent can re-derive.
@@ -64,6 +64,48 @@ _SEED_TRANSFER = 4004
 #: two samples of the same distribution measure generalization, not
 #: transfer.
 DEVELOPMENT_DOMAINS = ("arithmetic", "sequence", "code")
+
+
+@dataclass(frozen=True)
+class Holdout:
+    """A named, frozen version of the hidden set.
+
+    Versioned rather than extended because a number is only meaningful
+    together with what it was measured on. Adding two domains to the
+    existing set would retroactively claim that every past hidden score
+    had covered five domains, which is false. V0 stays exactly as it was;
+    V1 is a different set, and results carry which one they came from.
+    """
+    name: str
+    domains: Tuple[str, ...]
+    seed: int
+    surface: str
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {"name": self.name, "domains": list(self.domains),
+                "surface": self.surface}
+
+
+#: The historical holdout. Frozen: every hidden score recorded before
+#: phase 18 was measured against exactly this, and it must keep meaning
+#: what it meant.
+HOLDOUT_V0 = Holdout("v0", DEVELOPMENT_DOMAINS, 3003, "canonical")
+
+#: The full holdout. Five domains, and -- more importantly -- variant
+#: surfaces. A holdout drawn from the same generator AND the same wording
+#: as the training tasks is not independent of a solver written against
+#: that generator: an algorithmic brain matching one template scores
+#: perfectly on hidden instances of the same template and the number says
+#: nothing. Measured: of four solvers, three scored zero once the wording
+#: changed, and the fourth was unaffected because it parses structure.
+HOLDOUT_V1 = Holdout("v1", ("arithmetic", "sequence", "code", "logic", "text_ops"),
+                     5005, "variant")
+
+HOLDOUTS = {"v0": HOLDOUT_V0, "v1": HOLDOUT_V1}
+
+EVALUATED = "EVALUATED"
+NOT_EVALUATED = "NOT_EVALUATED"
+INSUFFICIENT_POWER = "INSUFFICIENT_POWER"
 TRANSFER_DOMAINS = ("logic", "text_ops")
 
 #: How many hidden evaluations are allowed per process. Deliberately small:
@@ -107,6 +149,9 @@ class HiddenResult:
     evaluations_used: int
     evaluations_left: int
     elapsed: float
+    #: Which holdout version produced this. A hidden score without it is
+    #: a number whose meaning depends on when it was taken.
+    holdout: str = "v0"
     #: Correct out of everything ATTEMPTED, counting an ungradable answer
     #: as not correct. `accuracy` deliberately excludes ungradable ones so
     #: that a missing sandbox does not read as a capability deficit -- but
@@ -120,7 +165,8 @@ class HiddenResult:
     correct: int = 0
 
     def as_dict(self) -> Dict[str, Any]:
-        return {"accuracy": self.accuracy, "strict_accuracy": self.strict_accuracy,
+        return {"holdout": self.holdout,
+                "accuracy": self.accuracy, "strict_accuracy": self.strict_accuracy,
                 "graded": self.graded, "attempted": self.attempted,
                 "correct": self.correct,
                 "ungradable": self.ungradable, "format_failures": self.format_failures,
@@ -183,7 +229,9 @@ def _run_hidden(tasks: Sequence[Task], answer_fn: Callable[[Dict[str, Any]], str
 
 def hidden_score(answer_fn: Callable[[Dict[str, Any]], str], *, verifier: Any = None,
                  per_domain: int = 25, label: str = "",
-                 budget: int = DEFAULT_HIDDEN_BUDGET) -> HiddenResult:
+                 budget: int = DEFAULT_HIDDEN_BUDGET,
+                 holdout: Holdout = HOLDOUT_V0,
+                 per_domain_counts: Optional[Dict[str, int]] = None) -> HiddenResult:
     """Evaluate against the hidden holdout.
 
     `answer_fn` receives one public task dict and returns a string. It
@@ -193,8 +241,19 @@ def hidden_score(answer_fn: Callable[[Dict[str, Any]], str], *, verifier: Any = 
     This is the single function in MANA permitted to touch the hidden set,
     and it is the reason there is no `hidden_tasks()` to import.
     """
-    tasks = generate_mixed(per_domain, _SEED_HIDDEN, DEVELOPMENT_DOMAINS)
-    return _run_hidden(tasks, answer_fn, verifier, label or "hidden", budget)
+    # Per-domain counts, because one number for every domain is the wrong
+    # shape: how many trials a domain needs follows from the smallest
+    # effect that domain must be able to show, and those differ. The
+    # significance bar does not move -- only the sample size does.
+    tasks: List[Task] = []
+    for domain in holdout.domains:
+        count = (per_domain_counts or {}).get(domain, per_domain)
+        if count <= 0:
+            continue
+        tasks.extend(generate(domain, count, holdout.seed, surface=holdout.surface))
+    result = _run_hidden(tasks, answer_fn, verifier,
+                         label or f"hidden-{holdout.name}", budget)
+    return replace(result, holdout=holdout.name)
 
 
 def transfer_score(answer_fn: Callable[[Dict[str, Any]], str], *, verifier: Any = None,

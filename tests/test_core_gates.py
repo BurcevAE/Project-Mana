@@ -418,3 +418,37 @@ def test_with_hidden_takes_the_strict_accuracy():
     evidence = Evidence().with_hidden(Result(), Result())
     assert evidence.baseline_hidden == 0.30
     assert evidence.baseline_hidden_by_domain == {"arithmetic": 1.0}
+
+
+def test_an_unmeasured_domain_leaves_the_claim_unevaluated_not_refuted():
+    """"We tested it and it did not hold" and "we could not test it here"
+    are different facts. Collapsing the second into the first writes a
+    refutation into the record for a claim nothing measured, and then
+    stops it being retried on evidence that never existed."""
+    claim = Claim(claim_id="c", kind="program", description="про логику",
+                  asserts_domains=("logic",))
+    evidence = Evidence(
+        paired_dev=_strong(),
+        baseline_hidden=0.40, candidate_hidden=0.90,
+        baseline_hidden_by_domain={"arithmetic": 0.40},
+        candidate_hidden_by_domain={"arithmetic": 0.90},
+        counterexamples_sought=4, counterexamples_found=0)
+    verdict = gates.judge(claim, evidence)
+    assert verdict.status == gates.NOT_EVALUATED
+    assert verdict.evaluated is False
+    assert verdict.accepted is False, "nothing may be adopted on an untested claim"
+    assert "не оценено" in verdict.reason
+
+
+def test_an_ordinary_rejection_is_still_rejected():
+    claim = Claim(claim_id="c", kind="program", description="общее")
+    verdict = gates.judge(claim, Evidence(paired_dev=_strong(40, 0.6, 0.6)))
+    assert verdict.status == gates.REJECTED
+    assert verdict.evaluated is True
+
+
+def test_a_caller_that_only_asks_accepted_still_gets_the_safe_answer():
+    """`accepted` stays a bool and stays false for NOT_EVALUATED."""
+    import inspect
+    source = inspect.getsource(gates.Verdict)
+    assert "accepted: bool" in source

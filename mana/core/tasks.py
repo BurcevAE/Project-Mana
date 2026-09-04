@@ -46,12 +46,13 @@ grading this module exists to remove.
 from __future__ import annotations
 
 import random
+import re
 import string
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "2.0"
+__version__ = "2.6"
 
 #: Independent task distributions. Kept small and genuinely different --
 #: five weak domains would measure less than four separated ones.
@@ -285,8 +286,69 @@ _GENERATORS: Dict[str, Callable[[random.Random, float, int], Task]] = {
 }
 
 
+#: How a task is worded. The SEMANTICS are identical between surfaces --
+#: same problem, same answer, same difficulty -- and only the phrasing
+#: differs.
+#:
+#: This exists because a holdout drawn from the same generator as the
+#: training tasks is not independent of a solver written against that
+#: generator. An algorithmic brain matching `- X стоит раньше, чем Y`
+#: scores perfectly on hidden instances of the same template with
+#: different names, and that number says nothing about whether it solves
+#: ordering or matches one regex. A variant surface separates the two.
+CANONICAL = "canonical"
+VARIANT = "variant"
+SURFACES = (CANONICAL, VARIANT)
+
+
+def _reword(task: Task, rng: random.Random) -> Task:
+    """The same problem, said differently.
+
+    Only the prompt changes. Answer, checker, difficulty and metadata are
+    untouched, so a variant is the same measurement of the same thing --
+    which is what makes it a fair test rather than a harder one.
+    """
+    prompt = task.prompt
+    if task.domain == "arithmetic":
+        expression = prompt.split(":", 1)[1].split("\n")[0].strip()
+        prompt = (f"Чему равно выражение {expression}?"
+                  "\nВ ответе — только число.")
+    elif task.domain == "sequence":
+        body = prompt.split(":", 1)[1].split("\n")[0].strip()
+        prompt = (f"Дан ряд чисел {body}. Какое число идёт следующим?"
+                  "\nВ ответе — только число.")
+    elif task.domain == "logic":
+        # "X стоит раньше, чем Y" becomes "Y стоит позже, чем X": the same
+        # constraint, the operands swapped. A solver that parses the
+        # relation rather than the wording is unaffected.
+        lines = []
+        for line in prompt.splitlines():
+            match = re.match(r"-\s*(\w+)\s+стоит раньше, чем\s+(\w+)", line)
+            if match:
+                lines.append(f"{match.group(2)} стоит позже, чем {match.group(1)}")
+            elif line.startswith("Известно:"):
+                lines.append("Условия:")
+            elif line.startswith("Кто стоит на позиции"):
+                number = re.search(r"(\d+)", line)
+                lines.append(f"Назови того, кто занимает место номер "
+                             f"{number.group(1) if number else '1'}.")
+            elif line.strip():
+                lines.append(line)
+        prompt = "\n".join(lines) + "\nВ ответе — только имя."
+    elif task.domain == "text_ops":
+        prompt = prompt.replace("Текст:", "Дана строка:")
+        prompt = prompt.replace("Сколько раз буква", "Посчитай, сколько раз символ")
+        prompt = prompt.replace("встречается в этом тексте?", "встречается в строке.")
+        prompt = prompt.replace("Какое слово в нём самое длинное?",
+                                "Найди в строке слово наибольшей длины.")
+    elif task.domain == "code":
+        prompt = prompt.replace("Напиши функцию", "Реализуй функцию")
+    return replace(task, prompt=prompt)
+
+
 def generate(domain: str, count: int, seed: int,
-             difficulty_range: Tuple[float, float] = (0.1, 0.9)) -> List[Task]:
+             difficulty_range: Tuple[float, float] = (0.1, 0.9),
+             surface: str = CANONICAL) -> List[Task]:
     """Deterministic task set for one domain.
 
     Determinism is what makes a split reproducible: the same seed always
@@ -303,7 +365,10 @@ def generate(domain: str, count: int, seed: int,
         # Sweep difficulty rather than sampling it, so a set of N always
         # covers the range instead of clustering by chance.
         difficulty = lo + (hi - lo) * (i / max(1, count - 1)) if count > 1 else (lo + hi) / 2
-        tasks.append(_GENERATORS[domain](rng, round(difficulty, 3), i))
+        task = _GENERATORS[domain](rng, round(difficulty, 3), i)
+        if surface == VARIANT:
+            task = _reword(task, rng)
+        tasks.append(task)
     return tasks
 
 

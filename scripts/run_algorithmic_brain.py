@@ -120,7 +120,7 @@ def paired_run(pool: BrainPool, tasks, log: Dict[str, Any]):
     return outcomes, base_cost, cand_cost
 
 
-def hidden_arms(pool: BrainPool, per_domain: int):
+def hidden_arms(pool: BrainPool, per_domain: int, holdout):
     """Скрытая выборка для обеих рук. Задачи наружу не выходят."""
     def model_answer(public: Dict[str, Any]) -> str:
         text, _ = ask_model(pool, public["prompt"], public["domain"],
@@ -132,8 +132,10 @@ def hidden_arms(pool: BrainPool, per_domain: int):
                               public["difficulty"])
         return text
 
-    base = splits.hidden_score(model_answer, per_domain=per_domain, label="baseline")
-    cand = splits.hidden_score(cascade_answer, per_domain=per_domain, label="cascade")
+    base = splits.hidden_score(model_answer, per_domain=per_domain, label="baseline",
+                               holdout=holdout)
+    cand = splits.hidden_score(cascade_answer, per_domain=per_domain, label="cascade",
+                               holdout=holdout)
     return base, cand
 
 
@@ -165,6 +167,7 @@ def main() -> int:
                         choices=sorted(DOMAIN_BRAIN))
     parser.add_argument("--trials", type=int, default=30)
     parser.add_argument("--hidden-per-domain", type=int, default=3)
+    parser.add_argument("--holdout", default="v0", choices=("v0", "v1"))
     parser.add_argument("--probes", type=int, default=6)
     parser.add_argument("--out", default="mana_algorithmic_brain.json")
     args = parser.parse_args()
@@ -190,7 +193,10 @@ def main() -> int:
     outcomes, base_cost, cand_cost = paired_run(pool, tasks, log)
 
     print("скрытая выборка для обеих рук...")
-    base_res, cand_res = hidden_arms(pool, args.hidden_per_domain)
+    holdout = splits.HOLDOUTS[args.holdout]
+    print(f"скрытая выборка {holdout.name}: {', '.join(holdout.domains)} "
+          f"({holdout.surface})")
+    base_res, cand_res = hidden_arms(pool, args.hidden_per_domain, holdout)
     base_hidden, cand_hidden = base_res.strict_accuracy, cand_res.strict_accuracy
 
     print(f"поиск контрпримеров в {', '.join(foreign)}...")
@@ -243,7 +249,7 @@ def main() -> int:
     if not found:
         print("  уверенных неверных ответов нет — вне применимости молчит")
 
-    print(f"\nвердикт гейтов: {'ПРИНЯТО' if verdict.accepted else 'ОТКЛОНЕНО'}")
+    print(f"\nвердикт гейтов: {verdict.status}")
     print(f"  {verdict.reason}")
     if verdict.failed_gates:
         print(f"  не прошли: {', '.join(verdict.failed_gates)}")

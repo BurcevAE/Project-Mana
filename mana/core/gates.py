@@ -149,15 +149,39 @@ class Evidence:
         return self
 
 
+#: A claim can end in three states, not two. "We tested it and it did
+#: not hold" and "we could not test it here" are different facts, and
+#: collapsing the second into the first writes a refutation into the
+#: record for a claim nothing measured -- which then stops it being
+#: retried on evidence that never existed.
+ACCEPTED = "ACCEPTED"
+REJECTED = "REJECTED"
+NOT_EVALUATED = "NOT_EVALUATED"
+
+
 @dataclass(frozen=True)
 class Verdict:
     accepted: bool
     reason: str
     failed_gates: Tuple[str, ...] = ()
     measurements: Dict[str, Any] = field(default_factory=dict)
+    #: Which of the three. `accepted` stays a bool and stays false for
+    #: NOT_EVALUATED, because a caller that only asks "may I adopt this?"
+    #: must keep getting the safe answer without knowing about states.
+    status: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.status:
+            object.__setattr__(self, "status",
+                               ACCEPTED if self.accepted else REJECTED)
+
+    @property
+    def evaluated(self) -> bool:
+        return self.status != NOT_EVALUATED
 
     def as_dict(self) -> Dict[str, Any]:
-        return {"accepted": self.accepted, "reason": self.reason,
+        return {"accepted": self.accepted, "status": self.status,
+                "reason": self.reason,
                 "failed_gates": list(self.failed_gates),
                 "measurements": dict(self.measurements)}
 
@@ -264,7 +288,10 @@ def _judge_hidden(claim: Claim, evidence: Evidence) -> Tuple[bool, Dict[str, Any
     notes["hidden_scope"] = list(asserted)
     missing = [d for d in asserted if d not in cand_by or d not in base_by]
     if missing:
+        # Not a refusal. The holdout in use has no measurement for this
+        # domain, which says nothing about the claim.
         notes["hidden_unmeasured_domains"] = missing
+        notes["hidden_state"] = NOT_EVALUATED
         return True, notes
 
     scoped_base = sum(base_by[d] for d in asserted) / len(asserted)
@@ -281,6 +308,31 @@ def _judge_hidden(claim: Claim, evidence: Evidence) -> Tuple[bool, Dict[str, Any
         notes["hidden_collapsed_domains"] = collapsed
 
     return (scoped_cand < scoped_base) or bool(collapsed), notes
+
+
+def min_discordant_pairs() -> int:
+    """The fewest one-directional discordant pairs THIS gate calls
+    significant. Computed by asking the gate rather than deriving it, so
+    a change to the correction cannot leave a second opinion behind."""
+    for count in range(2, 60):
+        outcomes = ([PairedOutcome(f"d{i}", "x", False, True) for i in range(count)] +
+                    [PairedOutcome(f"s{i}", "x", True, True) for i in range(count)])
+        if mcnemar(outcomes)["p_value"] < ALPHA:
+            return count
+    return 60                                          # pragma: no cover
+
+
+def required_trials(min_effect: float) -> int:
+    """How many paired trials are needed to see an effect this small.
+
+    The significance bar does not move. If a 0.13 effect needs 60 pairs,
+    the answer is 60 pairs -- which is what a live sequence experiment
+    actually needed, after 30 refused it for want of resolution.
+    """
+    if min_effect <= 0:
+        raise ValueError("min_effect must be positive")
+    needed = int(math.ceil(min_discordant_pairs() / float(min_effect)))
+    return max(MIN_PAIRED_TRIALS, needed)
 
 
 def judge(claim: Claim, evidence: Evidence) -> Verdict:
@@ -361,4 +413,17 @@ def judge(claim: Claim, evidence: Evidence) -> Verdict:
     reason = "accepted" if accepted else "failed: " + ", ".join(failed_required)
     m["required_gates"] = sorted(required)
     m["cost"] = evidence.cost.as_dict()
-    return Verdict(accepted=accepted, reason=reason, failed_gates=failed_required, measurements=m)
+    # An asserted domain the holdout never measured leaves the claim
+    # UNEVALUATED rather than refuted, however the other gates came out.
+    # "We tested it and it did not hold" and "we could not test it here"
+    # are different facts, and collapsing the second into the first writes
+    # a refutation into the record for a claim nothing measured -- which
+    # then stops it being retried on evidence that never existed.
+    unevaluated = m.get("hidden_state") == NOT_EVALUATED
+    if unevaluated:
+        reason = ("не оценено: скрытая выборка не покрывает "
+                  + ", ".join(m.get("hidden_unmeasured_domains", [])))
+    status = (NOT_EVALUATED if unevaluated
+              else (ACCEPTED if accepted else REJECTED))
+    return Verdict(accepted=accepted and not unevaluated, reason=reason,
+                   failed_gates=failed_required, measurements=m, status=status)
