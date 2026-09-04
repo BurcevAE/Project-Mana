@@ -467,3 +467,152 @@ def test_the_cycle_is_not_a_memory_cleanup():
     source = inspect.getsource(research)
     for forbidden in ("def compact", "def prune", "def summarise", "def cleanup"):
         assert forbidden not in source
+
+# ---------------------------------------------------------------------------
+# the whole chain, without a human between the steps
+# ---------------------------------------------------------------------------
+
+def test_weakness_to_capability_without_anything_directing_it(isolated_config):
+    """Weakness → hypothesis → experiment → discovery → independent
+    confirmation → a capability the compiler then chooses.
+
+    Every earlier phase is one link. This is the only test that runs the
+    whole chain, and the assertion that matters is the last one: after
+    all of it, the system compiles a hard arithmetic task differently
+    than it did before.
+    """
+    from mana.cognition.compiler import Capabilities, compile_program
+    from mana.cognition.genome import CognitiveGenome
+    from mana.cognition.programs import Budget
+    from mana.core import tasks as core_tasks
+
+    # A system that already knows its own shape. Starting from an empty
+    # model the cycle spends its first fifteen steps measuring, which is
+    # the right order -- ground before theory -- but means "find and fix
+    # a problem" only begins once there is a measured problem to find.
+    model = SelfModel()
+    for domain in core_tasks.DOMAINS:
+        for band, mid in (("easy", 0.2), ("medium", 0.5), ("hard", 0.8)):
+            weak = domain == "arithmetic" and band == "hard"
+            for i in range(24):
+                ok = False if weak else i % 4 != 0
+                model.record(Observation(
+                    f"{domain}{band}{i}", domain, mid, correct=ok,
+                    reason="" if ok else "wrong", calls=1))
+
+    def trial_runner(steps, task):
+        """Longer chains do better here -- a mechanism the cycle has to
+        find rather than be told."""
+        return len(steps) > 3, len(steps)
+
+    def task_source(domain, n):
+        return core_tasks.generate(domain, n, seed=4242,
+                                   difficulty_range=(0.65, 1.01))
+
+    def hidden_fn(steps):
+        """The same mechanism, measured on tasks the cycle cannot see."""
+        return 0.75 if len(steps) > 3 else 0.45
+
+    def counterexample_fn(hypothesis):
+        return 4, 0                 # four probes, the effect held
+
+    base = CognitiveGenome()
+    cycle = ResearchCycle(model, budget_calls=4000, max_steps=3, genome=base,
+                          hidden_fn=hidden_fn, counterexample_fn=counterexample_fn)
+    report = cycle.run(always(False), trial_runner, task_source)
+
+    assert report["adopted_capabilities"], (
+        f"nothing persisted; steps were {[s['outcome'] for s in report['history']]}")
+    name = report["adopted_capabilities"][0]
+    assert report["genome"] != base.signature(), "the genome must have changed"
+
+    task = "Вычисли: (91767 - 690) * 86 + 8"
+    caps = Capabilities(brains=2, has_memory=True, has_web=True, has_sandbox=True)
+    chosen = compile_program(task, cycle.synthesizer.genome, caps,
+                             Budget(calls=12), difficulty=0.72)
+    before = compile_program(task, base, caps, Budget(calls=12), difficulty=0.72)
+    assert chosen is not None and chosen.template == name
+    assert before is None or before.template != name
+
+
+def test_a_discovery_cannot_be_adopted_on_its_own_evidence(isolated_config):
+    """The confirming run is not politeness: `genome.apply` matches the
+    verdict's claim id against the proposal, and the discovery's verdict
+    carries the experiment's id."""
+    import inspect
+    source = inspect.getsource(ResearchCycle._maybe_synthesize)
+    assert "run_experiment" in source, "a second measurement must be run"
+    assert "discovery.verdict" not in source, "the first verdict must not be reused"
+
+
+def test_a_capability_waits_when_the_budget_cannot_confirm_it(isolated_config):
+    """A confirmation cut off halfway spends the calls and settles
+    nothing."""
+    from mana.core import tasks as core_tasks
+
+    model = SelfModel()
+    for i in range(24):
+        model.record(Observation(f"a{i}", "arithmetic", 0.8, False,
+                                 reason="wrong", calls=1))
+
+    def trial_runner(steps, task):
+        return len(steps) > 3, len(steps)
+
+    def task_source(domain, n):
+        return core_tasks.generate(domain, n, seed=99,
+                                   difficulty_range=(0.65, 1.01))
+
+    cycle = ResearchCycle(model, budget_calls=420, max_steps=2)
+    report = cycle.run(always(False), trial_runner, task_source)
+    waiting = [s for s in report["history"] if "ждёт подтверждения" in s["outcome"]]
+    if waiting:
+        assert not report["adopted_capabilities"], \
+            "nothing may be installed on an unaffordable confirmation"
+
+
+def test_a_gate_with_no_evidence_is_not_reported_as_a_refutation(isolated_config):
+    """Without a hidden-set scorer every experiment came back "REFUTED:
+    failed hidden_confirms, counterexamples" -- a false negative that
+    also made a supported discovery impossible to ever produce."""
+    from mana.core import tasks as core_tasks
+
+    model = SelfModel()
+    for domain in core_tasks.DOMAINS:
+        for band, mid in (("easy", 0.2), ("medium", 0.5), ("hard", 0.8)):
+            weak = domain == "arithmetic" and band == "hard"
+            for i in range(24):
+                ok = False if weak else i % 4 != 0
+                model.record(Observation(f"{domain}{band}{i}", domain, mid,
+                                         correct=ok, reason="" if ok else "wrong",
+                                         calls=1))
+
+    cycle = ResearchCycle(model, budget_calls=4000, max_steps=1)
+    report = cycle.run(always(False), lambda steps, task: (len(steps) > 3, len(steps)),
+                       lambda d, n: core_tasks.generate(d, n, seed=7,
+                                                        difficulty_range=(0.65, 1.01)))
+    experiments = [s for s in report["history"] if s["activity"] == EXPERIMENT]
+    assert experiments
+    assert "не удалось судить" in experiments[0]["outcome"]
+    assert "REFUTED" not in experiments[0]["outcome"]
+
+
+def test_nothing_is_installed_when_the_gates_cannot_be_measured(isolated_config):
+    """A confirmation that cannot clear the gates the discovery could not
+    clear spends the budget and refuses the capability every time."""
+    from mana.core import tasks as core_tasks
+
+    model = SelfModel()
+    for domain in core_tasks.DOMAINS:
+        for band, mid in (("easy", 0.2), ("medium", 0.5), ("hard", 0.8)):
+            weak = domain == "arithmetic" and band == "hard"
+            for i in range(24):
+                ok = False if weak else i % 4 != 0
+                model.record(Observation(f"{domain}{band}{i}", domain, mid,
+                                         correct=ok, reason="" if ok else "wrong",
+                                         calls=1))
+
+    cycle = ResearchCycle(model, budget_calls=4000, max_steps=2)
+    report = cycle.run(always(False), lambda steps, task: (len(steps) > 3, len(steps)),
+                       lambda d, n: core_tasks.generate(d, n, seed=8,
+                                                        difficulty_range=(0.65, 1.01)))
+    assert report["adopted_capabilities"] == []

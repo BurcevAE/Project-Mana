@@ -59,10 +59,21 @@ from .representations import (FIELD_LIBRARY, insufficiency_gap,
                               measure_insufficiency, propose_fields)
 from ..core import tasks as core_tasks
 from . import self_model
+from .genome import CognitiveGenome
 from .self_model import Observation, SelfModel
+from .synthesis import CapabilitySynthesizer
 
 #: Component version -- see mana/version.py for the bump conventions.
 __version__ = "1.0"
+
+#: Gates that can only pass if the caller supplied the evidence for
+#: them. Without a hidden-set scorer and a counterexample search, every
+#: experiment the cycle ran came back "REFUTED: failed hidden_confirms,
+#: counterexamples" -- which reads like the mechanism did not work when
+#: in fact nothing was measured. A missing measurement reported as a
+#: negative finding is worse than no finding: it is a false one, and it
+#: made a supported discovery impossible for the cycle to ever produce.
+SUPPLIED_GATES = ("hidden_confirms", "counterexamples", "transfer")
 
 MEASURE = "measure"          # run a lesson: resolve what is unknown
 EXPERIMENT = "experiment"    # test an intervention: change what is known-bad
@@ -300,13 +311,40 @@ class ResearchCycle:
     """Runs itself until the budget or the evidence says stop."""
 
     def __init__(self, model: SelfModel, task_texts: Optional[Dict[str, str]] = None,
-                 budget_calls: int = 600, max_steps: int = 12) -> None:
+                 budget_calls: int = 600, max_steps: int = 12,
+                 genome: Optional[CognitiveGenome] = None,
+                 hidden_fn: Optional[Callable[[Sequence[str]], float]] = None,
+                 counterexample_fn: Optional[Callable[[Any], Tuple[int, int]]] = None,
+                 ) -> None:
         self.model = model
+        #: Scores one operator chain against the hidden holdout. Optional
+        #: because a cycle can legitimately run without one -- but then
+        #: it cannot conclude anything, and says so rather than dressing
+        #: the absence up as a refutation.
+        #:
+        #: Known gap: the calls this makes are NOT charged to
+        #: `budget_calls`. It returns an accuracy and nothing else, so
+        #: the cycle cannot see what it cost. The holdout has its own
+        #: hard budget in `core.splits`, which is what protects the
+        #: holdout -- but a cycle told it may spend 900 calls can spend
+        #: more than 900. Charging it properly means widening the
+        #: contract to return a cost, which is a change to how every
+        #: caller supplies one.
+        self.hidden_fn = hidden_fn
+        #: Returns (probes sought, counterexamples found) for a hypothesis.
+        self.counterexample_fn = counterexample_fn
+        # The genome capabilities are installed into. Held here rather
+        # than passed per call, because an adopted capability has to be
+        # visible to the step after the one that adopted it -- otherwise
+        # the cycle proves something and then compiles from the genome it
+        # had before, which is the gap this whole layer exists to close.
+        self.synthesizer = CapabilitySynthesizer(genome or CognitiveGenome())
         self.task_texts: Dict[str, str] = dict(task_texts or {})
         self.budget_calls = budget_calls
         self.max_steps = max_steps
         self.calls_used = 0
         self.proposed_fields: set = set()
+        self.adopted: List[str] = []
         self.representation_findings: List[Dict[str, Any]] = []
         self._exhausted = False
         self.steps: List[CycleStep] = []
@@ -441,8 +479,79 @@ class ResearchCycle:
         tasks_for_trial = task_source(plan.hypothesis.domain, plan.trials)
         measurement = self.lab.run_experiment(plan, tasks_for_trial, runner)
         self.calls_used += measurement.calls_used
-        discovery = self.lab.conclude(plan, measurement)
+        discovery = self.lab.conclude(plan, measurement, **self._external_evidence(plan))
+        outcome = self._describe(discovery)
+        return outcome + self._maybe_synthesize(discovery, runner, task_source)
+
+    def _external_evidence(self, plan: Any) -> Dict[str, Any]:
+        """Whatever the caller can supply beyond the paired dev run."""
+        evidence: Dict[str, Any] = {}
+        if self.hidden_fn is not None:
+            evidence["hidden"] = (self.hidden_fn(plan.hypothesis.baseline_steps),
+                                  self.hidden_fn(plan.hypothesis.candidate_steps))
+        if self.counterexample_fn is not None:
+            evidence["counterexamples"] = self.counterexample_fn(plan.hypothesis)
+        return evidence
+
+    def _unmeasured_gates(self) -> Tuple[str, ...]:
+        missing = []
+        if self.hidden_fn is None:
+            missing.append("hidden_confirms")
+        if self.counterexample_fn is None:
+            missing.append("counterexamples")
+        return tuple(missing)
+
+    def _describe(self, discovery: Any) -> str:
+        """Report a refutation as one only when it rests on measurement.
+
+        A verdict that failed nothing except gates whose evidence was
+        never collected is not a result about the mechanism. Calling it
+        REFUTED would put a false negative into the record and, worse,
+        stop the mechanism being tried again.
+        """
+        failed = tuple(discovery.verdict.get("failed_gates") or ())
+        unmeasured = self._unmeasured_gates()
+        if failed and set(failed) <= set(unmeasured):
+            return ("эксперимент: не удалось судить — нет данных для гейтов "
+                    + ", ".join(failed))
         return f"эксперимент: {discovery.status} — {discovery.verdict['reason'][:70]}"
+
+    def _maybe_synthesize(self, discovery: Any, runner: lab.TrialRunner,
+                          task_source: Callable[[str, int], Sequence[Any]]) -> str:
+        """Try to turn a supported discovery into a capability that persists.
+
+        The confirming run is a second measurement on tasks the first did
+        not use, and it is not optional: the discovery's own verdict
+        belongs to the experiment's claim, so adopting on it would be the
+        same evidence counted twice -- which `genome.apply` refuses
+        outright. Skipped when the budget cannot cover it, because a
+        confirmation cut off halfway spends the calls and settles nothing.
+        """
+        proposal = self.synthesizer.consider(discovery)
+        if proposal is None:
+            return ""
+        if self._unmeasured_gates():
+            # A confirmation that cannot clear the same gates the
+            # discovery could not clear will spend the budget and refuse
+            # the capability every time.
+            return (f"; способность {proposal.name} нельзя подтвердить: "
+                    f"нет данных для {', '.join(self._unmeasured_gates())}")
+        confirm_plan = lab.plan(_confirming_hypothesis(discovery), self.model,
+                                trials=lab.gates.MIN_PAIRED_TRIALS)
+        if confirm_plan.estimated_calls > self.budget_left():
+            return f"; способность {proposal.name} ждёт подтверждения (не хватает бюджета)"
+        fresh = task_source(confirm_plan.hypothesis.domain, confirm_plan.trials)
+        confirmation = self.lab.run_experiment(confirm_plan, fresh, runner)
+        self.calls_used += confirmation.calls_used
+        install_evidence = self._external_evidence(confirm_plan)
+        installed = self.synthesizer.install(
+            proposal, confirmation.outcomes, cost_calls=confirmation.calls_used,
+            **install_evidence)
+        if installed:
+            self.adopted.append(proposal.name)
+            return f"; принята способность {proposal.name}"
+        return (f"; способность {proposal.name} отклонена на подтверждении: "
+                f"{proposal.confirmation.get('reason', '?')[:60]}")
 
     def run(self, lesson_runner: cur.LessonRunner,
             trial_runner: Optional[lab.TrialRunner] = None,
@@ -468,6 +577,8 @@ class ResearchCycle:
             "total_resolution": round(sum(s.resolution for s in self.steps), 4),
             "failure_clusters": [c.as_dict() for c in self.clusters[:5]],
             "representation_findings": self.representation_findings,
+            "adopted_capabilities": list(self.adopted),
+            "genome": self.synthesizer.genome.signature(),
             "history": [s.as_dict() for s in self.steps],
         }
 
@@ -478,3 +589,21 @@ class ResearchCycle:
         tmp.write_text(json.dumps(self.report(), ensure_ascii=False, indent=2),
                        encoding="utf-8")
         tmp.replace(path)
+
+
+def _confirming_hypothesis(discovery: Any) -> lab.Hypothesis:
+    """The same comparison again, as its own hypothesis.
+
+    A copy rather than the original: the original carries the status the
+    first experiment left on it, and reusing it would let a second run
+    overwrite the record of the first.
+    """
+    h = discovery.hypothesis
+    return lab.Hypothesis(
+        hypothesis_id=uuid.uuid4().hex[:12],
+        statement="подтверждение: " + str(h.get("statement", ""))[:120],
+        gap_id=str(h.get("gap_id", "")), domain=str(h.get("domain", "")),
+        band=str(h.get("band", "")),
+        baseline_steps=tuple(h.get("baseline_steps") or ()),
+        candidate_steps=tuple(h.get("candidate_steps") or ()),
+        source="confirmation")

@@ -92,15 +92,25 @@ class Candidate:
                 "estimated_calls": self.estimated_calls, "reasons": list(self.reasons)}
 
 
-def classify(task: str) -> Tuple[str, float]:
+def classify(task: str, difficulty: Optional[float] = None) -> Tuple[str, float]:
     """A cheap (kind, difficulty) read of the task, with no model involved.
 
-    Reuses the brain pool's difficulty heuristic rather than inventing a
-    second one: two disagreeing estimates of the same quantity is worse
-    than one imperfect estimate, and this one is already exercised.
+    `difficulty`, when given, is used instead of the heuristic. It exists
+    because the two are not the same quantity, which only became visible
+    when a synthesised capability was installed for the "hard" band and
+    could never fire: `BrainPool.estimate_difficulty` scores every hard
+    arithmetic task in `core.tasks` at exactly 0.0. That is not a bug in
+    the estimator -- it answers "does this need a big brain?", and it
+    subtracts 0.20 for bare arithmetic on purpose, because a long
+    multiplication is cheap to route however hard it is to get right.
+    The self-model bands on a different quantity: how often the answer is
+    wrong. A caller holding a generated task knows the second one and
+    should say so; a caller holding free text from a user does not, and
+    gets the heuristic.
     """
-    from ..brains import BrainPool
-    difficulty = BrainPool.estimate_difficulty(task)
+    if difficulty is None:
+        from ..brains import BrainPool
+        difficulty = BrainPool.estimate_difficulty(task)
     t = (task or "").lower()
     if any(m in t for m in ("вычисли", "посчитай", "сколько", "calculate")):
         kind = "math"
@@ -181,8 +191,8 @@ def _score_template(template: ProgramTemplate, genome: CognitiveGenome, kind: st
 
 
 def compile_candidates(task: str, genome: CognitiveGenome, capabilities: Capabilities,
-                       budget: Optional[Budget] = None,
-                       limit: int = 5) -> List[Candidate]:
+                       budget: Optional[Budget] = None, limit: int = 5,
+                       difficulty: Optional[float] = None) -> List[Candidate]:
     """Rank every template that could run this task here.
 
     Returns an empty list rather than a fallback when nothing fits: an
@@ -191,7 +201,7 @@ def compile_candidates(task: str, genome: CognitiveGenome, capabilities: Capabil
     program would be measured as if it had been chosen.
     """
     budget = budget or Budget()
-    kind, difficulty = classify(task)
+    kind, difficulty = classify(task, difficulty)
     candidates: List[Candidate] = []
     for template in genome.program_templates.values():
         scored = _score_template(template, genome, kind, difficulty, capabilities, budget)
@@ -202,9 +212,11 @@ def compile_candidates(task: str, genome: CognitiveGenome, capabilities: Capabil
 
 
 def compile_program(task: str, genome: CognitiveGenome, capabilities: Capabilities,
-                    budget: Optional[Budget] = None) -> Optional[CognitiveProgram]:
+                    budget: Optional[Budget] = None,
+                    difficulty: Optional[float] = None) -> Optional[CognitiveProgram]:
     """The single best candidate, for ordinary work."""
-    candidates = compile_candidates(task, genome, capabilities, budget, limit=1)
+    candidates = compile_candidates(task, genome, capabilities, budget, limit=1,
+                                    difficulty=difficulty)
     return candidates[0].program if candidates else None
 
 
