@@ -31,12 +31,12 @@ from __future__ import annotations
 
 import re
 import time
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .core import cost as cost_units
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "2.5"
+__version__ = "2.7"
 
 
 class BrainRefusal(Exception):
@@ -120,100 +120,128 @@ def code_output(prompt: str, verifier: Any = None) -> str:
 # sequences
 # ---------------------------------------------------------------------------
 
-_SEQUENCE = re.compile(r"последовательность\s*:\s*([0-9,\s\-]+)")
+#: Runs of comma-separated integers, wherever they appear. The previous
+#: version required the literal word "последовательность:" and scored
+#: zero the moment the holdout said "Дан ряд чисел" instead -- a solver
+#: matched to one sentence, not to the problem.
+_NUMBER_RUN = re.compile(r"-?\d+(?:\s*,\s*-?\d+){3,}")
 
 
 def _differences(values):
     return [b - a for a, b in zip(values, values[1:])]
 
 
-def sequence_answer(prompt: str, verifier: Any = None) -> str:
-    """Continue the sequence exactly, or refuse.
-
-    Tries the shapes that can be *proved* from the terms given -- constant
-    differences, constant ratios, constant second differences, and a
-    first-order linear recurrence -- and refuses everything else. A
-    sequence solver that guesses is the worst kind of brain: it returns a
-    number with the same confidence whether it found the rule or invented
-    one.
-    """
-    match = _SEQUENCE.search(prompt or "")
-    if not match:
-        raise BrainRefusal("в задаче нет последовательности")
-    try:
-        values = [int(part) for part in match.group(1).replace(" ", "").split(",")
-                  if part not in ("", "-")]
-    except ValueError:
-        raise BrainRefusal("члены последовательности не целые")
-    if len(values) < 4:
-        raise BrainRefusal(f"слишком мало членов ({len(values)}), правило недоказуемо")
-
+def _next_term(values):
+    """The next term, if a rule can be PROVED from the terms given."""
     first = _differences(values)
     if len(set(first)) == 1:
-        return str(values[-1] + first[-1])
+        return values[-1] + first[-1]
 
     if all(v != 0 for v in values[:-1]):
         ratios = [b / a for a, b in zip(values, values[1:])]
         if len(set(round(r, 9) for r in ratios)) == 1 and float(ratios[0]).is_integer():
-            return str(int(values[-1] * ratios[0]))
+            return int(values[-1] * ratios[0])
 
     second = _differences(first)
     if len(set(second)) == 1:
-        return str(values[-1] + first[-1] + second[-1])
+        return values[-1] + first[-1] + second[-1]
 
-    # a(n) = x*a(n-1) + y, solved from two consecutive pairs and then
-    # CHECKED against every remaining term. Fitting two points and
-    # trusting the result is how a solver invents a rule.
+    # a(n) = x*a(n-1) + y, solved from two pairs and then CHECKED against
+    # every remaining term. Fitting two points and trusting the result is
+    # how a solver invents a rule.
     if len(values) >= 4 and values[1] != values[0]:
         denominator = values[1] - values[0]
         if (values[2] - values[1]) % denominator == 0:
             x = (values[2] - values[1]) // denominator
             y = values[1] - x * values[0]
             if all(values[i + 1] == x * values[i] + y for i in range(len(values) - 1)):
-                return str(x * values[-1] + y)
+                return x * values[-1] + y
+    return None
 
-    raise BrainRefusal("правило последовательности не доказано")
+
+def sequence_answer(prompt: str, verifier: Any = None) -> str:
+    """Continue the sequence exactly, or refuse.
+
+    Finds the numbers by shape rather than by the sentence around them,
+    so a rewording does not silence it. Still refuses whenever the rule
+    cannot be proved: a sequence solver that guesses returns a number
+    with the same confidence whether it found the rule or invented one.
+    """
+    runs = _NUMBER_RUN.findall(prompt or "")
+    if not runs:
+        raise BrainRefusal("в задаче нет ряда чисел")
+    longest = max(runs, key=lambda r: r.count(","))
+    try:
+        values = [int(part.strip()) for part in longest.split(",")]
+    except ValueError:                                  # pragma: no cover
+        raise BrainRefusal("члены ряда не целые")
+    if len(values) < 4:
+        raise BrainRefusal(f"слишком мало членов ({len(values)}), правило недоказуемо")
+    nxt = _next_term(values)
+    if nxt is None:
+        raise BrainRefusal("правило ряда не доказано")
+    return str(nxt)
 
 
 # ---------------------------------------------------------------------------
 # text operations
 # ---------------------------------------------------------------------------
 
-_TEXT_BODY = re.compile(r"текст\s*:\s*(.+?)\n", re.I | re.S)
-_LETTER_COUNT = re.compile(r"сколько\s+раз\s+буква\s*[«\"']?(\w)[»\"']?", re.I)
-_LONGEST_WORD = re.compile(r"какое\s+слово.*самое\s+длинное", re.I | re.S)
-_WORD_COUNT = re.compile(r"сколько\s+(?:в нём\s+)?слов", re.I)
+#: Question types recognised by the WORDS present, not by a sentence
+#: template. "Сколько раз буква «р»" and "Посчитай, сколько раз символ «р»"
+#: are the same question; the old version knew only the first.
+_COUNT_MARKERS = ("скольк", "посчита", "количеств")
+_LETTER_MARKERS = ("букв", "символ")
+_WORD_MARKERS = ("слов",)
+_LONGEST_MARKERS = ("длинн", "наибольш")
+_QUOTED_CHAR = re.compile(r"[«\"'‘“]\s*(\w)\s*[»\"'’”]")
+#: A line of plain lowercase words is the text being asked about.
+_WORD_LINE = re.compile(r"^[а-яёa-z\s]+$", re.M)
+
+
+def _text_body(prompt: str) -> List[str]:
+    """The words the question is about, found by shape.
+
+    The longest line that is nothing but lowercase words. Labels differ
+    between wordings ("Текст:", "Дана строка:") and questions are not
+    all-lowercase because they contain punctuation and quotes.
+    """
+    best: List[str] = []
+    for line in (prompt or "").splitlines():
+        candidate = line.strip()
+        if ":" in candidate:
+            candidate = candidate.split(":", 1)[1].strip()
+        if not candidate or not _WORD_LINE.fullmatch(candidate):
+            continue
+        words = candidate.split()
+        if len(words) > len(best):
+            best = words
+    return best
 
 
 def text_ops_answer(prompt: str, verifier: Any = None) -> str:
-    """Count, measure or select over a given text -- exactly, or refuse.
-
-    Every question here has one right answer computable from the text.
-    The tie-breaking rule for the longest word is read out of the prompt
-    rather than assumed, because "если таких несколько" means the
-    generator has a rule and a brain that picks a different one is
-    confidently wrong.
-    """
-    body_match = _TEXT_BODY.search(prompt or "")
-    if not body_match:
-        raise BrainRefusal("в задаче нет текста")
-    words = body_match.group(1).split()
+    """Count, measure or select over a given text -- exactly, or refuse."""
+    lowered = (prompt or "").lower()
+    words = _text_body(prompt)
     if not words:
-        raise BrainRefusal("текст пуст")
+        raise BrainRefusal("в задаче нет текста")
 
-    letter = _LETTER_COUNT.search(prompt)
-    if letter:
-        target = letter.group(1).lower()
+    asks_count = any(m in lowered for m in _COUNT_MARKERS)
+    quoted = _QUOTED_CHAR.search(prompt or "")
+
+    if asks_count and quoted and any(m in lowered for m in _LETTER_MARKERS):
+        target = quoted.group(1).lower()
         return str(sum(w.lower().count(target) for w in words))
 
-    if _LONGEST_WORD.search(prompt):
+    if any(m in lowered for m in _LONGEST_MARKERS) and any(
+            m in lowered for m in _WORD_MARKERS):
         longest = max(len(w) for w in words)
         candidates = [w for w in words if len(w) == longest]
-        if len(candidates) > 1 and "перв" not in (prompt or "").lower():
+        if len(candidates) > 1 and not ("перв" in lowered or "любо" in lowered):
             raise BrainRefusal("несколько самых длинных слов, правило выбора не задано")
         return candidates[0]
 
-    if _WORD_COUNT.search(prompt):
+    if asks_count and any(m in lowered for m in _WORD_MARKERS):
         return str(len(words))
 
     raise BrainRefusal("вопрос о тексте не распознан")
@@ -223,53 +251,80 @@ def text_ops_answer(prompt: str, verifier: Any = None) -> str:
 # ordering logic
 # ---------------------------------------------------------------------------
 
-_EARLIER = re.compile(r"[-•]\s*(\w+)\s+стоит\s+раньше,?\s+чем\s+(\w+)", re.I)
-_POSITION = re.compile(r"на\s+позиции\s+(\d+)", re.I)
+#: Words that place one name before another, and words that place it
+#: after. The relation is what the solver looks for; the sentence around
+#: it is not its business. The previous version matched the single phrase
+#: "X стоит раньше, чем Y" and went silent on "Y стоит позже, чем X" --
+#: the same constraint with the operands swapped.
+_BEFORE_WORDS = ("раньше", "перед", "до ", "сначала", "прежде")
+_AFTER_WORDS = ("позже", "после", "затем", "потом")
+_NAME = re.compile(r"\b([А-ЯЁ][а-яё]+)\b")
+_POSITION_MARKERS = ("позици", "мест", "номер")
 
 
 def logic_answer(prompt: str, verifier: Any = None) -> str:
-    """Resolve an ordering from "before" constraints, or refuse.
+    """Resolve an ordering from constraints, however they are worded.
 
     Answers only when the constraints determine a single order. A
     topological sort with more than one valid ordering has no single
     right answer, and returning one of them would be a coin toss wearing
     a proof's clothes.
     """
-    pairs = _EARLIER.findall(prompt or "")
+    text = prompt or ""
+    pairs: List[Tuple[str, str]] = []
+    for line in text.splitlines():
+        names = _NAME.findall(line)
+        if len(names) != 2:
+            continue
+        lowered = line.lower()
+        before = any(w in lowered for w in _BEFORE_WORDS)
+        after = any(w in lowered for w in _AFTER_WORDS)
+        if before == after:
+            continue                    # neither, or contradictory
+        pairs.append((names[0], names[1]) if before else (names[1], names[0]))
     if not pairs:
         raise BrainRefusal("в задаче нет ограничений порядка")
-    position = _POSITION.search(prompt or "")
-    if not position:
+
+    position = None
+    for line in text.splitlines():
+        if any(m in line.lower() for m in _POSITION_MARKERS):
+            found = re.search(r"(\d+)", line)
+            if found:
+                position = int(found.group(1))
+                break
+    if position is None:
         raise BrainRefusal("не сказано, какая позиция нужна")
 
-    names = []
-    for before, after in pairs:
-        for name in (before, after):
+    names: List[str] = []
+    for before_name, after_name in pairs:
+        for name in (before_name, after_name):
             if name not in names:
                 names.append(name)
-    after_count = {name: 0 for name in names}
-    edges = {name: [] for name in names}
-    for before, after in pairs:
-        edges[before].append(after)
-        after_count[after] += 1
+    incoming = {name: 0 for name in names}
+    edges: Dict[str, List[str]] = {name: [] for name in names}
+    for before_name, after_name in pairs:
+        if after_name in edges[before_name]:
+            continue                    # a repeated constraint is not a new one
+        edges[before_name].append(after_name)
+        incoming[after_name] += 1
 
-    order = []
-    available = [n for n in names if after_count[n] == 0]
+    order: List[str] = []
+    available = [n for n in names if incoming[n] == 0]
     while available:
         if len(available) > 1:
             raise BrainRefusal("порядок не определён однозначно")
         current = available.pop()
         order.append(current)
         for nxt in edges[current]:
-            after_count[nxt] -= 1
-            if after_count[nxt] == 0:
+            incoming[nxt] -= 1
+            if incoming[nxt] == 0:
                 available.append(nxt)
     if len(order) != len(names):
         raise BrainRefusal("в ограничениях цикл")
 
-    index = int(position.group(1)) - 1
+    index = position - 1
     if not 0 <= index < len(order):
-        raise BrainRefusal(f"позиции {index + 1} нет среди {len(order)} имён")
+        raise BrainRefusal(f"позиции {position} нет среди {len(order)} имён")
     return order[index]
 
 

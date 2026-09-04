@@ -356,10 +356,14 @@ def test_rewording_separates_solving_from_pattern_matching(isolated_config):
     assert score("arithmetic", "arithmetic", tasks.CANONICAL) == 20
     assert score("arithmetic", "arithmetic", tasks.VARIANT) == 20, \
         "the arithmetic brain parses structure and must survive rewording"
+    # The ordering solver scored ZERO here when this test was written: it
+    # matched the single phrase "X стоит раньше, чем Y". It was then
+    # rewritten to look for the relation rather than the sentence, and it
+    # now survives rewording -- which is exactly what the note left here
+    # said to check for if this line ever started passing. It still fails
+    # a change of LAYOUT, pinned in tests/test_substrates.py.
     assert score("order-logic", "logic", tasks.CANONICAL) > 0
-    assert score("order-logic", "logic", tasks.VARIANT) == 0, \
-        "the ordering solver is matched to one phrasing; if this ever passes, " \
-        "check it generalised rather than that the variant was weakened"
+    assert score("order-logic", "logic", tasks.VARIANT) > 0
 
 
 def test_a_reworded_solver_refuses_rather_than_guesses(isolated_config):
