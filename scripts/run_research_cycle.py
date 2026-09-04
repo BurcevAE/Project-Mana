@@ -90,8 +90,14 @@ def main() -> int:
     if report["representation_findings"]:
         print("\nсловарь описания задач недостаточен, что помогло бы:")
         for f in report["representation_findings"]:
-            print(f"  {f['field_name']}: разделяет {f['separates_pairs']} "
-                  f"противоречащих пар, осталось бы {f['remaining_pairs']}")
+            if f.get("kind") == "library":
+                print(f"  [список]   {f['field_name']}: разделяет "
+                      f"{f['separates_pairs']} пар, осталось бы "
+                      f"{f['remaining_pairs']}")
+            else:
+                print(f"  [выведено] {f['field_name']} ({f.get('kind')}): "
+                      f"подогнано {f['separates_pairs']}, на отложенных "
+                      f"{f.get('separates_held_out')}/{f.get('held_out_pairs')}")
 
     # Что прогон стоил на самом деле. До фазы 14 здесь можно было
     # напечатать только число вызовов, в котором обращение к 120B и к

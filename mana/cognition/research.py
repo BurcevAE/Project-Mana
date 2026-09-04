@@ -61,6 +61,7 @@ from .representations import (FIELD_LIBRARY, insufficiency_gap,
 from ..core import tasks as core_tasks
 from . import self_model
 from . import genome as genome_mod
+from . import fields as field_gen
 from .genome import CognitiveGenome
 from .self_model import Observation, SelfModel
 from .synthesis import CapabilitySynthesizer
@@ -277,11 +278,27 @@ def representation_findings(model: SelfModel, task_texts: Dict[str, str],
     insufficiency = measure_insufficiency(representation, model.observations, task_texts)
     if not insufficiency_gap(insufficiency):
         return []
-    return [{"field_name": p.field_name, "separates_pairs": p.separates_pairs,
-             "remaining_pairs": p.remaining_pairs, "reduction": round(p.reduction, 4),
-             "collision_rate": round(insufficiency.rate, 3)}
-            for p in propose_fields(insufficiency, model.observations, task_texts, limit=4)
-            if p.field_name not in already_proposed]
+    findings = [{"field_name": p.field_name, "separates_pairs": p.separates_pairs,
+                 "remaining_pairs": p.remaining_pairs, "reduction": round(p.reduction, 4),
+                 "collision_rate": round(insufficiency.rate, 3), "kind": "library"}
+                for p in propose_fields(insufficiency, model.observations,
+                                        task_texts, limit=4)
+                if p.field_name not in already_proposed]
+
+    # Fields the library does not contain, derived from these very
+    # collisions. Reported alongside rather than instead: a hand-written
+    # field that happens to fit is not worse for having been written by
+    # hand, and only the held-out score separates either kind from a
+    # coincidence.
+    for generated in field_gen.generate(model.observations, task_texts, limit=4):
+        if generated.name in already_proposed or not generated.generalises:
+            continue
+        findings.append({"field_name": generated.name, "kind": generated.kind,
+                         "separates_pairs": generated.separates_fitted,
+                         "separates_held_out": generated.separates_held_out,
+                         "held_out_pairs": generated.held_out_pairs,
+                         "collision_rate": round(insufficiency.rate, 3)})
+    return findings
 
 
 def choose(options: Sequence[ActivityOption], budget_left: int) -> Optional[ActivityOption]:
