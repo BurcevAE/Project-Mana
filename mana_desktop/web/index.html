@@ -93,6 +93,9 @@
              border-radius: 3px; display: block; }
   .bar > u { position: absolute; top: -2px; bottom: -2px; width: 1px;
              background: var(--ink-faint); }
+  .switch { display: flex; align-items: center; gap: .45rem; font-size: .78rem;
+            margin: .9rem 0 .3rem; cursor: pointer; }
+  .switch input { accent-color: var(--ok); }
   .prov {
     display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .45rem;
     font-family: var(--mono); font-size: .7rem;
@@ -216,6 +219,10 @@
   <section class="pane" id="pane-system">
     <dl class="kv" id="paths"></dl>
     <p class="hint" id="evo"></p>
+    <label class="switch"><input type="checkbox" id="autostart">
+      <span>Запускать при входе в систему</span></label>
+    <div class="hint" id="autostart-note"></div>
+    <div id="build"></div>
   </section>
 </aside>
 
@@ -420,6 +427,40 @@ async function refreshSystem() {
       if (k === "самопатчинг") dd.className = p.self_patching_possible ? "yes" : "no";
       dl.append(dt, dd);
     });
+    const a = await api("/api/autostart");
+    $("autostart").checked = !!a.enabled;
+    $("autostart").disabled = !a.supported;
+    /* Shows the registered command rather than just on/off: an entry left
+       by an install in another directory is "on" and starts a different
+       copy of MANA, and a bare checkbox would call that the same thing. */
+    $("autostart-note").textContent =
+      a.note || (a.enabled ? a.registered : (a.supported ? "" : a.note || ""));
+
+    const b = await api("/api/build");
+    const box = $("build");
+    box.textContent = "";
+    if (b.packaged) {
+      const dl = document.createElement("dl");
+      dl.className = "kv";
+      const put = (k, v) => {
+        const dt = document.createElement("dt"); dt.textContent = k;
+        const dd = document.createElement("dd"); dd.textContent = v;
+        dl.append(dt, dd);
+      };
+      put("собрано", b.built);
+      put("python", b.python);
+      put("в пакете", Object.entries(b.bundled || {})
+          .map(([k, v]) => k + " " + v).join(", "));
+      if ((b.missing || []).length) put("НЕ ВОШЛО", b.missing.join(", "));
+      (b.deliberately_absent || []).forEach(d => put("не входит: " + d.what, d.why));
+      box.appendChild(dl);
+    } else {
+      const hint = document.createElement("p");
+      hint.className = "hint";
+      hint.textContent = b.note || "";
+      box.appendChild(hint);
+    }
+
     const e = await api("/api/evolution");
     $("evo").textContent = e.running
       ? "Эволюция идёт: цикл " + e.cycle + " из " + (e.target_cycle || "?")
@@ -579,6 +620,18 @@ document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click
   if (b.dataset.pane === "cycle") refreshCycle();
   if (b.dataset.pane === "genome") refreshGenome();
 }));
+
+$("autostart").addEventListener("change", async (event) => {
+  const res = await api("/api/autostart", { enabled: event.target.checked });
+  if (!res.ok) {
+    /* Put back what is actually true rather than leaving the checkbox
+       showing a state the registry never accepted. */
+    event.target.checked = !event.target.checked;
+    $("autostart-note").textContent = res.error || "не удалось изменить";
+    return;
+  }
+  $("autostart-note").textContent = res.enabled ? res.registered : "";
+});
 </script>
 </body>
 </html>

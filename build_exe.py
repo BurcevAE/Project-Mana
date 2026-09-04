@@ -37,10 +37,17 @@ DIST = ROOT / "dist"
 BUILD = ROOT / "build"
 EMBED = ROOT / "python-embed"
 
+#: Kept OUT of the bundle, each for a reason stated in
+#: packaging_deps.DELIBERATELY_ABSENT or because nothing in mana imports
+#: it. sklearn, scipy and fitz used to be on this list and should not have
+#: been: sklearn carries the learned router and the TF-IDF search that the
+#: "there is a fallback" argument was appealing to, scipy is what sklearn
+#: imports, and fitz is how a PDF gets read. Excluding them did not save a
+#: user from a 3 GB download; it removed three working features from every
+#: packaged build.
 EXCLUDED = [
     "torch", "sentence_transformers", "faster_whisper", "sounddevice", "pyttsx3",
-    "fitz", "sklearn", "scipy", "matplotlib", "PIL", "pandas", "IPython",
-    "pytest", "PyInstaller",
+    "matplotlib", "PIL", "pandas", "IPython", "pytest", "PyInstaller",
 ]
 
 #: pywebview reaches its backend through late imports PyInstaller's
@@ -48,10 +55,17 @@ EXCLUDED = [
 #: Without this the packaged app raises "no suitable GUI toolkit" on a
 #: machine where the source version works perfectly.
 HIDDEN = ["webview.platforms.edgechromium", "webview.platforms.winforms",
-          "clr_loader", "keyring.backends.Windows"]
+          "clr_loader", "keyring.backends.Windows",
+          # ddgs picks its HTTP backend at call time, so the analyser sees
+          # no import and the packaged build fails on the first search.
+          "ddgs", "ddgs.engines"]
+
+#: Packages whose submodules are pulled in wholesale.
+COLLECTED = ["sklearn", "ddgs"]
 
 
-def build(windowed: bool) -> int:
+def build(windowed: bool, allow_missing: bool = False,
+          sign_with: str = "") -> int:
     if not EMBED.is_dir():
         # Naming the file and the place: the previous message said what
         # was missing but not where it comes from, which turns a
@@ -64,6 +78,36 @@ def build(windowed: bool) -> int:
         print(f"  3. запустите сборку снова")
         print("Без него песочница (--run-code, self-improve-code) в собранном приложении не работает.")
         return 1
+
+    # The build environment is part of the build. A try/except around an
+    # import is the right thing at runtime and the wrong thing here: it
+    # let a machine without ddgs installed produce a package that printed
+    # "Готово", weighed the expected number of megabytes, passed
+    # --self-check, and had no web search.
+    import packaging_deps
+    found = packaging_deps.resolve()
+    print("Зависимости, которые пакет обязан нести:")
+    print(packaging_deps.report(found))
+    absent = [f for f in found if not f.present]
+    if absent and not allow_missing:
+        print()
+        print("Сборка остановлена: этих пакетов нет в окружении сборки,")
+        print("и без них собранное приложение потеряет перечисленное выше.")
+        print()
+        print("  " + sys.executable + " -m pip install " +
+              " ".join(f.spec.package for f in absent))
+        print()
+        print("Если это осознанное решение: python build_exe.py --allow-missing")
+        return 1
+    if absent:
+        print()
+        print("--allow-missing: собираю без " +
+              ", ".join(f.spec.package for f in absent))
+    print()
+    print("Сознательно не входит в пакет:")
+    for name, why in packaging_deps.DELIBERATELY_ABSENT:
+        print(f"  {name}: {why}")
+    print()
 
     for path in (DIST, BUILD):
         shutil.rmtree(path, ignore_errors=True)
@@ -96,9 +140,14 @@ def build(windowed: bool) -> int:
     ]
     for module in EXCLUDED:
         cmd += ["--exclude-module", module]
-    if windowed:
-        for module in HIDDEN:
-            cmd += ["--hidden-import", module]
+    for module in HIDDEN:
+        cmd += ["--hidden-import", module]
+    # Collected wholesale rather than left to the analyser: both reach
+    # large parts of themselves through lazy imports, and the failure mode
+    # is not a build error but a ModuleNotFoundError inside a feature the
+    # user tries months later.
+    for package in COLLECTED:
+        cmd += ["--collect-submodules", package]
     cmd.append(str(ROOT / "app.py"))
 
     print("$", " ".join(cmd[:6]), "...")
@@ -108,11 +157,77 @@ def build(windowed: bool) -> int:
 
     app_dir = DIST / "MANA"
     total = sum(f.stat().st_size for f in app_dir.rglob("*") if f.is_file())
+
+    # Shipped beside the executable so that "what is in this build?"
+    # has an answer which does not require running it. Nothing reads
+    # this file at runtime; a person reading a bug report does.
+    import json
+    from datetime import datetime, timezone
+    (app_dir / "build_manifest.json").write_text(json.dumps({
+        "built": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "python": sys.version.split()[0],
+        "windowed": windowed,
+        "bundled": {f.spec.package: f.version for f in found if f.present},
+        "missing": [f.spec.package for f in found if not f.present],
+        "deliberately_absent": [
+            {"what": name, "why": why}
+            for name, why in packaging_deps.DELIBERATELY_ABSENT],
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    if sign_with:
+        code = sign(app_dir / "MANA.exe", sign_with)
+        if code != 0:
+            return code
+
     print(f"\nГотово: {app_dir}")
     print(f"Размер: {total / 1e6:.1f} МБ")
     print(f"Проверка: {app_dir / 'MANA.exe'} --self-check")
     return 0
 
 
+def sign(target: Path, certificate: str) -> int:
+    """Authenticode-sign one file with signtool.
+
+    What a signature buys, stated plainly because it is routinely
+    oversold: it proves the file has not been altered since it left
+    the named signer, and it puts a publisher name in the UAC prompt
+    in place of "Неизвестный издатель". It does NOT by itself stop
+    SmartScreen warning about a fresh download -- that clears once the
+    certificate has accumulated reputation, and immediately only with
+    an EV certificate. A self-signed certificate buys neither: it is
+    untrusted on every machine except the one that created it, so it
+    is useful for testing this code path and for nothing else.
+
+    Unsigned is a legitimate choice for a tool its author runs on
+    their own machines. It is a bad surprise for anyone else, which is
+    why the installer states which of the two a given build is.
+    """
+    tool = shutil.which("signtool") or shutil.which("signtool.exe")
+    if not tool:
+        print("signtool не найден. Он входит в Windows SDK; добавьте в PATH")
+        print("  C:/Program Files (x86)/Windows Kits/10/bin/<версия>/x64")
+        return 1
+    cmd = [tool, "sign", "/fd", "SHA256",
+           # RFC-3161 timestamp. Without it every signed copy stops
+           # verifying on the day the certificate expires, including
+           # the ones already installed on other people's machines.
+           "/tr", "http://timestamp.digicert.com", "/td", "SHA256"]
+    cmd += (["/f", certificate] if certificate.lower().endswith((".pfx", ".p12"))
+            else ["/n", certificate])
+    cmd.append(str(target))
+    print("$", " ".join(cmd[:4]), "...", target.name)
+    return subprocess.run(cmd).returncode
+
+
 if __name__ == "__main__":
-    raise SystemExit(build("--windowed" in sys.argv))
+    argv = sys.argv[1:]
+    cert = ""
+    if "--sign" in argv:
+        index = argv.index("--sign")
+        cert = argv[index + 1] if index + 1 < len(argv) else ""
+        if not cert:
+            print("--sign требует .pfx-файл или имя субъекта сертификата")
+            raise SystemExit(2)
+    raise SystemExit(build("--windowed" in argv,
+                           allow_missing="--allow-missing" in argv,
+                           sign_with=cert))

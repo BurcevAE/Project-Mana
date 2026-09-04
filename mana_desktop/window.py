@@ -94,13 +94,60 @@ def run_window() -> int:
     window = webview.create_window(APP_TITLE, url, width=1120, height=780,
                                    min_size=(760, 560))
 
+    # Closing the window used to end the process, which is right for an
+    # app whose window IS the app and wrong for this one: a research
+    # cycle runs for minutes on a budget of real brain calls, and closing
+    # the window threw that away with no warning. With the tray icon
+    # present, the close button hides the window and the cycle keeps
+    # running; Выход in the tray menu is what actually stops MANA.
+    #
+    # MANA_NO_TRAY exists because a hidden window with no visible way back
+    # is the worst possible failure here. If the icon ever fails to appear
+    # on some machine, the variable restores the old behaviour without a
+    # rebuild.
+    import os as _os
+    quitting = threading.Event()
+
+    def _quit() -> None:
+        quitting.set()
+        try:
+            window.destroy()
+        except Exception:
+            pass
+
+    icon = None
+    if _os.environ.get("MANA_NO_TRAY", "") not in ("1", "true", "yes"):
+        from mana_desktop import tray
+        icon = tray.start(on_open=lambda: window.show(), on_quit=_quit)
+
+    first_hide = [True]
+
+    def _on_closing() -> bool:
+        """False cancels the close. Only ever returned while the icon is
+        there to reopen the window."""
+        if quitting.is_set() or icon is None:
+            return True
+        window.hide()
+        if first_hide[0]:
+            first_hide[0] = False
+            # Said once, the first time, because an application that
+            # vanishes without closing is indistinguishable from a crash.
+            icon.notify("MANA продолжает работать",
+                        "Окно свёрнуто в область уведомлений. "
+                        "Выход — в меню значка.")
+        return False
+
     def _on_closed() -> None:
         session.close()
 
+    if icon is not None:
+        window.events.closing += _on_closing
     window.events.closed += _on_closed
     try:
         webview.start()
     finally:
+        if icon is not None:
+            icon.stop()
         try:
             httpd.shutdown()
         except Exception:

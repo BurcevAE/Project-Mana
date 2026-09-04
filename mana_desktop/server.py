@@ -46,6 +46,27 @@ def _json_safe(value: Any) -> Any:
     return str(value)
 
 
+def build_manifest() -> dict:
+    """What this build contains, as recorded when it was built.
+
+    Written by build_exe.py next to the executable. A source checkout has
+    no such file, and says so rather than inventing one: the manifest is a
+    statement about a package, and a checkout is not a package.
+    """
+    import json
+    from mana import paths
+    path = paths.install_root() / "build_manifest.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {"packaged": False,
+                "note": "запущено из исходников, сборочного манифеста нет"}
+    except Exception as exc:
+        return {"packaged": False, "note": f"манифест нечитаем: {exc}"}
+    data["packaged"] = True
+    return data
+
+
 class _Handler(BaseHTTPRequestHandler):
     server_version = "MANA"
     session = None            # set on the server instance below
@@ -102,6 +123,11 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send(200, self.session.genome())
             if route == "/api/paths":
                 return self._send(200, paths.status())
+            if route == "/api/autostart":
+                from mana_desktop import autostart
+                return self._send(200, autostart.status())
+            if route == "/api/build":
+                return self._send(200, build_manifest())
             if route == "/api/events":
                 return self._stream_events()
             return self._send(404, {"error": "not found"})
@@ -131,6 +157,11 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send(200, self.session.stop_cycle())
             if route == "/api/key":
                 return self._send(200, save_api_key(str(body.get("env", "")), str(body.get("value", ""))))
+            if route == "/api/autostart":
+                from mana_desktop import autostart
+                wanted = bool(body.get("enabled"))
+                return self._send(200, autostart.enable() if wanted
+                                  else autostart.disable())
             return self._send(404, {"error": "not found"})
         except Exception as exc:
             self._send(500, {"error": f"{type(exc).__name__}: {exc}",
