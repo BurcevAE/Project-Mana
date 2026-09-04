@@ -451,3 +451,92 @@ def test_without_recorded_decisions_the_influence_check_stays_silent(isolated_co
     assert p.decisions_differed == 0
     assert "parameter_had_no_influence" not in verdict.failed_gates
     assert verdict.accepted
+
+
+# ---------------------------------------------------------------------------
+# the far end of the loop
+# ---------------------------------------------------------------------------
+
+def test_an_accepted_change_is_written_where_the_search_reads_it(isolated_config):
+    """From phase 13 until now an accepted meta-change updated a field on
+    the MetaEvolution object and nothing else. The search kept reading
+    the old number, and the live script papered over it by patching the
+    module itself -- which is how an architectural gap becomes "it
+    works"."""
+    from mana.cognition import gaps
+    m = MetaEvolution()
+    before = gaps.PRIORITY_WEIGHTS["cost"]
+    p = m.propose("gap.cost", before + 0.9, "шире поиск")
+    assert m.evaluate(p, SEEDS, episodes, hidden=(0.55, 0.70), counterexamples=(4, 0))
+    assert gaps.PRIORITY_WEIGHTS["cost"] != before
+    assert gaps.PRIORITY_WEIGHTS["cost"] == m.policy()["gap.cost"]
+
+
+def test_a_rollback_puts_the_module_back_too(isolated_config):
+    from mana.cognition import gaps
+    m = MetaEvolution()
+    before = gaps.PRIORITY_WEIGHTS["cost"]
+    p = m.propose("gap.cost", before + 0.9, "шире поиск")
+    m.evaluate(p, SEEDS, episodes, hidden=(0.55, 0.70), counterexamples=(4, 0))
+    m.rollback(p)
+    assert gaps.PRIORITY_WEIGHTS["cost"] == before
+
+
+def test_the_write_path_goes_through_the_same_guard(isolated_config):
+    """`propose` guards what may be proposed. Without the same check on
+    the write path, applying would be a way around it."""
+    from mana.cognition.meta import put_in_force
+    with pytest.raises(MetaError):
+        put_in_force(parameter(name="gates.alpha", module="mana.core.gates",
+                               key="ALPHA"), 0.99)
+
+
+def test_the_policy_survives_a_restart(isolated_config, tmp_path):
+    """"Accepted" means nothing if the next process reads the old number."""
+    from mana.cognition import gaps
+    path = tmp_path / "policy.json"
+    m = MetaEvolution()
+    p = m.propose("gap.cost", m.policy()["gap.cost"] + 0.9, "шире поиск")
+    m.evaluate(p, SEEDS, episodes, hidden=(0.55, 0.70), counterexamples=(4, 0))
+    adopted = m.policy()["gap.cost"]
+    m.save(path)
+
+    # A fresh process: the module is back to its declared default.
+    gaps.PRIORITY_WEIGHTS["cost"] = -0.4
+    restarted = MetaEvolution()
+    assert restarted.policy()["gap.cost"] == -0.4
+    restored = restarted.load(path)
+    assert restored["gap.cost"] == adopted
+    assert gaps.PRIORITY_WEIGHTS["cost"] == adopted
+
+
+def test_verify_in_force_catches_a_module_that_disagrees(isolated_config):
+    from mana.cognition import gaps
+    m = MetaEvolution()
+    assert m.verify_in_force()["ok"] is True
+    gaps.PRIORITY_WEIGHTS["cost"] = 0.777
+    report = m.verify_in_force()
+    assert report["ok"] is False
+    assert "gap.cost" in report["mismatches"]
+
+
+def test_a_policy_file_cannot_smuggle_in_a_forbidden_parameter(isolated_config, tmp_path):
+    """A hand-edited file must not be a way past check_tunable."""
+    import json
+    path = tmp_path / "policy.json"
+    path.write_text(json.dumps({"policy": {"gates.alpha": 0.99,
+                                           "unknown.thing": 1.0}}),
+                    encoding="utf-8")
+    restored = MetaEvolution().load(path)
+    assert restored == {}
+
+
+def test_a_policy_file_from_a_later_version_does_not_stop_startup(isolated_config,
+                                                                 tmp_path):
+    import json
+    path = tmp_path / "policy.json"
+    path.write_text(json.dumps({"policy": {"gap.cost": -0.5,
+                                           "future.parameter": 3.0}}),
+                    encoding="utf-8")
+    restored = MetaEvolution().load(path)
+    assert restored == {"gap.cost": -0.5}

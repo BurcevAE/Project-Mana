@@ -52,7 +52,7 @@ from .programs import Budget, CognitiveProgram
 from .self_model import SelfModel
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "2.0"
+__version__ = "2.3"
 
 PROPOSED = "PROPOSED"
 TESTING = "TESTING"
@@ -113,13 +113,18 @@ class ExperimentPlan:
     information_gain: float
     capability_gain: float
     value: float
+    #: Whether an experiment this size could produce a verdict at all.
+    #: Priced alongside cost and value, because an experiment that cannot
+    #: conclude is not cheap -- it is worthless at any price.
+    power: Optional[Any] = None
 
     def as_dict(self) -> Dict[str, Any]:
         return {"plan_id": self.plan_id, "hypothesis": self.hypothesis.as_dict(),
                 "trials": self.trials, "estimated_calls": self.estimated_calls,
                 "information_gain": round(self.information_gain, 4),
                 "capability_gain": round(self.capability_gain, 4),
-                "value": round(self.value, 4)}
+                "value": round(self.value, 4),
+                "power": self.power.as_dict() if self.power else None}
 
 
 @dataclass
@@ -177,6 +182,79 @@ _INTERVENTIONS: Dict[str, Tuple[Tuple[str, ...], str]] = {
 }
 
 BASELINE_STEPS = ("OBSERVE", "GENERATE", "ANSWER")
+
+
+@dataclass(frozen=True)
+class Power:
+    """Whether an experiment of this size could detect anything at all."""
+    trials: int
+    min_discordant: int
+    mde: float                  # minimum detectable net improvement
+    headroom: float             # how much the slice could improve at most
+    ok: bool
+    reason: str
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {"trials": self.trials, "min_discordant": self.min_discordant,
+                "mde": round(self.mde, 4), "headroom": round(self.headroom, 4),
+                "ok": self.ok, "reason": self.reason}
+
+
+def _min_discordant_pairs() -> int:
+    """The fewest one-directional discordant pairs the GATE calls significant.
+
+    Derived by asking the gate rather than by deriving it here. A number
+    computed independently would be a second opinion about the same
+    threshold, and the day the gate's correction changes, the two would
+    disagree silently -- with this layer refusing experiments the gate
+    would have accepted, or worse, allowing ones it cannot.
+    """
+    for count in range(2, 60):
+        outcomes = ([PairedOutcome(f"d{i}", "x", False, True) for i in range(count)] +
+                    [PairedOutcome(f"s{i}", "x", True, True) for i in range(count)])
+        if gates.mcnemar(outcomes)["p_value"] < gates.ALPHA:
+            return count
+    return 60                                          # pragma: no cover
+
+
+#: Cached: the gate's thresholds do not change at runtime.
+MIN_DISCORDANT = _min_discordant_pairs()
+
+
+def power(trials: int, baseline_score: float) -> Power:
+    """Can an experiment this size produce a verdict at all?
+
+    Two ways it cannot, both knowable before a single call is spent:
+
+    **Too few trials.** Below `gates.MIN_PAIRED_TRIALS` the sample-size
+    gate refuses regardless of the result.
+
+    **No room to improve.** Significance needs at least
+    `MIN_DISCORDANT` pairs where the candidate wins and the baseline
+    does not, so the smallest detectable net improvement is
+    `MIN_DISCORDANT / trials`. A slice already at 1.00 has no room for
+    it, and one at 0.95 has less room than 30 trials can resolve.
+
+    What this does NOT catch, said plainly: an experiment on a slice at
+    0.00 passes here, because the candidate might improve it by
+    anything. A live run spent 114 calls on exactly that and got a
+    refutation. I earlier called that waste; it was not -- it was
+    exploration whose outcome was unknowable in advance, and no power
+    calculation could have said otherwise.
+    """
+    if trials < gates.MIN_PAIRED_TRIALS:
+        return Power(trials, MIN_DISCORDANT, 1.0, 0.0, False,
+                     f"{trials} пар против {gates.MIN_PAIRED_TRIALS}, "
+                     f"требуемых гейтом sample_size")
+    mde = MIN_DISCORDANT / float(trials)
+    headroom = max(0.0, 1.0 - float(baseline_score))
+    if headroom < mde:
+        return Power(trials, MIN_DISCORDANT, mde, headroom, False,
+                     f"срез на {baseline_score:.2f}: улучшить можно максимум на "
+                     f"{headroom:.2f}, а различить гейт может только "
+                     f"{mde:.2f} при {trials} парах")
+    return Power(trials, MIN_DISCORDANT, mde, headroom, True,
+                 f"различимо от {mde:.2f}, запас {headroom:.2f}")
 
 
 def hypotheses_from_gap(gap: Gap) -> List[Hypothesis]:
@@ -256,7 +334,8 @@ def plan(hypothesis: Hypothesis, model: SelfModel, trials: int = 30,
     return ExperimentPlan(
         plan_id=uuid.uuid4().hex[:12], hypothesis=hypothesis, trials=trials,
         estimated_calls=estimated, information_gain=info,
-        capability_gain=headroom, value=value)
+        capability_gain=headroom, value=value,
+        power=power(trials, cap.score if cap else 0.0))
 
 
 _GENERATIVE = {"GENERATE", "CRITIQUE", "REPAIR", "SYNTHESIZE", "DECOMPOSE",
@@ -289,6 +368,10 @@ def select(plans: Sequence[ExperimentPlan], budget_left: int) -> Optional[Experi
 #: Injected so the lab is testable without brains, and so the same lab can
 #: drive a live agent or a simulation.
 TrialRunner = Callable[[Tuple[str, ...], Any], Tuple[bool, int]]
+
+
+class UnderpoweredExperiment(RuntimeError):
+    """An experiment that could not have concluded anything."""
 
 
 class ExperimentLab:
@@ -334,6 +417,12 @@ class ExperimentLab:
 
     def run_experiment(self, plan_: ExperimentPlan, tasks: Sequence[Any],
                        runner: TrialRunner, verifier: Any = None) -> Measurement:
+        if plan_.power is not None and not plan_.power.ok:
+            # Refused before a single call. An experiment that cannot
+            # reach significance produces a refutation whatever happens,
+            # and that refutation then goes into the record as evidence
+            # against a mechanism that was never actually tested.
+            raise UnderpoweredExperiment(plan_.power.reason)
         """Run baseline and candidate over the same tasks.
 
         Same tasks, both arms, so the comparison is paired -- the gate

@@ -55,10 +55,12 @@ with an encouraging default.
 """
 from __future__ import annotations
 
+import json
 import statistics
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from ..core import gates, instrument, transaction
@@ -68,7 +70,7 @@ from . import genome as genome_mod
 from .genome import CognitiveGenome
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "2.1"
+__version__ = "2.3"
 
 #: Modules whose constants this layer may tune. Every one of them is a
 #: *search* weight: it changes which experiment gets run first, never
@@ -419,6 +421,51 @@ def yield_report(proposal: MetaProposal) -> Dict[str, Any]:
     }
 
 
+#: Where the modules keep the weights this layer tunes. The write path
+#: has to know it, because until phase 16 there was none: an accepted
+#: meta-change updated a field on the MetaEvolution object and nothing
+#: else, so the loop was open at the far end and "accepted" changed no
+#: behaviour at all. The live script papered over it by patching
+#: PRIORITY_WEIGHTS itself, which is how an architectural gap turns into
+#: "everything works".
+_WEIGHT_TABLES = {
+    "gap": ("mana.cognition.gaps", "PRIORITY_WEIGHTS"),
+    "experiment": ("mana.cognition.experiments", "VALUE_WEIGHTS"),
+    "novelty": ("mana.cognition.novelty", "CHANNEL_WEIGHTS"),
+}
+
+
+def in_force(parameter: MetaParameter) -> float:
+    """The value the module is actually using right now."""
+    import importlib
+    prefix = parameter.name.split(".", 1)[0]
+    module_name, table_name = _WEIGHT_TABLES[prefix]
+    table = getattr(importlib.import_module(module_name), table_name)
+    return float(table[parameter.key])
+
+
+def put_in_force(parameter: MetaParameter, value: float) -> None:
+    """Write an accepted value where the search will actually read it.
+
+    Goes through `check_tunable` first, and that is not belt-and-braces:
+    `propose` guards what may be *proposed*, and without the same guard
+    here the write path would be a way around it. One entrance, one
+    check.
+
+    Mutates the module's dict in place rather than rebinding the name,
+    because callers that did `from .gaps import PRIORITY_WEIGHTS` hold
+    the old object and would silently keep the old policy.
+    """
+    check_tunable(parameter)
+    import importlib
+    prefix = parameter.name.split(".", 1)[0]
+    module_name, table_name = _WEIGHT_TABLES[prefix]
+    table = getattr(importlib.import_module(module_name), table_name)
+    if parameter.key not in table:
+        raise MetaError(f"{parameter.name}: в {table_name} нет ключа {parameter.key!r}")
+    table[parameter.key] = parameter.clamped(value)
+
+
 class MetaEvolution:
     """Holds the search policy in force, and the record of how it got there."""
 
@@ -445,8 +492,12 @@ class MetaEvolution:
         if not verdict.accepted:
             return False
         self.parameters = dict(self.parameters)
-        self.parameters[proposal.parameter.name] = MetaParameter(
-            **{**proposal.parameter.as_dict(), "value": proposal.new_value})
+        adopted = MetaParameter(**{**proposal.parameter.as_dict(),
+                                   "value": proposal.new_value})
+        self.parameters[proposal.parameter.name] = adopted
+        # The far end of the loop. Without this the object's opinion
+        # changes and the search keeps reading the old number.
+        put_in_force(adopted, proposal.new_value)
         return True
 
     def rollback(self, proposal: MetaProposal) -> None:
@@ -458,11 +509,81 @@ class MetaEvolution:
         """
         self.parameters = dict(self.parameters)
         self.parameters[proposal.parameter.name] = proposal.parameter
+        put_in_force(proposal.parameter, proposal.parameter.value)
         proposal.status = "ROLLED_BACK"
+
+    # ---------- persistence ----------
+
+    def save(self, path: Any) -> None:
+        """Write the policy in force so it survives a restart.
+
+        Only the values -- bounds, modules and keys are declared in code
+        and must not be restorable from a file, or a hand-edited file
+        could widen a bound or point a parameter at a table this layer is
+        not allowed to write.
+        """
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"policy": self.policy(),
+                   "accepted": [p.parameter.name for p in self.history
+                                if p.status == "ACCEPTED"]}
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
+                       encoding="utf-8")
+        tmp.replace(path)
+
+    def load(self, path: Any) -> Dict[str, float]:
+        """Restore a saved policy and put it back in force.
+
+        An unknown name is ignored rather than raising: a policy file
+        written by a later version must not stop an earlier one from
+        starting. A known name still goes through `put_in_force`, so a
+        file cannot smuggle in a parameter this layer may not tune.
+        """
+        path = Path(path)
+        if not path.exists():
+            return {}
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        restored: Dict[str, float] = {}
+        for name, value in (payload.get("policy") or {}).items():
+            parameter = self.parameters.get(name)
+            if parameter is None:
+                continue
+            try:
+                put_in_force(parameter, float(value))
+            except (MetaError, KeyError, TypeError, ValueError):
+                continue
+            self.parameters = dict(self.parameters)
+            self.parameters[name] = MetaParameter(
+                **{**parameter.as_dict(), "value": parameter.clamped(float(value))})
+            restored[name] = self.parameters[name].value
+        return restored
+
+    def verify_in_force(self) -> Dict[str, Any]:
+        """Does the search actually read what this object believes?
+
+        The check a restart has to pass. "Accepted" means nothing if the
+        module is still using the old number, and that was the state of
+        this layer from phase 13 until now.
+        """
+        mismatches = {}
+        for name, parameter in self.parameters.items():
+            try:
+                actual = in_force(parameter)
+            except Exception as exc:                   # pragma: no cover
+                mismatches[name] = f"не прочитан: {exc}"
+                continue
+            if abs(actual - parameter.value) > 1e-9:
+                mismatches[name] = {"объект": parameter.value, "модуль": actual}
+        return {"ok": not mismatches, "mismatches": mismatches}
 
     def report(self) -> Dict[str, Any]:
         return {
             "policy": {k: round(v, 4) for k, v in self.policy().items()},
+            "in_force": self.verify_in_force(),
             "changes": [p.as_dict() for p in self.history],
             "accepted": [p.parameter.name for p in self.history
                          if p.status == "ACCEPTED"],
