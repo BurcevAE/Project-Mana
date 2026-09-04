@@ -55,19 +55,22 @@ with an encouraging default.
 """
 from __future__ import annotations
 
+import json
 import statistics
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from ..core import gates, transaction
+from ..core import gates, instrument, transaction
+from ..core.cost import CostVector
 from ..core.gates import Claim, Evidence, PairedOutcome
 from . import genome as genome_mod
 from .genome import CognitiveGenome
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "2.0"
+__version__ = "2.3"
 
 #: Modules whose constants this layer may tune. Every one of them is a
 #: *search* weight: it changes which experiment gets run first, never
@@ -176,6 +179,10 @@ class EpisodeResult:
     capability_gain: float   # hidden-holdout accuracy gained, if measured
     calls_used: int
     accepted_claims: int = 0     # recorded, never optimised -- see rule 3
+    #: What the episode actually chose to do, in order. Compared between
+    #: the two arms to tell "the parameter changed nothing" from "the
+    #: parameter changed no decision" -- see MetaProposal.decisions_differed.
+    decisions: Tuple[str, ...] = ()
 
     @property
     def value(self) -> float:
@@ -202,6 +209,12 @@ class MetaProposal:
     new_value: float
     rationale: str
     status: str = "PROPOSED"
+    #: How many times the parameter under test was actually read during
+    #: the episodes. Zero means the experiment measured something else.
+    parameter_reads: int = 0
+    #: On how many seeds the two arms made different decisions. Zero
+    #: means the parameter was consulted and its answer discarded.
+    decisions_differed: int = 0
     verdict: Dict[str, Any] = field(default_factory=dict)
     baseline: List[EpisodeResult] = field(default_factory=list)
     candidate: List[EpisodeResult] = field(default_factory=list)
@@ -219,6 +232,8 @@ class MetaProposal:
         return {"proposal_id": self.proposal_id, "parameter": self.parameter.as_dict(),
                 "new_value": self.new_value, "rationale": self.rationale,
                 "status": self.status, "verdict": dict(self.verdict),
+                "parameter_reads": self.parameter_reads,
+                "decisions_differed": self.decisions_differed,
                 "baseline": [e.as_dict() for e in self.baseline],
                 "candidate": [e.as_dict() for e in self.candidate]}
 
@@ -254,18 +269,29 @@ def propose(parameter: MetaParameter, new_value: float, rationale: str = "",
 
 def run_episodes(proposal: MetaProposal, seeds: Sequence[int],
                  runner: EpisodeRunner) -> None:
-    """Run both policies on the same seeds.
+    """Run both policies on the same seeds, and count whether the
+    parameter was ever consulted.
 
     The same seeds, so the comparison is paired: episode-to-episode
     variance is enormous -- one lucky gap found early changes a whole
     run -- and unpaired samples would need far more episodes than anyone
     can afford to see an effect through it.
+
+    The activation count is not decoration. Without it an episode that
+    never reached the code reading the parameter is indistinguishable
+    from an episode where the parameter made no difference: identical
+    numbers, opposite meanings. See `judge`, which refuses the first.
     """
     base_policy = {proposal.parameter.name: proposal.parameter.value}
     new_policy = {proposal.parameter.name: proposal.new_value}
-    for seed in seeds:
-        proposal.baseline.append(runner(seed, base_policy))
-        proposal.candidate.append(runner(seed, new_policy))
+    with instrument.watching() as used:
+        for seed in seeds:
+            proposal.baseline.append(runner(seed, base_policy))
+            proposal.candidate.append(runner(seed, new_policy))
+    proposal.parameter_reads = used.get(proposal.parameter.name, 0)
+    proposal.decisions_differed = sum(
+        1 for b, c in zip(proposal.baseline, proposal.candidate)
+        if tuple(b.decisions) != tuple(c.decisions))
 
 
 def paired_outcomes(proposal: MetaProposal, bar: float = EPISODE_BAR
@@ -291,6 +317,10 @@ def judge(proposal: MetaProposal, bar: float = EPISODE_BAR,
     sample-size gate applies to episodes, which is what makes this layer
     honestly expensive rather than quietly cheap.
     """
+    refusal = _not_a_result(proposal)
+    if refusal is not None:
+        return refusal
+
     outcomes = paired_outcomes(proposal, bar)
     claim = Claim(claim_id=proposal.proposal_id, kind="genome",
                   description=f"мета: {proposal.describe()}")
@@ -300,11 +330,16 @@ def judge(proposal: MetaProposal, bar: float = EPISODE_BAR,
         candidate_hidden=hidden[1] if hidden else None,
         counterexamples_sought=counterexamples[0],
         counterexamples_found=counterexamples[1],
-        cost_calls=sum(e.calls_used for e in proposal.baseline + proposal.candidate))
+        cost=CostVector(
+            calls=sum(e.calls_used for e in proposal.baseline + proposal.candidate),
+            unmeasured_token_calls=sum(e.calls_used for e in
+                                       proposal.baseline + proposal.candidate)))
 
     with transaction.TransactionScope(
             proposal.proposal_id, "meta", proposal.describe()[:120]) as txn:
         txn.step(transaction.MEASURED, episodes=len(outcomes), bar=bar,
+                 parameter_reads=proposal.parameter_reads,
+                 decisions_differed=proposal.decisions_differed,
                  baseline_value=round(_mean(proposal.baseline), 4),
                  candidate_value=round(_mean(proposal.candidate), 4))
         verdict = gates.judge(claim, evidence)
@@ -313,6 +348,54 @@ def judge(proposal: MetaProposal, bar: float = EPISODE_BAR,
         proposal.verdict = verdict.as_dict()
         txn.commit(result=proposal.status)
     return verdict
+
+
+def _not_a_result(proposal: MetaProposal) -> Optional[Any]:
+    """Refuse to rule when the episodes cannot say anything about the
+    parameter. Returns a Verdict to hand back, or None to proceed.
+
+    Two distinct ways an experiment can produce clean-looking numbers
+    about nothing, and the second was found by fixing the first.
+
+    **Never read.** The code consulting the parameter did not run. The
+    arms are identical because nothing varied.
+
+    **Read and discarded.** The parameter was consulted -- a live run
+    counted 48 reads -- and every decision came out the same anyway,
+    because the options it ranks lost to a category of options that is
+    not ranked by it at all. Identical decisions on the same seed give
+    identical outcomes necessarily, so "no effect" is vacuous rather
+    than measured.
+
+    Neither is recorded as REFUTED. A refutation goes into the record as
+    evidence about the parameter, and there is none; worse, it would stop
+    the parameter being tried again on the strength of an experiment that
+    never tested it.
+    """
+    if not proposal.baseline:
+        return None
+    episodes = len(proposal.baseline)
+
+    if proposal.parameter_reads == 0:
+        reason = (f"{proposal.parameter.name} ни разу не прочитан за "
+                  f"{episodes} эпизодов — измерялось что-то другое")
+        gate = "parameter_not_exercised"
+    elif (proposal.decisions_differed == 0
+          and any(e.decisions for e in proposal.baseline)):
+        reason = (f"{proposal.parameter.name} прочитан "
+                  f"{proposal.parameter_reads} раз, но ни на одном сиде не изменил "
+                  f"ни одного решения — его ответ отбрасывается")
+        gate = "parameter_had_no_influence"
+    else:
+        return None
+
+    proposal.status = "NOT_EXERCISED"
+    measurements = {"parameter_reads": proposal.parameter_reads,
+                    "decisions_differed": proposal.decisions_differed}
+    proposal.verdict = {"accepted": False, "failed_gates": [gate],
+                        "reason": reason, "measurements": measurements}
+    return gates.Verdict(accepted=False, reason=reason, failed_gates=(gate,),
+                         measurements=measurements)
 
 
 def _mean(episodes: Sequence[EpisodeResult]) -> float:
@@ -333,7 +416,54 @@ def yield_report(proposal: MetaProposal) -> Dict[str, Any]:
         "candidate_accepted": sum(e.accepted_claims for e in proposal.candidate),
         "calls": sum(e.calls_used for e in proposal.baseline + proposal.candidate),
         "episodes": len(proposal.baseline),
+        "parameter_reads": proposal.parameter_reads,
+        "decisions_differed": proposal.decisions_differed,
     }
+
+
+#: Where the modules keep the weights this layer tunes. The write path
+#: has to know it, because until phase 16 there was none: an accepted
+#: meta-change updated a field on the MetaEvolution object and nothing
+#: else, so the loop was open at the far end and "accepted" changed no
+#: behaviour at all. The live script papered over it by patching
+#: PRIORITY_WEIGHTS itself, which is how an architectural gap turns into
+#: "everything works".
+_WEIGHT_TABLES = {
+    "gap": ("mana.cognition.gaps", "PRIORITY_WEIGHTS"),
+    "experiment": ("mana.cognition.experiments", "VALUE_WEIGHTS"),
+    "novelty": ("mana.cognition.novelty", "CHANNEL_WEIGHTS"),
+}
+
+
+def in_force(parameter: MetaParameter) -> float:
+    """The value the module is actually using right now."""
+    import importlib
+    prefix = parameter.name.split(".", 1)[0]
+    module_name, table_name = _WEIGHT_TABLES[prefix]
+    table = getattr(importlib.import_module(module_name), table_name)
+    return float(table[parameter.key])
+
+
+def put_in_force(parameter: MetaParameter, value: float) -> None:
+    """Write an accepted value where the search will actually read it.
+
+    Goes through `check_tunable` first, and that is not belt-and-braces:
+    `propose` guards what may be *proposed*, and without the same guard
+    here the write path would be a way around it. One entrance, one
+    check.
+
+    Mutates the module's dict in place rather than rebinding the name,
+    because callers that did `from .gaps import PRIORITY_WEIGHTS` hold
+    the old object and would silently keep the old policy.
+    """
+    check_tunable(parameter)
+    import importlib
+    prefix = parameter.name.split(".", 1)[0]
+    module_name, table_name = _WEIGHT_TABLES[prefix]
+    table = getattr(importlib.import_module(module_name), table_name)
+    if parameter.key not in table:
+        raise MetaError(f"{parameter.name}: в {table_name} нет ключа {parameter.key!r}")
+    table[parameter.key] = parameter.clamped(value)
 
 
 class MetaEvolution:
@@ -362,8 +492,12 @@ class MetaEvolution:
         if not verdict.accepted:
             return False
         self.parameters = dict(self.parameters)
-        self.parameters[proposal.parameter.name] = MetaParameter(
-            **{**proposal.parameter.as_dict(), "value": proposal.new_value})
+        adopted = MetaParameter(**{**proposal.parameter.as_dict(),
+                                   "value": proposal.new_value})
+        self.parameters[proposal.parameter.name] = adopted
+        # The far end of the loop. Without this the object's opinion
+        # changes and the search keeps reading the old number.
+        put_in_force(adopted, proposal.new_value)
         return True
 
     def rollback(self, proposal: MetaProposal) -> None:
@@ -375,11 +509,81 @@ class MetaEvolution:
         """
         self.parameters = dict(self.parameters)
         self.parameters[proposal.parameter.name] = proposal.parameter
+        put_in_force(proposal.parameter, proposal.parameter.value)
         proposal.status = "ROLLED_BACK"
+
+    # ---------- persistence ----------
+
+    def save(self, path: Any) -> None:
+        """Write the policy in force so it survives a restart.
+
+        Only the values -- bounds, modules and keys are declared in code
+        and must not be restorable from a file, or a hand-edited file
+        could widen a bound or point a parameter at a table this layer is
+        not allowed to write.
+        """
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"policy": self.policy(),
+                   "accepted": [p.parameter.name for p in self.history
+                                if p.status == "ACCEPTED"]}
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
+                       encoding="utf-8")
+        tmp.replace(path)
+
+    def load(self, path: Any) -> Dict[str, float]:
+        """Restore a saved policy and put it back in force.
+
+        An unknown name is ignored rather than raising: a policy file
+        written by a later version must not stop an earlier one from
+        starting. A known name still goes through `put_in_force`, so a
+        file cannot smuggle in a parameter this layer may not tune.
+        """
+        path = Path(path)
+        if not path.exists():
+            return {}
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        restored: Dict[str, float] = {}
+        for name, value in (payload.get("policy") or {}).items():
+            parameter = self.parameters.get(name)
+            if parameter is None:
+                continue
+            try:
+                put_in_force(parameter, float(value))
+            except (MetaError, KeyError, TypeError, ValueError):
+                continue
+            self.parameters = dict(self.parameters)
+            self.parameters[name] = MetaParameter(
+                **{**parameter.as_dict(), "value": parameter.clamped(float(value))})
+            restored[name] = self.parameters[name].value
+        return restored
+
+    def verify_in_force(self) -> Dict[str, Any]:
+        """Does the search actually read what this object believes?
+
+        The check a restart has to pass. "Accepted" means nothing if the
+        module is still using the old number, and that was the state of
+        this layer from phase 13 until now.
+        """
+        mismatches = {}
+        for name, parameter in self.parameters.items():
+            try:
+                actual = in_force(parameter)
+            except Exception as exc:                   # pragma: no cover
+                mismatches[name] = f"не прочитан: {exc}"
+                continue
+            if abs(actual - parameter.value) > 1e-9:
+                mismatches[name] = {"объект": parameter.value, "модуль": actual}
+        return {"ok": not mismatches, "mismatches": mismatches}
 
     def report(self) -> Dict[str, Any]:
         return {
             "policy": {k: round(v, 4) for k, v in self.policy().items()},
+            "in_force": self.verify_in_force(),
             "changes": [p.as_dict() for p in self.history],
             "accepted": [p.parameter.name for p in self.history
                          if p.status == "ACCEPTED"],

@@ -261,3 +261,144 @@ def test_the_measurement_is_large_enough_to_measure_with():
     computed z-scores over it."""
     assert len(splits.train_tasks()) >= 100
     assert len(splits.dev_tasks()) >= 50
+
+
+def test_a_refused_answer_is_not_free_on_the_hidden_set(isolated_config):
+    """`accuracy` excludes ungradable answers so a missing sandbox does
+    not read as a capability deficit -- right for diagnosis, but it makes
+    refusing free. `strict_accuracy` counts everything attempted, which
+    is what a comparison between two systems needs."""
+    from mana.core import splits
+
+    def refuses_half(public):
+        return "42" if public["domain"] == "arithmetic" else ""
+
+    result = splits.hidden_score(refuses_half, per_domain=3, label="test-strict")
+    assert result.attempted > result.graded, "the refusals must be counted somewhere"
+    assert result.strict_accuracy <= result.accuracy
+    assert set(result.strict_by_domain) == set(result.by_domain)
+
+
+def test_strict_and_lenient_agree_when_nothing_was_refused(isolated_config):
+    from mana.core import splits
+    result = splits.hidden_score(lambda public: "0", per_domain=2,
+                                 label="test-nothing-refused")
+    if result.ungradable == 0:
+        assert result.strict_accuracy == result.accuracy
+
+
+# ---------------------------------------------------------------------------
+# versioned holdouts, and independence from the generator
+# ---------------------------------------------------------------------------
+
+def test_the_historical_holdout_is_unchanged(isolated_config):
+    """Every hidden score recorded before phase 18 was measured against
+    exactly this. Extending it in place would retroactively claim those
+    numbers had covered five domains."""
+    from mana.core import splits
+    assert splits.HOLDOUT_V0.domains == splits.DEVELOPMENT_DOMAINS
+    assert splits.HOLDOUT_V0.surface == "canonical"
+    assert splits.HOLDOUT_V0.seed == 3003
+
+
+def test_the_full_holdout_covers_every_domain_and_rewords_them(isolated_config):
+    from mana.core import splits, tasks
+    assert set(splits.HOLDOUT_V1.domains) == set(tasks.DOMAINS)
+    assert splits.HOLDOUT_V1.surface == "variant"
+
+
+def test_a_hidden_result_carries_which_holdout_produced_it(isolated_config):
+    """A hidden score without its version is a number whose meaning
+    depends on when it was taken."""
+    from mana.core import splits
+    result = splits.hidden_score(lambda public: "0", per_domain=1,
+                                 label="test-version", holdout=splits.HOLDOUT_V1)
+    assert result.holdout == "v1"
+    assert result.as_dict()["holdout"] == "v1"
+
+
+def test_a_variant_asks_the_same_question_with_different_words(isolated_config):
+    """Same answer, same difficulty -- only the wording differs, which is
+    what makes it a fair test rather than a harder one."""
+    from mana.core import tasks
+    for domain in tasks.DOMAINS:
+        canonical = tasks.generate(domain, 3, seed=11)
+        variant = tasks.generate(domain, 3, seed=11, surface=tasks.VARIANT)
+        for a, b in zip(canonical, variant):
+            assert a.answer == b.answer
+            assert a.difficulty == b.difficulty
+            if domain != "code":
+                assert a.prompt != b.prompt, f"{domain} was not reworded"
+
+
+def test_rewording_separates_solving_from_pattern_matching(isolated_config):
+    """The measurement this whole version exists for.
+
+    A holdout drawn from the same generator AND the same wording as the
+    training tasks is not independent of a solver written against that
+    generator. Measured: the arithmetic brain is unaffected by rewording
+    because it parses an expression; the ordering solver scores zero
+    because it matched one phrase.
+    """
+    from mana import substrates
+    from mana.core import oracle, tasks
+
+    def score(brain, domain, surface):
+        right = 0
+        for task in tasks.generate(domain, 20, seed=77, surface=surface):
+            try:
+                answer = substrates.call(brain, task.prompt)
+            except substrates.BrainRefusal:
+                continue
+            right += int(oracle.grade(task, answer).correct)
+        return right
+
+    assert score("arithmetic", "arithmetic", tasks.CANONICAL) == 20
+    assert score("arithmetic", "arithmetic", tasks.VARIANT) == 20, \
+        "the arithmetic brain parses structure and must survive rewording"
+    assert score("order-logic", "logic", tasks.CANONICAL) > 0
+    assert score("order-logic", "logic", tasks.VARIANT) == 0, \
+        "the ordering solver is matched to one phrasing; if this ever passes, " \
+        "check it generalised rather than that the variant was weakened"
+
+
+def test_a_reworded_solver_refuses_rather_than_guesses(isolated_config):
+    """The property that makes the failure safe: zero wrong answers even
+    when the wording is unrecognised."""
+    from mana import substrates
+    from mana.core import oracle, tasks
+    wrong = 0
+    for task in tasks.generate("logic", 20, seed=77, surface=tasks.VARIANT):
+        try:
+            answer = substrates.call("order-logic", task.prompt)
+        except substrates.BrainRefusal:
+            continue
+        wrong += int(not oracle.grade(task, answer).correct)
+    assert wrong == 0
+
+
+# ---------------------------------------------------------------------------
+# how many trials a domain needs
+# ---------------------------------------------------------------------------
+
+def test_the_sample_size_follows_from_the_effect_not_the_other_way():
+    """The significance bar does not move. If a 0.13 effect needs more
+    pairs, the answer is more pairs -- which is what a live sequence
+    experiment actually needed after 30 refused it for want of
+    resolution."""
+    from mana.core import gates
+    assert gates.required_trials(0.20) == gates.MIN_PAIRED_TRIALS
+    assert gates.required_trials(0.13) > gates.MIN_PAIRED_TRIALS
+    assert gates.required_trials(0.05) > gates.required_trials(0.13)
+
+
+def test_per_domain_counts_are_allowed_to_differ(isolated_config):
+    """One number for every domain is the wrong shape: how many trials a
+    domain needs follows from the smallest effect it must be able to
+    show."""
+    from mana.core import splits
+    result = splits.hidden_score(lambda public: "0", per_domain=1,
+                                 per_domain_counts={"logic": 4, "code": 0},
+                                 label="test-per-domain", holdout=splits.HOLDOUT_V1)
+    assert "code" not in result.by_domain
+    assert result.attempted >= 4

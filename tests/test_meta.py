@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 
+from mana.core import instrument
 from mana.cognition import meta
 from mana.cognition.meta import (EPISODE_BAR, EpisodeResult, MAX_CONSECUTIVE,
                                  MetaError, MetaEvolution, MetaParameter,
@@ -24,8 +25,16 @@ def parameter(name="gap.cost", module="mana.cognition.gaps", key="cost",
 
 
 def episodes(seed, policy):
-    """A world where a higher weight genuinely searches better."""
+    """A world where a higher weight genuinely searches better.
+
+    The `record_read` is not decoration: a real episode reads the weight
+    inside `gaps._build`, and without the equivalent here the activation
+    guard correctly refuses to rule -- which is exactly what it did when
+    it was added, to every test in this file at once.
+    """
     weight = list(policy.values())[0]
+    for name in policy:
+        instrument.record_read(name)
     return EpisodeResult(seed=seed, policy_id=str(weight),
                          resolved=0.3 + 0.5 * weight + (seed % 3) * 0.02,
                          capability_gain=0.0, calls_used=200,
@@ -33,8 +42,16 @@ def episodes(seed, policy):
 
 
 def flat_episodes(seed, policy):
-    """A world where the parameter changes nothing."""
+    """A world where the parameter is read and changes nothing."""
+    for name in policy:
+        instrument.record_read(name)
     return EpisodeResult(seed=seed, policy_id="flat", resolved=0.6,
+                         capability_gain=0.0, calls_used=200, accepted_claims=1)
+
+
+def blind_episodes(seed, policy):
+    """A world where the parameter is never consulted at all."""
+    return EpisodeResult(seed=seed, policy_id="blind", resolved=0.9,
                          capability_gain=0.0, calls_used=200, accepted_claims=1)
 
 
@@ -145,6 +162,60 @@ def test_judging_leaves_a_finished_transaction(isolated_config):
 
 
 # ---------------------------------------------------------------------------
+# guard 2b: an experiment that never touched the parameter is not a result
+# ---------------------------------------------------------------------------
+
+def test_an_episode_that_never_reads_the_parameter_is_refused(isolated_config):
+    """The trap a live run walked into: two policies scored an identical
+    1.398 and the natural reading was "this parameter does not matter".
+    The true reading was that the code reading it never ran.
+
+    Both readings produce the same numbers, so no statistic separates
+    them. Only a counter at the point of use does.
+    """
+    p = propose(parameter(value=0.2), 1.2, "должен помочь")
+    run_episodes(p, SEEDS, blind_episodes)
+    verdict = judge(p, hidden=(0.55, 0.70), counterexamples=(4, 0))
+    assert not verdict.accepted
+    assert verdict.failed_gates == ("parameter_not_exercised",)
+    assert p.parameter_reads == 0
+
+
+def test_not_exercised_is_recorded_apart_from_refuted(isolated_config):
+    """A refusal to rule must not go into the record as evidence against
+    the parameter -- that would stop it being tried again on the strength
+    of an experiment that never touched it."""
+    p = propose(parameter(value=0.2), 1.2)
+    run_episodes(p, SEEDS, blind_episodes)
+    judge(p, hidden=(0.55, 0.70), counterexamples=(4, 0))
+    assert p.status == "NOT_EXERCISED"
+    assert p.status != "REJECTED"
+
+
+def test_a_read_parameter_is_counted_and_ruled_on(isolated_config):
+    p = propose(parameter(value=0.2), 1.2)
+    run_episodes(p, SEEDS, episodes)
+    assert p.parameter_reads >= len(SEEDS) * 2
+    verdict = judge(p, hidden=(0.55, 0.70), counterexamples=(4, 0))
+    assert "parameter_not_exercised" not in verdict.failed_gates
+
+
+def test_the_real_gap_ranking_reads_its_weights(isolated_config):
+    """The counter has to fire from the production path, not only from a
+    test double -- otherwise it proves nothing about real episodes."""
+    from mana.cognition import gaps
+    from mana.cognition.self_model import Observation, SelfModel
+    model = SelfModel()
+    for i in range(24):
+        model.record(Observation(f"t{i}", "arithmetic", 0.8, False,
+                                 reason="wrong", calls=1))
+    with instrument.watching() as used:
+        assert gaps.detect(model)
+    assert used.get("gap.severity", 0) > 0
+    assert used.get("gap.cost", 0) > 0
+
+
+# ---------------------------------------------------------------------------
 # guard 3: yield is what the search was for, not how much it accepted
 # ---------------------------------------------------------------------------
 
@@ -152,6 +223,8 @@ def test_a_policy_that_accepts_more_but_resolves_less_does_not_win(isolated_conf
     """Counting accepted claims rewards a policy proposing safe trivia:
     twenty tiny true claims beat one real mechanism on that scale."""
     def trivia(seed, policy):
+        for name in policy:
+            instrument.record_read(name)
         prolific = list(policy.values())[0] > 0.5
         return EpisodeResult(seed=seed, policy_id="x",
                              resolved=0.2 if prolific else 0.9,
@@ -323,3 +396,147 @@ def test_the_cost_of_a_meta_conclusion_is_reported_honestly(isolated_config):
     report = yield_report(p)
     assert report["episodes"] == len(SEEDS)
     assert report["calls"] == 2 * len(SEEDS) * 200
+
+
+# ---------------------------------------------------------------------------
+# guard 2c: read is necessary, not sufficient
+# ---------------------------------------------------------------------------
+
+def decided(same: bool):
+    """Episodes that record what they chose. `same` makes both arms
+    choose identically however the weight is set."""
+    def runner(seed, policy):
+        weight = list(policy.values())[0]
+        for name in policy:
+            instrument.record_read(name)
+        picks = ("measure-a", "measure-b") if same else (
+            ("measure-a",) if weight < 0.5 else ("experiment-x",))
+        return EpisodeResult(seed=seed, policy_id=str(weight), resolved=0.9,
+                             capability_gain=0.0, calls_used=200,
+                             accepted_claims=1, decisions=picks)
+    return runner
+
+
+def test_a_parameter_read_and_discarded_is_still_not_a_result(isolated_config):
+    """Found by fixing the previous guard. A live run counted 48 reads of
+    gap.cost and both arms still scored an identical 1.398: the options
+    it ranks lost to a category of options not ranked by it at all.
+
+    Identical decisions on the same seed give identical outcomes
+    necessarily, so "no effect" there is vacuous rather than measured.
+    """
+    p = propose(parameter(value=0.2), 1.2)
+    run_episodes(p, SEEDS, decided(same=True))
+    verdict = judge(p, hidden=(0.55, 0.70), counterexamples=(4, 0))
+    assert p.parameter_reads > 0, "the parameter WAS consulted"
+    assert p.decisions_differed == 0
+    assert verdict.failed_gates == ("parameter_had_no_influence",)
+
+
+def test_a_parameter_that_changed_a_decision_is_ruled_on_normally(isolated_config):
+    p = propose(parameter(value=0.2), 1.2)
+    run_episodes(p, SEEDS, decided(same=False))
+    verdict = judge(p, hidden=(0.55, 0.70), counterexamples=(4, 0))
+    assert p.decisions_differed == len(SEEDS)
+    assert "parameter_had_no_influence" not in verdict.failed_gates
+
+
+def test_without_recorded_decisions_the_influence_check_stays_silent(isolated_config):
+    """It cannot tell, so it does not claim to. A runner that reports no
+    decisions gets the ordinary verdict, and the honest cost of that is
+    that this particular trap goes undetected for it."""
+    p = propose(parameter(value=0.2), 1.2)
+    run_episodes(p, SEEDS, episodes)
+    verdict = judge(p, hidden=(0.55, 0.70), counterexamples=(4, 0))
+    assert p.decisions_differed == 0
+    assert "parameter_had_no_influence" not in verdict.failed_gates
+    assert verdict.accepted
+
+
+# ---------------------------------------------------------------------------
+# the far end of the loop
+# ---------------------------------------------------------------------------
+
+def test_an_accepted_change_is_written_where_the_search_reads_it(isolated_config):
+    """From phase 13 until now an accepted meta-change updated a field on
+    the MetaEvolution object and nothing else. The search kept reading
+    the old number, and the live script papered over it by patching the
+    module itself -- which is how an architectural gap becomes "it
+    works"."""
+    from mana.cognition import gaps
+    m = MetaEvolution()
+    before = gaps.PRIORITY_WEIGHTS["cost"]
+    p = m.propose("gap.cost", before + 0.9, "шире поиск")
+    assert m.evaluate(p, SEEDS, episodes, hidden=(0.55, 0.70), counterexamples=(4, 0))
+    assert gaps.PRIORITY_WEIGHTS["cost"] != before
+    assert gaps.PRIORITY_WEIGHTS["cost"] == m.policy()["gap.cost"]
+
+
+def test_a_rollback_puts_the_module_back_too(isolated_config):
+    from mana.cognition import gaps
+    m = MetaEvolution()
+    before = gaps.PRIORITY_WEIGHTS["cost"]
+    p = m.propose("gap.cost", before + 0.9, "шире поиск")
+    m.evaluate(p, SEEDS, episodes, hidden=(0.55, 0.70), counterexamples=(4, 0))
+    m.rollback(p)
+    assert gaps.PRIORITY_WEIGHTS["cost"] == before
+
+
+def test_the_write_path_goes_through_the_same_guard(isolated_config):
+    """`propose` guards what may be proposed. Without the same check on
+    the write path, applying would be a way around it."""
+    from mana.cognition.meta import put_in_force
+    with pytest.raises(MetaError):
+        put_in_force(parameter(name="gates.alpha", module="mana.core.gates",
+                               key="ALPHA"), 0.99)
+
+
+def test_the_policy_survives_a_restart(isolated_config, tmp_path):
+    """"Accepted" means nothing if the next process reads the old number."""
+    from mana.cognition import gaps
+    path = tmp_path / "policy.json"
+    m = MetaEvolution()
+    p = m.propose("gap.cost", m.policy()["gap.cost"] + 0.9, "шире поиск")
+    m.evaluate(p, SEEDS, episodes, hidden=(0.55, 0.70), counterexamples=(4, 0))
+    adopted = m.policy()["gap.cost"]
+    m.save(path)
+
+    # A fresh process: the module is back to its declared default.
+    gaps.PRIORITY_WEIGHTS["cost"] = -0.4
+    restarted = MetaEvolution()
+    assert restarted.policy()["gap.cost"] == -0.4
+    restored = restarted.load(path)
+    assert restored["gap.cost"] == adopted
+    assert gaps.PRIORITY_WEIGHTS["cost"] == adopted
+
+
+def test_verify_in_force_catches_a_module_that_disagrees(isolated_config):
+    from mana.cognition import gaps
+    m = MetaEvolution()
+    assert m.verify_in_force()["ok"] is True
+    gaps.PRIORITY_WEIGHTS["cost"] = 0.777
+    report = m.verify_in_force()
+    assert report["ok"] is False
+    assert "gap.cost" in report["mismatches"]
+
+
+def test_a_policy_file_cannot_smuggle_in_a_forbidden_parameter(isolated_config, tmp_path):
+    """A hand-edited file must not be a way past check_tunable."""
+    import json
+    path = tmp_path / "policy.json"
+    path.write_text(json.dumps({"policy": {"gates.alpha": 0.99,
+                                           "unknown.thing": 1.0}}),
+                    encoding="utf-8")
+    restored = MetaEvolution().load(path)
+    assert restored == {}
+
+
+def test_a_policy_file_from_a_later_version_does_not_stop_startup(isolated_config,
+                                                                 tmp_path):
+    import json
+    path = tmp_path / "policy.json"
+    path.write_text(json.dumps({"policy": {"gap.cost": -0.5,
+                                           "future.parameter": 3.0}}),
+                    encoding="utf-8")
+    restored = MetaEvolution().load(path)
+    assert restored == {"gap.cost": -0.5}

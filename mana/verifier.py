@@ -33,7 +33,7 @@ from .config import Config
 from .paths import sandbox_python, sandbox_python_available
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "2.0"
+__version__ = "2.2"
 
 
 # ---------------------------------------------------------------------------
@@ -289,22 +289,85 @@ class LocalVerifier:
             forms.append(str(int(value)))
         return [f for f in forms if f]
 
+    #: Characters an arithmetic expression may be built from. Anything
+    #: else -- a letter, a colon, a comma -- ends the expression.
+    _EXPR_CHARS = re.compile(r"[0-9.\s+\-*/%()]+")
+    #: A run must contain a real operator, or "12" alone would parse as an
+    #: expression and every task with a number in its wording would be
+    #: claimed by the arithmetic path.
+    _HAS_OPERATOR = re.compile(r"[+\-*/%]")
+
+    @classmethod
+    def extract_expression(cls, task: str) -> str:
+        r"""The complete arithmetic expression in this task, or "".
+
+        Returns the LONGEST balanced run, and refuses a truncated one --
+        which is the whole point of the rewrite. The previous version
+        matched `[0-9.\s+\-*/%()]+` only after a keyword, and the colon in
+        "Вычисли: (987 + 33) * 11" stopped it dead, so it fell through to
+        a pattern with no parentheses at all and captured `987 + 33`.
+
+        That produced an exact answer to a fragment: 1020 instead of
+        11220, with no uncertainty attached anywhere. And because
+        `verify` uses the same extraction, the arithmetic verifier had
+        the truth inverted on every parenthesised expression -- the
+        correct answer failed verification and the wrong one was stamped
+        INDEPENDENTLY_VERIFIED. Found by making the parser answer
+        questions instead of only checking them, which exposed it to
+        grading against ground truth.
+
+        An unbalanced run is refused rather than repaired: "(2 + 3" could
+        be a truncated expression or a typo, and guessing which one turns
+        a parse failure into a wrong answer.
+        """
+        text = cls._normalize_word_arithmetic((task or "").strip().lower())
+        best = ""
+        for match in cls._EXPR_CHARS.finditer(text):
+            candidate = match.group(0).strip()
+            if not cls._HAS_OPERATOR.search(candidate):
+                continue
+            if candidate.count("(") != candidate.count(")"):
+                continue
+            if len(candidate) > len(best):
+                best = candidate
+        return best
+
+    @classmethod
+    def evaluate_expression(cls, expr: str) -> Dict[str, Any]:
+        """Evaluate without an instance, for callers that have no config.
+
+        Same safe node set as `verify_expression`; that one additionally
+        keeps per-instance statistics, which a stateless caller neither
+        has nor needs.
+        """
+        expr = (expr or "").strip()
+        try:
+            tree = ast.parse(expr, mode="eval")
+            value = cls._safe_math_node(tree)
+            ok = True if isinstance(value, int) else math.isfinite(value)
+            return {"kind": "arithmetic", "ok": ok, "value": value,
+                    "expression": expr, "executor": "ast"}
+        except Exception as exc:
+            return {"kind": "arithmetic", "ok": False, "expression": expr,
+                    "error": f"{type(exc).__name__}: {exc}", "executor": "ast"}
+
     def verify(self, task: str, answer: str, category: str) -> Dict[str, Any]:
-        """Verify simple claims. It intentionally refuses to execute arbitrary answer text."""
-        t=(task or "").strip().lower(); a=(answer or "").strip()
-        t=self._normalize_word_arithmetic(t)
-        # Arithmetic prompts: evaluate an expression found in the task.
-        patterns=[r"(?:сколько|посчитай|вычисл(?:и|ить)|calculate)\s+(?:будет\s+)?([0-9\.\s\+\-\*/%\(\)]+)",
-                  r"([0-9]+\s*(?:\*\*|[\*\+\-/])\s*[0-9]+(?:\s*(?:\*\*|[\*\+\-/])\s*[0-9]+)*)"]
-        for pat in patterns:
-            m=re.search(pat,t,re.I)
-            if m:
-                vr=self.verify_expression(m.group(1))
-                if vr.get("ok"):
-                    compact = re.sub(r"\s+", "", a.lower())
-                    expected_tokens = LocalVerifier._expected_forms(vr["value"])
-                    answer_mentions=any(x and x in compact for x in expected_tokens)
-                    vr["answer_mentions_value"]=answer_mentions; vr["verified"]=answer_mentions
-                    return vr
+        """Verify simple claims. It intentionally refuses to execute arbitrary answer text.
+
+        Uses `extract_expression` rather than its own patterns. It used to
+        carry a second copy, and the copies disagreed: the one here could
+        not see parentheses, so it verified a fragment and reported the
+        wrong number as the truth.
+        """
+        a=(answer or "").strip()
+        expression = self.extract_expression(task)
+        if expression:
+            vr=self.verify_expression(expression)
+            if vr.get("ok"):
+                compact = re.sub(r"\s+", "", a.lower())
+                expected_tokens = LocalVerifier._expected_forms(vr["value"])
+                answer_mentions=any(x and x in compact for x in expected_tokens)
+                vr["answer_mentions_value"]=answer_mentions; vr["verified"]=answer_mentions
                 return vr
+            return vr
         return {"kind":"none","verified":False,"available":self.config.local_exec_enabled}

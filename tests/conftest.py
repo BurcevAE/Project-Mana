@@ -60,6 +60,26 @@ def _no_ambient_api_keys(monkeypatch, request):
         monkeypatch.delenv(name, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _restore_search_weights():
+    """Undo any change a test makes to the tuneable search weights.
+
+    Since phase 16 an accepted meta-change writes into the module dicts
+    the search actually reads -- which is the point, and which makes them
+    global mutable state that leaks from one test into the next. The same
+    class of problem as ambient API keys: a suite whose result depends on
+    what ran before it cannot tell a regression from an ordering.
+    """
+    from mana.cognition import experiments, gaps, novelty
+    tables = (gaps.PRIORITY_WEIGHTS, experiments.VALUE_WEIGHTS,
+              novelty.CHANNEL_WEIGHTS)
+    saved = [dict(t) for t in tables]
+    yield
+    for table, original in zip(tables, saved):
+        table.clear()
+        table.update(original)
+
+
 @pytest.fixture
 def isolated_config(tmp_path: Path) -> Config:
     """A Config with every filesystem path redirected under tmp_path, LLM

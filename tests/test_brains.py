@@ -117,14 +117,22 @@ def test_an_exported_key_cannot_change_what_a_test_sees(isolated_config, monkeyp
                     "OPENROUTER_API_KEY": None},         "conftest._no_ambient_api_keys must hide every provider key"
 
 
-def test_the_real_catalog_finds_no_brains_in_a_clean_environment(isolated_config):
+def test_the_real_catalog_finds_no_language_model_in_a_clean_environment(isolated_config):
     """The four tests that broke did so because the real catalog picked
-    up a real key. With the environment cleared, only keyless brains
-    remain -- which is what an offline test is entitled to assume."""
+    up a real key. With the environment cleared, no LANGUAGE MODEL
+    remains -- which is what an offline test is entitled to assume.
+
+    Not "no brains": since phase 15 the catalog also contains algorithmic
+    brains, which need no key, no network and no `enable_llm`, and are
+    supposed to be there. The property being guarded was always about
+    ambient keys reviving a model, and that is what it now says.
+    """
     from mana.brains import BrainPool
     isolated_config.enable_llm = False
     pool = BrainPool(isolated_config, transport=lambda **kw: "ok")
-    assert pool.available() == []
+    assert pool.language_models() == []
+    assert set(pool.available()) == {"arithmetic", "code-exec", "sequence-solver",
+                                    "text-ops", "order-logic"}
 
 
 def test_a_brain_without_its_api_key_is_simply_absent(isolated_config, monkeypatch):

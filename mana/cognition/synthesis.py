@@ -44,6 +44,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from ..core import gates, transaction
+from ..core.cost import CostVector
 from ..core.gates import Claim, Evidence, PairedOutcome
 from . import genome as genome_mod
 from .experiments import Discovery, SUPPORTED
@@ -205,7 +206,7 @@ def confirm(proposal: CapabilityProposal, outcomes: Sequence[PairedOutcome],
             hidden: Optional[Tuple[float, float]] = None,
             transfer: Optional[Tuple[float, float]] = None,
             counterexamples: Tuple[int, int] = (0, 0),
-            cost_calls: int = 0) -> Any:
+            cost: Optional[CostVector] = None) -> Any:
     """Judge a *second* measurement, run for this proposal.
 
     The discovery that motivated the proposal cannot serve here: its
@@ -227,7 +228,7 @@ def confirm(proposal: CapabilityProposal, outcomes: Sequence[PairedOutcome],
         candidate_transfer=transfer[1] if transfer else None,
         counterexamples_sought=counterexamples[0],
         counterexamples_found=counterexamples[1],
-        cost_calls=cost_calls)
+        cost=cost or CostVector())
 
     with transaction.TransactionScope(
             proposal.proposal_id, "synthesis", proposal.describe()[:120]) as txn:

@@ -50,7 +50,7 @@ from .ir import (COSTS, TYPES, CognitiveOperator, CompositionError,
                  check_chain, compose, primitive_operators)
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "2.0"
+__version__ = "2.5"
 
 #: Names a genome may not define, because core already means something by
 #: them. Not a safety list -- a circularity list: a genome that could
@@ -65,6 +65,8 @@ RESERVED_NAMES = frozenset({
 #: proposal says which single thing failed -- the same "one mutation, one
 #: measurable effect" discipline the existing GA already follows.
 MUTATIONS = (
+    "create_brain",
+    "retire_brain",
     "add_operator", "remove_operator", "compose_operators", "split_operator",
     "merge_operators", "create_representation", "modify_representation",
     "create_program_template", "modify_learning_rule", "modify_selection_policy",
@@ -165,6 +167,42 @@ def baseline_templates() -> Dict[str, ProgramTemplate]:
 
 
 @dataclass(frozen=True)
+class BrainGene:
+    """A brain as an evolvable object, not a config entry.
+
+    Brains live in the genome rather than beside it so that lineage,
+    rollback and restart verification are the ones already built. A brain
+    kept outside would need a second implementation of all three, and the
+    first divergence between them would be a hole in acceptance.
+
+    Weights and code stay OUTSIDE, at `artifact_ref`. What is in the
+    genome is the claim: what this brain is, where it was proven, and
+    what it measured.
+    """
+    brain_id: str
+    substrate: str
+    #: The slices it was PROVEN on, in "domain/band" form. Never wider
+    #: than the evidence: a brain claiming a slice it was not tested on
+    #: is the overgeneralisation the synthesis layer already refuses.
+    applicability: Tuple[str, ...] = ()
+    architecture: str = ""
+    representation: str = ""
+    operators: Tuple[str, ...] = ()
+    learning_policy: str = "none"     # none | fit | finetune | lora | distill
+    verifier: str = ""
+    parent_ids: Tuple[str, ...] = ()
+    artifact_ref: str = ""
+    #: Measured, never declared. A cost model taken from a datasheet is a
+    #: hope; this is what the brain actually did.
+    measured_cost: Dict[str, Any] = field(default_factory=dict)
+    notes: str = ""
+
+    def signature(self) -> str:
+        material = f"{self.brain_id}|{self.substrate}|{'>'.join(self.operators)}"
+        return hashlib.sha256(material.encode()).hexdigest()[:16]
+
+
+@dataclass(frozen=True)
 class LearningRule:
     """How evidence is allowed to move a number.
 
@@ -205,6 +243,10 @@ class CognitiveGenome:
     operators: Dict[str, CognitiveOperator] = field(default_factory=primitive_operators)
     representations: Dict[str, Representation] = field(default_factory=baseline_representations)
     program_templates: Dict[str, ProgramTemplate] = field(default_factory=baseline_templates)
+    #: Brains this genome has adopted. Empty at the start: every brain in
+    #: the catalog is configuration until something proves it belongs
+    #: here, and the catalog is not evidence.
+    brains: Dict[str, BrainGene] = field(default_factory=dict)
     learning_rules: Dict[str, LearningRule] = field(default_factory=baseline_learning_rules)
     selection_policy: str = "capability_first"
     genome_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
@@ -363,6 +405,7 @@ def _child(parent: CognitiveGenome, mutation: str, **changes: Any) -> CognitiveG
     base = dict(operators=dict(parent.operators),
                 representations=dict(parent.representations),
                 program_templates=dict(parent.program_templates),
+                brains=dict(parent.brains),
                 learning_rules=dict(parent.learning_rules),
                 selection_policy=parent.selection_policy)
     base.update(changes)
@@ -533,6 +576,39 @@ def _m_create_template(parent: CognitiveGenome, p: Dict[str, Any]):
     return _child(parent, "create_program_template", program_templates=tmpls), True
 
 
+def _m_create_brain(parent: CognitiveGenome, p: Dict[str, Any]):
+    """Adopt a brain. Expands the space: a new mechanism is a new thing
+    the system can do, not a different weighting of what it already did."""
+    gene = p.get("gene")
+    if not isinstance(gene, BrainGene):
+        raise GenomeError("create_brain needs a BrainGene")
+    if gene.brain_id in parent.brains:
+        raise GenomeError(f"brain {gene.brain_id} already adopted")
+    if not gene.applicability:
+        # A brain with no proven slice claims everything by saying
+        # nothing, which is the widest claim there is.
+        raise GenomeError("create_brain needs the slices the brain was proven on")
+    brains = dict(parent.brains)
+    brains[gene.brain_id] = gene
+    return _child(parent, "create_brain", brains=brains), True
+
+
+def _m_retire_brain(parent: CognitiveGenome, p: Dict[str, Any]):
+    """Withdraw a brain that stopped earning its place.
+
+    Does not expand the space. Removal needs no evidence of its own, for
+    the reason a capability's retirement does not: requiring proof to
+    undo a change leaves it in force exactly when the proof for it has
+    evaporated.
+    """
+    brain_id = str(p.get("brain_id") or "")
+    if brain_id not in parent.brains:
+        raise GenomeError(f"unknown brain {brain_id!r}")
+    brains = dict(parent.brains)
+    brains.pop(brain_id)
+    return _child(parent, "retire_brain", brains=brains), False
+
+
 def _m_modify_rule(parent: CognitiveGenome, p: Dict[str, Any]):
     name = p.get("name")
     rule = parent.learning_rules.get(name)
@@ -555,6 +631,8 @@ def _m_modify_policy(parent: CognitiveGenome, p: Dict[str, Any]):
 
 
 _BUILDERS = {
+    "create_brain": _m_create_brain,
+    "retire_brain": _m_retire_brain,
     "add_operator": _m_add,
     "remove_operator": _m_remove,
     "compose_operators": _m_compose,

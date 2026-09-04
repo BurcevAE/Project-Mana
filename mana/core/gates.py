@@ -44,8 +44,10 @@ import math
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from .cost import CostVector
+
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "2.0"
+__version__ = "2.4"
 
 #: Minimum paired observations before any verdict is meaningful. Chosen
 #: against what the tests can actually deliver (100+ per split), not
@@ -109,8 +111,52 @@ class Evidence:
     candidate_transfer: Optional[float] = None
     counterexamples_sought: int = 0
     counterexamples_found: int = 0
-    cost_calls: int = 0
+    #: Hidden-set accuracy per domain, for both arms. The gate scopes the
+    #: confirmation to the domains the CLAIM asserts -- and it derives that
+    #: subset from the claim, never from the caller, because a caller
+    #: choosing which slice confirms it is choosing the benchmark it wins
+    #: on. Use `with_hidden` to fill these from two HiddenResults rather
+    #: than by hand.
+    baseline_hidden_by_domain: Dict[str, float] = field(default_factory=dict)
+    candidate_hidden_by_domain: Dict[str, float] = field(default_factory=dict)
+    #: What the evidence cost to produce. Recorded, never judged: no gate
+    #: reads this field, and a gate that started to would make acceptance
+    #: depend on how expensive the proof was, which is not a property of
+    #: whether the claim is true. It replaced a plain `cost_calls: int`
+    #: because a call to a 120B remote model and a call to a local 7B were
+    #: the same number, which made "cheaper" unmeasurable.
+    cost: CostVector = field(default_factory=CostVector)
     notes: Dict[str, Any] = field(default_factory=dict)
+
+    def with_hidden(self, baseline: Any, candidate: Any) -> "Evidence":
+        """Fill every hidden field from two evaluation results at once.
+
+        Takes the STRICT accuracies, where an ungradable answer counts as
+        not correct. Passing `.accuracy` by hand is how a refusing brain
+        ends up compared against a guessing model over different
+        denominators, and this exists so that is not the easy path.
+
+        Duck-typed rather than importing HiddenResult: the core's gate
+        module must not depend on the splits module, or the acceptance
+        rules would import the thing they are meant to judge.
+        """
+        self.baseline_hidden = float(getattr(baseline, "strict_accuracy", 0.0))
+        self.candidate_hidden = float(getattr(candidate, "strict_accuracy", 0.0))
+        self.baseline_hidden_by_domain = dict(
+            getattr(baseline, "strict_by_domain", {}) or {})
+        self.candidate_hidden_by_domain = dict(
+            getattr(candidate, "strict_by_domain", {}) or {})
+        return self
+
+
+#: A claim can end in three states, not two. "We tested it and it did
+#: not hold" and "we could not test it here" are different facts, and
+#: collapsing the second into the first writes a refutation into the
+#: record for a claim nothing measured -- which then stops it being
+#: retried on evidence that never existed.
+ACCEPTED = "ACCEPTED"
+REJECTED = "REJECTED"
+NOT_EVALUATED = "NOT_EVALUATED"
 
 
 @dataclass(frozen=True)
@@ -119,9 +165,23 @@ class Verdict:
     reason: str
     failed_gates: Tuple[str, ...] = ()
     measurements: Dict[str, Any] = field(default_factory=dict)
+    #: Which of the three. `accepted` stays a bool and stays false for
+    #: NOT_EVALUATED, because a caller that only asks "may I adopt this?"
+    #: must keep getting the safe answer without knowing about states.
+    status: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.status:
+            object.__setattr__(self, "status",
+                               ACCEPTED if self.accepted else REJECTED)
+
+    @property
+    def evaluated(self) -> bool:
+        return self.status != NOT_EVALUATED
 
     def as_dict(self) -> Dict[str, Any]:
-        return {"accepted": self.accepted, "reason": self.reason,
+        return {"accepted": self.accepted, "status": self.status,
+                "reason": self.reason,
                 "failed_gates": list(self.failed_gates),
                 "measurements": dict(self.measurements)}
 
@@ -175,6 +235,106 @@ def by_domain(outcomes: Sequence[PairedOutcome]) -> Dict[str, Dict[str, float]]:
 # the gate
 # ---------------------------------------------------------------------------
 
+#: How far a domain the claim does NOT assert may fall on the hidden set
+#: before the claim is refused. Non-zero because the holdout is small and
+#: a single task flipping in a three-task domain is noise, not a
+#: regression.
+HIDDEN_COLLAPSE_TOLERANCE = 0.15
+
+
+def _judge_hidden(claim: Claim, evidence: Evidence) -> Tuple[bool, Dict[str, Any]]:
+    """Does the holdout confirm THIS claim?
+
+    Until now it compared one number against another, averaged over every
+    development domain, however narrow the claim. A claim asserting
+    arithmetic was confirmed by an average dominated by domains it never
+    mentioned -- and a live run showed exactly that: two arms tied at 0.50
+    with opposite profiles (0.33/0.67 against 1.00/0.00), and the gate saw
+    "not worse" and passed.
+
+    Two checks now, and both are tighter than what they replace:
+
+    **Where it claims to help, it must help.** Scoped to
+    `claim.asserts_domains` when the per-domain evidence is there. A claim
+    that asserts a domain the holdout has no measurement for fails, rather
+    than falling back to an average that says nothing about it.
+
+    **Where it claims nothing, it must not collapse.** Every other domain
+    is checked for a fall beyond tolerance, so buying a narrow win by
+    wrecking something else is refused here as well as on the dev set.
+
+    The subset comes from the claim, never from the caller. A caller
+    choosing which domains confirm it is choosing the benchmark it wins
+    on, which is the whole failure this layer exists to prevent.
+    """
+    notes: Dict[str, Any] = {
+        "hidden_baseline": round(evidence.baseline_hidden, 4),
+        "hidden_candidate": round(evidence.candidate_hidden, 4),
+        "hidden_margin": round(evidence.candidate_hidden - evidence.baseline_hidden, 4),
+    }
+    base_by = evidence.baseline_hidden_by_domain or {}
+    cand_by = evidence.candidate_hidden_by_domain or {}
+
+    if not claim.asserts_domains or not base_by or not cand_by:
+        # No per-domain evidence, or a claim that names no domain: the
+        # overall comparison is all there is. Weaker than the dev margin
+        # on purpose -- the holdout is small and consulted rarely, so
+        # demanding the same effect size would reject real improvements
+        # for lack of resolution. It must simply not go backwards.
+        notes["hidden_scope"] = "overall"
+        return (evidence.candidate_hidden - evidence.baseline_hidden) < 0, notes
+
+    asserted = tuple(claim.asserts_domains)
+    notes["hidden_scope"] = list(asserted)
+    missing = [d for d in asserted if d not in cand_by or d not in base_by]
+    if missing:
+        # Not a refusal. The holdout in use has no measurement for this
+        # domain, which says nothing about the claim.
+        notes["hidden_unmeasured_domains"] = missing
+        notes["hidden_state"] = NOT_EVALUATED
+        return True, notes
+
+    scoped_base = sum(base_by[d] for d in asserted) / len(asserted)
+    scoped_cand = sum(cand_by[d] for d in asserted) / len(asserted)
+    notes["hidden_scoped_baseline"] = round(scoped_base, 4)
+    notes["hidden_scoped_candidate"] = round(scoped_cand, 4)
+    notes["hidden_scoped_margin"] = round(scoped_cand - scoped_base, 4)
+
+    collapsed = sorted(
+        d for d in base_by
+        if d not in asserted
+        and cand_by.get(d, 0.0) < base_by[d] - HIDDEN_COLLAPSE_TOLERANCE)
+    if collapsed:
+        notes["hidden_collapsed_domains"] = collapsed
+
+    return (scoped_cand < scoped_base) or bool(collapsed), notes
+
+
+def min_discordant_pairs() -> int:
+    """The fewest one-directional discordant pairs THIS gate calls
+    significant. Computed by asking the gate rather than deriving it, so
+    a change to the correction cannot leave a second opinion behind."""
+    for count in range(2, 60):
+        outcomes = ([PairedOutcome(f"d{i}", "x", False, True) for i in range(count)] +
+                    [PairedOutcome(f"s{i}", "x", True, True) for i in range(count)])
+        if mcnemar(outcomes)["p_value"] < ALPHA:
+            return count
+    return 60                                          # pragma: no cover
+
+
+def required_trials(min_effect: float) -> int:
+    """How many paired trials are needed to see an effect this small.
+
+    The significance bar does not move. If a 0.13 effect needs 60 pairs,
+    the answer is 60 pairs -- which is what a live sequence experiment
+    actually needed, after 30 refused it for want of resolution.
+    """
+    if min_effect <= 0:
+        raise ValueError("min_effect must be positive")
+    needed = int(math.ceil(min_discordant_pairs() / float(min_effect)))
+    return max(MIN_PAIRED_TRIALS, needed)
+
+
 def judge(claim: Claim, evidence: Evidence) -> Verdict:
     """Apply every gate the claim requires. Returns, never raises.
 
@@ -219,15 +379,9 @@ def judge(claim: Claim, evidence: Evidence) -> Verdict:
         failed.append("hidden_confirms")
         m["hidden"] = "not measured"
     else:
-        hidden_margin = evidence.candidate_hidden - evidence.baseline_hidden
-        m["hidden_baseline"] = round(evidence.baseline_hidden, 4)
-        m["hidden_candidate"] = round(evidence.candidate_hidden, 4)
-        m["hidden_margin"] = round(hidden_margin, 4)
-        # Weaker than the dev margin on purpose: the hidden set is smaller
-        # and consulted rarely, so demanding the same effect size there
-        # would reject real improvements for lack of resolution. It must
-        # not go BACKWARDS, and it must not be flat when dev moved a lot.
-        if hidden_margin < 0:
+        hidden_failed, hidden_notes = _judge_hidden(claim, evidence)
+        m.update(hidden_notes)
+        if hidden_failed:
             failed.append("hidden_confirms")
 
     if claim.asserts_transfer:
@@ -258,5 +412,18 @@ def judge(claim: Claim, evidence: Evidence) -> Verdict:
     accepted = not failed_required
     reason = "accepted" if accepted else "failed: " + ", ".join(failed_required)
     m["required_gates"] = sorted(required)
-    m["cost_calls"] = evidence.cost_calls
-    return Verdict(accepted=accepted, reason=reason, failed_gates=failed_required, measurements=m)
+    m["cost"] = evidence.cost.as_dict()
+    # An asserted domain the holdout never measured leaves the claim
+    # UNEVALUATED rather than refuted, however the other gates came out.
+    # "We tested it and it did not hold" and "we could not test it here"
+    # are different facts, and collapsing the second into the first writes
+    # a refutation into the record for a claim nothing measured -- which
+    # then stops it being retried on evidence that never existed.
+    unevaluated = m.get("hidden_state") == NOT_EVALUATED
+    if unevaluated:
+        reason = ("не оценено: скрытая выборка не покрывает "
+                  + ", ".join(m.get("hidden_unmeasured_domains", [])))
+    status = (NOT_EVALUATED if unevaluated
+              else (ACCEPTED if accepted else REJECTED))
+    return Verdict(accepted=accepted and not unevaluated, reason=reason,
+                   failed_gates=failed_required, measurements=m, status=status)

@@ -29,8 +29,8 @@ sys.path.insert(0, str(REPO_ROOT))
 from mana import Config                                        # noqa: E402
 from mana.brains import BrainPool                              # noqa: E402
 from mana.cognition.meta import (EPISODE_BAR, EpisodeResult,    # noqa: E402
-                                 MetaEvolution, judge, run_episodes,
-                                 yield_report)
+                                 MetaEvolution, baseline_parameters, judge,
+                                 run_episodes, yield_report)
 from mana.cognition.research import ResearchCycle              # noqa: E402
 from mana.cognition.self_model import Observation, SelfModel    # noqa: E402
 from mana.core import gates, oracle, tasks as core_tasks       # noqa: E402
@@ -42,18 +42,24 @@ FORMAT = ("Ответь только итоговым значением, без
 def make_episode_runner(pool: BrainPool, budget: int, steps: int):
     """One episode: a seeded research run under one search policy.
 
-    The policy is applied by writing the weight into the module the
-    search reads it from -- which is the only way to test a weight that
-    is actually in force, and is why this script restores it afterwards.
+    The policy goes into force through `meta.put_in_force`, the same
+    path an accepted change takes. This script used to patch
+    `gaps.PRIORITY_WEIGHTS` directly, because until phase 16 there was
+    no other way -- an accepted meta-change updated a field on the
+    MetaEvolution object and nothing else. The workaround made the
+    experiment run and hid the fact that the loop was open at the far
+    end. It is gone now; if the mechanism breaks, this script breaks
+    with it, which is the point.
     """
     from mana.cognition import gaps
+    from mana.cognition.meta import put_in_force
 
     def run(seed: int, policy) -> EpisodeResult:
         original = dict(gaps.PRIORITY_WEIGHTS)
         for name, value in policy.items():
-            key = name.split(".", 1)[1]
-            if key in gaps.PRIORITY_WEIGHTS:
-                gaps.PRIORITY_WEIGHTS[key] = value
+            parameter = baseline_parameters().get(name)
+            if parameter is not None:
+                put_in_force(parameter, value)
         try:
             model = SelfModel()
             for task in core_tasks.generate("arithmetic", 6, seed=seed):
@@ -77,7 +83,13 @@ def make_episode_runner(pool: BrainPool, budget: int, steps: int):
                 resolved=float(report["total_resolution"]),
                 capability_gain=0.0,
                 calls_used=int(report["calls_used"]) + 6,
-                accepted_claims=len(report["adopted_capabilities"]))
+                accepted_claims=len(report["adopted_capabilities"]),
+                # What the episode chose, in order. Without this the
+                # verdict cannot tell "the parameter changed nothing"
+                # from "the parameter changed no decision" -- and the
+                # first live run of this script was the second case.
+                decisions=tuple(step["description"]
+                                for step in report["history"]))
         finally:
             gaps.PRIORITY_WEIGHTS.clear()
             gaps.PRIORITY_WEIGHTS.update(original)
@@ -138,6 +150,11 @@ def main() -> int:
     print(f"  базовая политика:  ценность {report['baseline_value']:.3f}")
     print(f"  кандидат:          ценность {report['candidate_value']:.3f}")
     print(f"  вызовов потрачено: {report['calls']} ({per_episode:.0f} на эпизод)")
+    # Ноль здесь означает, что эксперимент измерял что-то другое: код,
+    # читающий параметр, ни разу не выполнился. Числа при этом выглядят
+    # как нормальный отрицательный результат.
+    print(f"  параметр прочитан: {report['parameter_reads']} раз")
+    print(f"  изменил решений:   {report['decisions_differed']} из {report['episodes']} сидов")
     print(f"\nвердикт: {'ПРИНЯТО' if verdict.accepted else 'ОТКЛОНЕНО'} — {verdict.reason}")
     print(f"не прошли гейты: {', '.join(verdict.failed_gates) or '—'}")
     print(f"\nстоимость одного мета-вывода при этой цене эпизода: "

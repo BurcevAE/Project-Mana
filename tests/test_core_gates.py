@@ -13,6 +13,7 @@ import random
 import pytest
 
 from mana.core import evaluation, gates, transaction
+from mana.core.cost import CostVector
 from mana.core.gates import Claim, Evidence, PairedOutcome
 
 
@@ -34,7 +35,7 @@ def paired(n, base_rate, cand_rate, domain="arithmetic", seed=1):
 def full_evidence(outcomes, **overrides):
     """Evidence that passes everything except what a test overrides."""
     data = dict(paired_dev=outcomes, baseline_hidden=0.60, candidate_hidden=0.72,
-                counterexamples_sought=25, counterexamples_found=0, cost_calls=900)
+                counterexamples_sought=25, counterexamples_found=0, cost=CostVector(calls=900))
     data.update(overrides)
     return Evidence(**data)
 
@@ -324,3 +325,130 @@ def test_a_core_issued_context_switches_learning_off(isolated_agent):
 def test_normal_work_needs_no_authorization(isolated_agent):
     isolated_agent.enter_evaluation(evaluation.normal())
     assert isolated_agent._benchmark_holdout is False
+
+
+# ---------------------------------------------------------------------------
+# the holdout has to confirm THIS claim
+# ---------------------------------------------------------------------------
+
+def _strong(n=40, base=0.4, cand=0.8):
+    return [PairedOutcome(task_id=f"t{i}", domain="arithmetic",
+                          baseline_correct=(i / n) < base,
+                          candidate_correct=(i / n) < cand) for i in range(n)]
+
+
+def test_a_narrow_claim_is_not_confirmed_by_an_average_over_other_domains():
+    """The live case: two arms tied at 0.50 with opposite profiles --
+    model arithmetic 0.33 / sequence 0.67, brain 1.00 / 0.00. The gate saw
+    "not worse" and passed a claim about arithmetic on the strength of an
+    average dominated by a domain it never mentioned."""
+    claim = Claim(claim_id="c", kind="program", description="про арифметику",
+                  asserts_domains=("arithmetic",))
+    evidence = Evidence(
+        paired_dev=_strong(),
+        baseline_hidden=0.50, candidate_hidden=0.50,
+        baseline_hidden_by_domain={"arithmetic": 0.33, "sequence": 0.67},
+        candidate_hidden_by_domain={"arithmetic": 1.00, "sequence": 0.00},
+        counterexamples_sought=4, counterexamples_found=0)
+    verdict = gates.judge(claim, evidence)
+    # Confirmed where it claims, refused for wrecking where it does not.
+    assert verdict.measurements["hidden_scope"] == ["arithmetic"]
+    assert verdict.measurements["hidden_scoped_margin"] > 0
+    assert verdict.measurements["hidden_collapsed_domains"] == ["sequence"]
+    assert "hidden_confirms" in verdict.failed_gates
+
+
+def test_a_claim_confirmed_in_its_own_domain_passes():
+    claim = Claim(claim_id="c", kind="program", description="про арифметику",
+                  asserts_domains=("arithmetic",))
+    evidence = Evidence(
+        paired_dev=_strong(),
+        baseline_hidden=0.50, candidate_hidden=0.60,
+        baseline_hidden_by_domain={"arithmetic": 0.33, "sequence": 0.67},
+        candidate_hidden_by_domain={"arithmetic": 1.00, "sequence": 0.60},
+        counterexamples_sought=4, counterexamples_found=0)
+    verdict = gates.judge(claim, evidence)
+    assert "hidden_confirms" not in verdict.failed_gates
+
+
+def test_a_claim_about_a_domain_the_holdout_never_measured_is_refused():
+    """Falling back to an average that says nothing about the asserted
+    domain is how the previous version passed claims it had not tested."""
+    claim = Claim(claim_id="c", kind="program", description="про код",
+                  asserts_domains=("code",))
+    evidence = Evidence(
+        paired_dev=_strong(),
+        baseline_hidden=0.40, candidate_hidden=0.90,
+        baseline_hidden_by_domain={"arithmetic": 0.40},
+        candidate_hidden_by_domain={"arithmetic": 0.90},
+        counterexamples_sought=4, counterexamples_found=0)
+    verdict = gates.judge(claim, evidence)
+    assert "hidden_confirms" in verdict.failed_gates
+    assert verdict.measurements["hidden_unmeasured_domains"] == ["code"]
+
+
+def test_the_subset_comes_from_the_claim_not_from_the_caller():
+    """A caller choosing which domains confirm it is choosing the
+    benchmark it wins on. There is no parameter for it."""
+    import inspect
+    from mana.core import gates
+    signature = inspect.signature(gates.judge)
+    assert list(signature.parameters) == ["claim", "evidence"]
+    assert not hasattr(Evidence(), "hidden_domains_to_use")
+
+
+def test_a_claim_naming_no_domain_still_uses_the_overall_comparison():
+    claim = Claim(claim_id="c", kind="program", description="общее")
+    evidence = Evidence(
+        paired_dev=_strong(), baseline_hidden=0.40, candidate_hidden=0.55,
+        counterexamples_sought=4, counterexamples_found=0)
+    verdict = gates.judge(claim, evidence)
+    assert verdict.measurements["hidden_scope"] == "overall"
+    assert "hidden_confirms" not in verdict.failed_gates
+
+
+def test_with_hidden_takes_the_strict_accuracy():
+    """Passing `.accuracy` by hand is how a refusing brain ends up
+    compared against a guessing model over different denominators."""
+    class Result:
+        accuracy = 0.90              # graded only -- flatters a refuser
+        strict_accuracy = 0.30       # over everything attempted
+        strict_by_domain = {"arithmetic": 1.0}
+
+    evidence = Evidence().with_hidden(Result(), Result())
+    assert evidence.baseline_hidden == 0.30
+    assert evidence.baseline_hidden_by_domain == {"arithmetic": 1.0}
+
+
+def test_an_unmeasured_domain_leaves_the_claim_unevaluated_not_refuted():
+    """"We tested it and it did not hold" and "we could not test it here"
+    are different facts. Collapsing the second into the first writes a
+    refutation into the record for a claim nothing measured, and then
+    stops it being retried on evidence that never existed."""
+    claim = Claim(claim_id="c", kind="program", description="про логику",
+                  asserts_domains=("logic",))
+    evidence = Evidence(
+        paired_dev=_strong(),
+        baseline_hidden=0.40, candidate_hidden=0.90,
+        baseline_hidden_by_domain={"arithmetic": 0.40},
+        candidate_hidden_by_domain={"arithmetic": 0.90},
+        counterexamples_sought=4, counterexamples_found=0)
+    verdict = gates.judge(claim, evidence)
+    assert verdict.status == gates.NOT_EVALUATED
+    assert verdict.evaluated is False
+    assert verdict.accepted is False, "nothing may be adopted on an untested claim"
+    assert "не оценено" in verdict.reason
+
+
+def test_an_ordinary_rejection_is_still_rejected():
+    claim = Claim(claim_id="c", kind="program", description="общее")
+    verdict = gates.judge(claim, Evidence(paired_dev=_strong(40, 0.6, 0.6)))
+    assert verdict.status == gates.REJECTED
+    assert verdict.evaluated is True
+
+
+def test_a_caller_that_only_asks_accepted_still_gets_the_safe_answer():
+    """`accepted` stays a bool and stays false for NOT_EVALUATED."""
+    import inspect
+    source = inspect.getsource(gates.Verdict)
+    assert "accepted: bool" in source

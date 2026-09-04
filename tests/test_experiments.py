@@ -263,3 +263,68 @@ def test_the_report_separates_supported_from_merely_run(journal):
     assert report["experiments"] == 2
     assert report["supported"] == 1
     assert len(report["discoveries"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# an experiment that could not have concluded anything
+# ---------------------------------------------------------------------------
+
+def test_the_minimum_discordance_comes_from_the_gate_not_from_arithmetic():
+    """A number derived here would be a second opinion about the gate's
+    own threshold, and the day the correction changes they would disagree
+    silently."""
+    from mana.cognition.experiments import MIN_DISCORDANT
+    from mana.core import gates
+    enough = ([gates.PairedOutcome(f"d{i}", "x", False, True)
+               for i in range(MIN_DISCORDANT)] +
+              [gates.PairedOutcome(f"s{i}", "x", True, True)
+               for i in range(MIN_DISCORDANT)])
+    fewer = enough[1:]
+    assert gates.mcnemar(enough)["p_value"] < gates.ALPHA
+    assert gates.mcnemar(fewer)["p_value"] >= gates.ALPHA
+
+
+def test_an_experiment_on_a_saturated_slice_is_refused():
+    """A slice at 1.00 cannot improve, so no result can be significant --
+    knowable before a single call is spent."""
+    from mana.cognition.experiments import power
+    assert power(30, 1.00).ok is False
+    assert power(30, 0.85).ok is False, "0.15 of room against a 0.20 threshold"
+
+
+def test_an_experiment_with_room_to_improve_is_allowed():
+    from mana.cognition.experiments import power
+    check = power(30, 0.30)
+    assert check.ok is True
+    assert check.mde == pytest.approx(0.2)
+
+
+def test_more_trials_lower_the_detectable_effect():
+    from mana.cognition.experiments import power
+    assert power(100, 0.90).mde < power(30, 0.90).mde
+    assert power(100, 0.90).ok is True
+
+
+def test_too_few_pairs_is_refused_before_anything_is_spent():
+    from mana.cognition.experiments import power
+    assert power(12, 0.30).ok is False
+
+
+def test_an_underpowered_plan_refuses_to_run(isolated_config):
+    """The budget is not spent on an experiment whose refutation would
+    then enter the record as evidence against an untested mechanism."""
+    from mana.cognition.experiments import (ExperimentLab, Hypothesis,
+                                            UnderpoweredExperiment, plan)
+    from mana.cognition.self_model import Observation, SelfModel
+    model = SelfModel()
+    for i in range(20):
+        model.record(Observation(f"t{i}", "arithmetic", 0.8, True, calls=1))
+    hypothesis = Hypothesis(
+        hypothesis_id="h1", statement="проверка", gap_id="g",
+        domain="arithmetic", band="hard",
+        baseline_steps=("OBSERVE", "GENERATE", "ANSWER"),
+        candidate_steps=("OBSERVE", "GENERATE", "CRITIQUE", "REPAIR", "ANSWER"))
+    planned = plan(hypothesis, model, trials=30)
+    assert planned.power is not None and planned.power.ok is False
+    with pytest.raises(UnderpoweredExperiment):
+        ExperimentLab(model).run_experiment(planned, [], lambda steps, task: (True, 1))
