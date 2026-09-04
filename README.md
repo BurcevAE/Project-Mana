@@ -283,7 +283,7 @@ MANA не должна иметь возможности улучшить себ
 ## Разработка
 
 ```bash
-python -m pytest -q          # 893 passed, 8 skipped
+python -m pytest -q          # 889 passed, 8 skipped
 python mana_run.py --version # продукт + версии всех подсистем
 ```
 
