@@ -50,7 +50,7 @@ from . import oracle
 from .tasks import DOMAINS, Task, generate_mixed
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "2.0"
+__version__ = "2.4"
 
 #: Seeds are constants inside the immutable core, not configuration. A
 #: configurable hidden seed is a hidden set an agent can re-derive.
@@ -107,11 +107,26 @@ class HiddenResult:
     evaluations_used: int
     evaluations_left: int
     elapsed: float
+    #: Correct out of everything ATTEMPTED, counting an ungradable answer
+    #: as not correct. `accuracy` deliberately excludes ungradable ones so
+    #: that a missing sandbox does not read as a capability deficit -- but
+    #: that makes refusing free, and a brain with narrow applicability
+    #: then gets scored on fewer tasks than the model it is compared
+    #: against. Two numbers over different denominators are not a
+    #: comparison. Both are reported; comparisons should use this one.
+    strict_accuracy: float = 0.0
+    strict_by_domain: Dict[str, float] = field(default_factory=dict)
+    attempted: int = 0
+    correct: int = 0
 
     def as_dict(self) -> Dict[str, Any]:
-        return {"accuracy": self.accuracy, "graded": self.graded,
+        return {"accuracy": self.accuracy, "strict_accuracy": self.strict_accuracy,
+                "graded": self.graded, "attempted": self.attempted,
+                "correct": self.correct,
                 "ungradable": self.ungradable, "format_failures": self.format_failures,
-                "by_domain": dict(self.by_domain), "evaluations_used": self.evaluations_used,
+                "by_domain": dict(self.by_domain),
+                "strict_by_domain": dict(self.strict_by_domain),
+                "evaluations_used": self.evaluations_used,
                 "evaluations_left": self.evaluations_left, "elapsed": round(self.elapsed, 2)}
 
 
@@ -149,10 +164,19 @@ def _run_hidden(tasks: Sequence[Task], answer_fn: Callable[[Dict[str, Any]], str
         _hidden_log.append({"label": label, "at": time.time(), "accuracy": summary["accuracy"],
                             "graded": summary["graded"], "elapsed": elapsed})
 
+    attempted = summary["graded"] + summary["ungradable"]
+    strict_by_domain = {}
+    for domain, values in summary["by_domain"].items():
+        tried = values["total"] + values["ungradable"]
+        strict_by_domain[domain] = values["correct"] / tried if tried else 0.0
+
     return HiddenResult(
         accuracy=summary["accuracy"], graded=summary["graded"],
         ungradable=summary["ungradable"], format_failures=summary["format_failures"],
         by_domain={d: v["accuracy"] for d, v in summary["by_domain"].items()},
+        strict_accuracy=summary["correct"] / attempted if attempted else 0.0,
+        strict_by_domain=strict_by_domain,
+        attempted=attempted, correct=summary["correct"],
         evaluations_used=used, evaluations_left=max(0, budget - used), elapsed=elapsed,
     )
 

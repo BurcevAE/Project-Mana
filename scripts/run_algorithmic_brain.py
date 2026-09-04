@@ -60,6 +60,27 @@ def ask(pool: BrainPool, brain: str, prompt: str, domain: str,
         by_substrate=cost.get("by_substrate", {}))
 
 
+def ask_cascade(pool: BrainPool, prompt: str, domain: str,
+                difficulty: float) -> Tuple[str, CostVector]:
+    """Система как она будет работать: дешёвый субстрат первым, отказ
+    проваливается к модели.
+
+    Это и есть кандидат. Первая версия сравнивала голый мозг с моделью
+    на ВСЕХ доменах, и гейт справедливо отклонил: такая замена
+    уничтожает sequence, потому что мозг там просто молчит. Но никто не
+    предлагает заменить модель мозгом везде — предлагается направить к
+    нему арифметику. Сравнивать надо то, что предлагается.
+    """
+    reply = pool.ask(prompt + "\n\n" + FORMAT, kind=domain, difficulty=difficulty,
+                     context_tag="cascade")
+    cost = reply.get("cost") or {}
+    return (reply.get("text") or ""), CostVector(
+        calls=cost.get("calls", 0), wall_seconds=cost.get("wall_seconds", 0.0),
+        tokens_in=cost.get("tokens_in", 0), tokens_out=cost.get("tokens_out", 0),
+        unmeasured_token_calls=cost.get("unmeasured_token_calls", 0),
+        by_substrate=cost.get("by_substrate", {}))
+
+
 def ask_model(pool: BrainPool, prompt: str, domain: str,
               difficulty: float) -> Tuple[str, CostVector]:
     reply = pool.ask(f"{prompt}\n\n{FORMAT}", kind=domain, difficulty=difficulty,
@@ -81,7 +102,7 @@ def paired_run(pool: BrainPool, tasks, log: Dict[str, Any]):
     refusals = 0
     for task in tasks:
         base_text, bc = ask_model(pool, task.prompt, task.domain, task.difficulty)
-        cand_text, cc = ask(pool, "arithmetic", task.prompt, task.domain, task.difficulty)
+        cand_text, cc = ask_cascade(pool, task.prompt, task.domain, task.difficulty)
         base_cost = base_cost.add(bc)
         cand_cost = cand_cost.add(cc)
         if not cand_text:
@@ -101,13 +122,13 @@ def hidden_arms(pool: BrainPool, per_domain: int):
                             public["difficulty"])
         return text
 
-    def brain_answer(public: Dict[str, Any]) -> str:
-        text, _ = ask(pool, "arithmetic", public["prompt"], public["domain"],
-                      public["difficulty"])
+    def cascade_answer(public: Dict[str, Any]) -> str:
+        text, _ = ask_cascade(pool, public["prompt"], public["domain"],
+                              public["difficulty"])
         return text
 
     base = splits.hidden_score(model_answer, per_domain=per_domain, label="baseline")
-    cand = splits.hidden_score(brain_answer, per_domain=per_domain, label="algorithmic")
+    cand = splits.hidden_score(cascade_answer, per_domain=per_domain, label="cascade")
     return base, cand
 
 
@@ -157,20 +178,24 @@ def main() -> int:
 
     print("скрытая выборка для обеих рук...")
     base_res, cand_res = hidden_arms(pool, args.hidden_per_domain)
-    base_hidden, cand_hidden = base_res.accuracy, cand_res.accuracy
+    base_hidden, cand_hidden = base_res.strict_accuracy, cand_res.strict_accuracy
 
     print(f"поиск контрпримеров в {', '.join(FOREIGN_DOMAINS)}...")
     sought, found, examples = counterexample_search(pool, args.probes)
 
     claim = Claim(
         claim_id="algorithmic-arithmetic-brain", kind="program",
-        description="алгоритмический мозг точнее языковой модели на арифметике",
+        description="каскад с алгоритмическим мозгом точнее одной модели на арифметике",
         asserts_domains=("arithmetic",))
+    # with_hidden берёт СТРОГУЮ точность и разбивку по доменам: гейт
+    # сам сузит подтверждение до доменов заявки и проверит, не обвалился
+    # ли какой-то другой. Передавать .accuracy руками — это и есть способ
+    # сравнить отказывающийся мозг с угадывающей моделью по разным
+    # знаменателям.
     evidence = Evidence(
         paired_dev=outcomes,
-        baseline_hidden=base_hidden, candidate_hidden=cand_hidden,
         counterexamples_sought=sought, counterexamples_found=found,
-        cost=base_cost.add(cand_cost))
+        cost=base_cost.add(cand_cost)).with_hidden(base_res, cand_res)
     verdict = gates.judge(claim, evidence)
     elapsed = time.perf_counter() - started
 
@@ -179,24 +204,25 @@ def main() -> int:
 
     print(f"\nпарный прогон, {len(outcomes)} задач, {elapsed:.0f} с")
     print(f"  языковая модель:      {base_acc:.2f}   {base_cost.describe()}")
-    print(f"  алгоритмический мозг: {cand_acc:.2f}   {cand_cost.describe()}")
+    print(f"  каскад с мозгом:      {cand_acc:.2f}   {cand_cost.describe()}")
     print(f"  отказов внутри домена: {log['refusals_in_domain']}")
 
     print(f"\nскрытая выборка (задачи не видел никто):")
-    print(f"  языковая модель:      {base_hidden:.2f}  "
-          f"оценено {base_res.graded}, не оценено {base_res.ungradable}")
-    print(f"  алгоритмический мозг: {cand_hidden:.2f}  "
-          f"оценено {cand_res.graded}, не оценено {cand_res.ungradable}")
-    print(f"  по доменам: модель {base_res.by_domain} | мозг {cand_res.by_domain}")
-    if cand_res.graded != base_res.graded:
-        # Обязательная оговорка, а не сноска. Отказ даёт пустой ответ,
-        # оракул помечает его «не оценено», и он ВЫПАДАЕТ из знаменателя.
-        # Отказывающийся мозг оценивается на меньшем числе задач, чем
-        # модель, — и именно эти два числа сравнивает гейт
-        # hidden_confirms, то есть сравнивает несравнимое.
-        print(f"  ВНИМАНИЕ: знаменатели разные ({cand_res.graded} против "
-              f"{base_res.graded}) — эти числа не сравнимы напрямую,")
-        print(f"  а вердикт hidden_confirms опирается именно на их сравнение.")
+    print(f"  языковая модель:      строго {base_hidden:.2f} "
+          f"(мягко {base_res.accuracy:.2f}), из {base_res.attempted} задач")
+    print(f"  каскад:               строго {cand_hidden:.2f} "
+          f"(мягко {cand_res.accuracy:.2f}), из {cand_res.attempted} задач")
+    print(f"  по доменам строго: модель {base_res.strict_by_domain}")
+    print(f"                     мозг   {cand_res.strict_by_domain}")
+    scope = verdict.measurements.get("hidden_scope")
+    print(f"  гейт сузил подтверждение до: {scope}")
+    if "hidden_scoped_margin" in verdict.measurements:
+        print(f"  в доменах заявки: "
+              f"{verdict.measurements['hidden_scoped_baseline']:.2f} -> "
+              f"{verdict.measurements['hidden_scoped_candidate']:.2f}")
+    if verdict.measurements.get("hidden_collapsed_domains"):
+        print(f"  обвалились вне заявки: "
+              f"{verdict.measurements['hidden_collapsed_domains']}")
 
     print(f"\nконтрпримеры: {found} из {sought} проб в чужих доменах")
     for example in examples[:5]:

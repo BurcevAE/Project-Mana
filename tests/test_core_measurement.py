@@ -261,3 +261,27 @@ def test_the_measurement_is_large_enough_to_measure_with():
     computed z-scores over it."""
     assert len(splits.train_tasks()) >= 100
     assert len(splits.dev_tasks()) >= 50
+
+
+def test_a_refused_answer_is_not_free_on_the_hidden_set(isolated_config):
+    """`accuracy` excludes ungradable answers so a missing sandbox does
+    not read as a capability deficit -- right for diagnosis, but it makes
+    refusing free. `strict_accuracy` counts everything attempted, which
+    is what a comparison between two systems needs."""
+    from mana.core import splits
+
+    def refuses_half(public):
+        return "42" if public["domain"] == "arithmetic" else ""
+
+    result = splits.hidden_score(refuses_half, per_domain=3, label="test-strict")
+    assert result.attempted > result.graded, "the refusals must be counted somewhere"
+    assert result.strict_accuracy <= result.accuracy
+    assert set(result.strict_by_domain) == set(result.by_domain)
+
+
+def test_strict_and_lenient_agree_when_nothing_was_refused(isolated_config):
+    from mana.core import splits
+    result = splits.hidden_score(lambda public: "0", per_domain=2,
+                                 label="test-nothing-refused")
+    if result.ungradable == 0:
+        assert result.strict_accuracy == result.accuracy
