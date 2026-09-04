@@ -90,6 +90,36 @@ def test_refuted_arithmetic_answer_is_corrected(isolated_agent_exec_enabled, mon
     assert verification["corrected_from"] == "ответ будет 401"
 
 
+def test_the_trace_agrees_with_the_verdict_after_a_correction(
+        isolated_agent_exec_enabled, monkeypatch):
+    """Found on a live run: the same field carried two values.
+
+    The EXECUTE step wrote UNVERIFIED into the trace, then correction
+    raised the top-level verdict to INDEPENDENTLY_VERIFIED and left the
+    trace alone. The stale one is the audit record, which is the wrong
+    half to be wrong -- a reader deciding whether to trust the answer
+    reads the trace.
+    """
+    agent = isolated_agent_exec_enabled
+    _agent_answering(monkeypatch, "ответ будет 401")
+    result = agent.answer("сколько будет 17 умножить на 23", spec=_adaptive_spec(agent),
+                           save_memory=False, context_tag="TEST")
+    assert result["verification"]["corrected"] is True
+    assert result["trace"]["verification_trust"] == result["verification_trust"]
+    assert result["verification_trust"] == "INDEPENDENTLY_VERIFIED"
+
+
+def test_the_trace_agrees_with_the_verdict_when_nothing_was_corrected(
+        isolated_agent_exec_enabled, monkeypatch):
+    """The same invariant on the ordinary path, so the fix is not just
+    about the correcting branch."""
+    agent = isolated_agent_exec_enabled
+    _agent_answering(monkeypatch, "Получается 391, если перемножить.")
+    result = agent.answer("сколько будет 17 умножить на 23", spec=_adaptive_spec(agent),
+                           save_memory=False, context_tag="TEST")
+    assert result["trace"]["verification_trust"] == result["verification_trust"]
+
+
 def test_correct_answer_is_left_untouched(isolated_agent_exec_enabled, monkeypatch):
     """Correction must not fire when the answer already matches -- otherwise
     it would rewrite good answers into bare numbers."""

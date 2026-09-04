@@ -14,11 +14,19 @@ from __future__ import annotations
 __version__ = "2.0"
 
 try:
-    import fitz  # PyMuPDF, optional for PDF knowledge acquisition
+    # PyMuPDF renamed its module; importing the old `fitz` alias prints a
+    # deprecation warning on every single MANA start, including runs that
+    # never touch a PDF. The alias still works, so this is cosmetic --
+    # but a warning nobody can act on trains people to ignore warnings.
+    import pymupdf as fitz  # optional, for PDF knowledge acquisition
     HAS_FITZ = True
 except Exception:
-    fitz = None
-    HAS_FITZ = False
+    try:
+        import fitz  # older PyMuPDF, before the rename
+        HAS_FITZ = True
+    except Exception:
+        fitz = None
+        HAS_FITZ = False
 
 try:
     import requests

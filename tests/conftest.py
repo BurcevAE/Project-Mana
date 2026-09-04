@@ -23,6 +23,43 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from mana.config import Config  # noqa: E402
 
 
+#: Every environment variable a brain reads its key from. Kept as an
+#: explicit list rather than "anything ending in _API_KEY", so a new
+#: provider added without a line here shows up as a test that behaves
+#: differently on a developer machine than in CI -- which is exactly the
+#: failure this exists to stop, and better caught than silently absorbed.
+_PROVIDER_KEY_VARS = (
+    "GROQ_API_KEY", "GEMINI_API_KEY", "CEREBRAS_API_KEY", "DEEPSEEK_API_KEY",
+    "MISTRAL_API_KEY", "GITHUB_TOKEN", "OPENAI_API_KEY", "OPENROUTER_API_KEY",
+    "CLOUDFLARE_API_TOKEN", "MANA_CLOUDFLARE_ACCOUNT_ID",
+)
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_api_keys(monkeypatch, request):
+    """Hide provider keys from every test that has not asked for them.
+
+    Found by a live run on a real machine: with GROQ_API_KEY exported,
+    four tests that assert offline behaviour started talking to cloud
+    APIs and failed. Under a bare `pytest` they passed. A suite whose
+    result depends on whether a shell happened to export a key cannot
+    tell a regression from an environment difference -- and this project's whole
+    argument rests on measurements that do not move with ambient state.
+
+    `enable_llm=False` does NOT cover this: it means "no local backend",
+    and a remote brain with a key stays usable on purpose, so that a
+    machine with a free key and no Ollama still works. The two readings
+    of that name are what let the assumption through.
+
+    Tests that genuinely need a live provider mark themselves `llm`;
+    they keep the real environment.
+    """
+    if request.node.get_closest_marker("llm"):
+        return
+    for name in _PROVIDER_KEY_VARS:
+        monkeypatch.delenv(name, raising=False)
+
+
 @pytest.fixture
 def isolated_config(tmp_path: Path) -> Config:
     """A Config with every filesystem path redirected under tmp_path, LLM

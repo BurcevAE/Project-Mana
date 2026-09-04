@@ -53,7 +53,15 @@ HIDDEN = ["webview.platforms.edgechromium", "webview.platforms.winforms",
 
 def build(windowed: bool) -> int:
     if not EMBED.is_dir():
-        print(f"нет каталога {EMBED.name}/ — распакуйте туда embeddable-дистрибутив Python.")
+        # Naming the file and the place: the previous message said what
+        # was missing but not where it comes from, which turns a
+        # two-minute prerequisite into a search.
+        version = f"{sys.version_info.major}.{sys.version_info.minor}"
+        print(f"нет каталога {EMBED.name}/ — в нём должен лежать embeddable-дистрибутив Python.")
+        print(f"  1. скачайте «Windows embeddable package (64-bit)» для Python {version}:")
+        print(f"     https://www.python.org/downloads/windows/")
+        print(f"  2. распакуйте архив в {EMBED}")
+        print(f"  3. запустите сборку снова")
         print("Без него песочница (--run-code, self-improve-code) в собранном приложении не работает.")
         return 1
 

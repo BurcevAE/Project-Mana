@@ -508,8 +508,14 @@ class BrainPool:
         if not spec.enabled or not spec.has_key():
             return False
         if spec.local and not self.config.enable_llm:
-            # --no-llm has always meant "no local backend"; it must not
-            # silently keep talking to remote brains either.
+            # `enable_llm` means "a LOCAL backend is on", not "any LLM is
+            # allowed" -- a machine with a free remote key and no Ollama
+            # must still work (see
+            # test_llm_client_is_enabled_when_only_a_remote_brain_exists).
+            # The knob for remote is brain_external_enabled, and --no-llm
+            # clears both. The name reads like the wider promise, which
+            # is how the test suite came to assume it: see conftest's
+            # _no_ambient_api_keys for what that cost.
             return False
         if not spec.local and not self.config.brain_external_enabled:
             return False

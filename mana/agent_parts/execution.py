@@ -489,6 +489,15 @@ class ExecutionMixin:
             proxy_quality = max(proxy_quality, trust_cap)
         if proxy_quality <= 0: proxy_quality = float(ev.get("confidence",0.0))
         current["verification_trust"] = trust_level
+        # The trace gets the SAME final value. It used to keep whatever the
+        # EXECUTE step wrote before correction ran, so an answer the
+        # verifier caught and fixed was recorded as UNVERIFIED at the top
+        # of the trace while the verdict beside it said
+        # INDEPENDENTLY_VERIFIED. Two values for one field in one
+        # response, and the stale one is the audit record -- wrong in the
+        # direction that matters, because a reader checking whether to
+        # trust the answer reads the trace.
+        current.setdefault("trace", {})["verification_trust"] = trust_level
         if not self._benchmark_learning:
             self._record_route_outcome(task, final_route, proxy_quality, execution_success, bool(trace.get("web_ok",False)), total_latency)
             # Same outcome, second consumer: the brain that produced this
