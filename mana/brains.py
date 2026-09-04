@@ -1099,6 +1099,38 @@ class BrainPool:
         with self._lock:
             return self._cost
 
+    def _text_for(self, brain_id: str, prompt: str, task: str) -> str:
+        """What this particular brain should be handed.
+
+        A language model needs the composed prompt: the system preamble,
+        the tool list, the recalled memory. That context is what makes its
+        answer good.
+
+        An algorithmic brain needs the opposite. It answers exactly or
+        refuses, and `task` -- the question the user actually asked -- is
+        the only part it can be exact about. Handing it the composed
+        prompt was not a harmless over-supply: `extract_expression`
+        searched all 4862 characters, found the bullet-list line
+        `- 4821 * 37 + 145` sitting in recalled memory from an EARLIER
+        question, read the list dash as a unary minus, and answered
+        **-178232 to "Привет, Мана"**. Not a refusal, not an error -- a
+        confident wrong number, on a greeting, from the brain whose whole
+        job is being exact.
+
+        Which memory happened to be recalled decided whether it answered
+        or refused, so the same question behaved differently on two
+        machines. Intermittent by construction.
+
+        `task` falls back to `prompt` at every call site that has no
+        separate task (llm.py passes `task=task or prompt`), so this
+        changes nothing where there is nothing to change -- the two are
+        the same string and the brain sees what it saw before.
+        """
+        if not task or task == prompt:
+            return prompt
+        spec = self.brains.get(brain_id)
+        return task if (spec is not None and spec.is_algorithmic) else prompt
+
     def ask(self, prompt: str, *, system: str = "", temperature: float = 0.2, kind: str = "general",
             difficulty: Optional[float] = None, task: str = "", brain: str = "auto",
             policy: str = "", context_tag: str = "", timeout: Optional[float] = None,
@@ -1163,7 +1195,8 @@ class BrainPool:
         for brain_id in order:
             if len([b for b in tried if b not in refused]) >= budget:
                 break
-            res = self.ask_brain(brain_id, prompt, system=system, temperature=temperature,
+            res = self.ask_brain(brain_id, self._text_for(brain_id, prompt, task),
+                                 system=system, temperature=temperature,
                                  timeout=timeout, context_tag=context_tag)
             tried.append(brain_id)
             if res.get("refused"):
