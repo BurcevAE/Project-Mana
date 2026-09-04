@@ -60,10 +60,12 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Sequence, Tuple
 
 from .config import Config
 from .core import cost as cost_units
+from . import substrates
+from .substrates import BrainRefusal
 from .optional_deps import requests, HAS_REQUESTS
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "2.1"
+__version__ = "2.2"
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +82,21 @@ KINDS = ("math", "programming", "reasoning", "current", "general", "planning", "
 TIERS = ("small", "medium", "large")
 
 
+#: How much a substrate is preferred, all else equal. Not a cost model
+#: -- costs are measured in core.cost -- but an ordering: try the thing
+#: that is exact and instant before the thing that is approximate and
+#: expensive. The gap is large enough to outrank a strengths match,
+#: because a refusal is free and a wrong answer from a model is not.
+SUBSTRATE_PREFERENCE = {
+    cost_units.ALGORITHMIC: 1.20,
+    cost_units.CLASSICAL_ML: 0.90,
+    cost_units.SMALL_NEURAL: 0.60,
+    cost_units.ADAPTER: 0.30,
+    cost_units.LOCAL_LLM: 0.00,
+    cost_units.REMOTE_LLM: 0.00,
+}
+
+
 def tier_rank(tier: str) -> int:
     try:
         return TIERS.index(str(tier))
@@ -94,6 +111,15 @@ class BrainSpec:
     brain_id: str
     provider: str                       # openai_chat | gemini | ollama | openai_responses
     model: str
+    #: What kind of machinery this is. Empty means "work it out from
+    #: `local`", which keeps every catalog entry written before brains
+    #: could be anything but language models valid and correct.
+    #:
+    #: This is the field that stops `Brain` meaning `LLM`. An algorithmic
+    #: brain has no provider, no model and no API key, and asking it a
+    #: question it cannot answer exactly must produce a refusal rather
+    #: than a guess.
+    substrate: str = ""
     base_url: str = ""
     api_key_env: str = ""               # env var holding the key ("" = no auth needed)
     tier: str = "medium"
@@ -114,6 +140,28 @@ class BrainSpec:
     #: Cloudflare also needs an account id, and a brain that silently
     #: reports "disabled" for a missing second value is a dead end.
     setup_hint: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.substrate:
+            self.substrate = (cost_units.LOCAL_LLM if self.local
+                              else cost_units.REMOTE_LLM)
+
+    @property
+    def is_algorithmic(self) -> bool:
+        return self.substrate == cost_units.ALGORITHMIC
+
+    @property
+    def answers_open_prompts(self) -> bool:
+        """Can this brain be handed an arbitrary question?
+
+        An algorithmic brain cannot: it answers one shape of question
+        exactly and refuses the rest. The distinction matters because
+        `llm_generate` and everything built on it need something that
+        will attempt anything -- and once a brain could be something
+        other than a language model, "a brain is available" stopped
+        meaning "a language model is available".
+        """
+        return not self.is_algorithmic
 
     #: Resolved at build time from api_key_env; never serialized back out
     #: (see `public_dict`) so a status dump or an evolution report cannot
@@ -155,6 +203,23 @@ def _env_flag(name: str, default: bool) -> bool:
 def default_catalog(cfg: Config) -> List[BrainSpec]:
     env = os.environ.get
     return [
+        # --- algorithmic: exact, instant, no model ----------------------
+        # These are the reason `Brain` no longer means `LLM`. They cost
+        # microseconds, cannot be wrong within their applicability, and
+        # refuse everything outside it. Both were already implemented --
+        # in `tools`, where the router could not see them.
+        BrainSpec(
+            brain_id="arithmetic", provider="algorithmic", model="ast-eval",
+            substrate="algorithmic", tier="small",
+            strengths=("math",), local=True, free=True,
+            notes="Точная арифметика через AST. Отказывается от всего остального.",
+        ),
+        BrainSpec(
+            brain_id="code-exec", provider="algorithmic", model="sandbox",
+            substrate="algorithmic", tier="small",
+            strengths=("programming",), local=True, free=True,
+            notes="Выполняет код из задачи в песочнице и возвращает вывод.",
+        ),
         # --- local, always free, no key --------------------------------
         BrainSpec(
             brain_id="ollama", provider="ollama", model=cfg.ollama_model,
@@ -465,13 +530,19 @@ class BrainPool:
     """
 
     def __init__(self, config: Config, vlog: Optional[Callable[[str], None]] = None,
-                 transport: Optional[Callable[..., str]] = None):
+                 transport: Optional[Callable[..., str]] = None,
+                 verifier: Any = None):
         self.config = config
         self.vlog = vlog
         #: Injectable transport, used by the tests to exercise routing,
         #: failover, quotas and consensus without a network. Production
         #: leaves it None and the real adapters run.
         self._transport = transport
+        #: Sandbox for the algorithmic substrate. Injected rather than
+        #: constructed here so the pool keeps no opinion about how code
+        #: gets executed, and so a test can run the arithmetic brain
+        #: without a sandbox at all.
+        self._verifier = verifier
         self._lock = threading.RLock()
         self.brains: Dict[str, BrainSpec] = {}
         self.health: Dict[str, BrainHealth] = {}
@@ -513,6 +584,13 @@ class BrainPool:
         whether it is *currently* healthy -- see `ready`."""
         if not spec.enabled or not spec.has_key():
             return False
+        if spec.is_algorithmic:
+            # No key, no socket, no language model. Gating it on
+            # `enable_llm` or on `requests` would switch off exact
+            # arithmetic because a network library is missing, which is
+            # the sort of coupling that made the cheap substrate
+            # unreachable in the first place.
+            return True
         if spec.local and not self.config.enable_llm:
             # `enable_llm` means "a LOCAL backend is on", not "any LLM is
             # allowed" -- a machine with a free remote key and no Ollama
@@ -559,6 +637,16 @@ class BrainPool:
 
     def configured(self) -> List[str]:
         return [b for b, s in self.brains.items() if self.usable(s)]
+
+    def language_models(self) -> List[str]:
+        """Configured brains that will attempt an arbitrary prompt.
+
+        Separate from `configured()` because an algorithmic brain is
+        configured, ready, and completely unable to answer "explain why
+        the sky is blue".
+        """
+        return [b for b, s in self.brains.items()
+                if self.usable(s) and s.answers_open_prompts]
 
     # ---------- routing ----------
 
@@ -612,6 +700,12 @@ class BrainPool:
         if not spec.free and not allow_paid:
             return float("-inf")
         score = 1.0 * spec.weight
+        # The cascade, expressed as a preference rather than a special
+        # case: cheaper machinery outranks dearer machinery of equal
+        # standing, and an algorithmic brain that cannot answer refuses
+        # in microseconds, so putting it first costs nothing when it is
+        # wrong about its own applicability.
+        score += SUBSTRATE_PREFERENCE.get(self.substrate_of(spec), 0.0)
         if kind and kind in spec.strengths:
             score += 0.55
         gap = tier_rank(spec.tier) - tier_rank(min_tier)
@@ -640,7 +734,8 @@ class BrainPool:
 
     def select(self, *, kind: str = "general", difficulty: Optional[float] = None,
                task: str = "", policy: str = "", exclude: Sequence[str] = (),
-               limit: int = 1, allow_paid: Optional[bool] = None) -> List[str]:
+               limit: int = 1, allow_paid: Optional[bool] = None,
+               exclude_substrates: Sequence[str] = ()) -> List[str]:
         """Rank ready brains for this call and return the top `limit` ids.
 
         Returns [] when nothing is ready -- callers must treat that exactly
@@ -658,6 +753,11 @@ class BrainPool:
             scored: List[Tuple[float, str]] = []
             for bid, spec in self.brains.items():
                 if bid in exclude or not self.ready(bid, now):
+                    continue
+                # A hard exclusion, unlike `avoid`. The baseline arm of a
+                # brain experiment must be a language model and nothing
+                # else, or the comparison is the candidate against itself.
+                if exclude_substrates and spec.substrate in exclude_substrates:
                     continue
                 value = self._score(spec, self.health[bid], kind=kind, min_tier=min_tier,
                                     policy=policy, allow_paid=bool(allow_paid))
@@ -761,6 +861,12 @@ class BrainPool:
         leaves the dict empty, and that absence is recorded as
         "unmeasured" rather than as zero -- see core.cost.
         """
+        if spec.is_algorithmic:
+            # Before the transport check on purpose: an injected test
+            # transport stands in for a network, and an algorithmic brain
+            # does not use one. Letting the double answer for it would
+            # test the double.
+            return substrates.call(spec.brain_id, prompt, self._verifier)
         if self._transport is not None:
             # An injected transport is a test double. It reports no usage,
             # which is honest: nothing was spent.
@@ -906,6 +1012,19 @@ class BrainPool:
             self._log(f"BRAIN OK | {brain_id} | tag={context_tag or '-'} | time={elapsed:.2f}s")
             return {"ok": True, "brain": brain_id, "model": spec.model, "text": text,
                     "latency": elapsed, "error": "", "timeout": False,
+                    "refused": False, "substrate": spec.substrate,
+                    "cost": self._cost_of(spec, elapsed, usage)}
+        except BrainRefusal as refusal:
+            # Not a failure. A brain that declines what it cannot answer
+            # exactly is working correctly, and recording it as a fault
+            # would push a healthy brain into cooldown for doing its job
+            # -- after which the cheap substrate stops being offered at
+            # all, which is the behaviour this whole phase exists to end.
+            elapsed = time.perf_counter() - t0
+            self._log(f"BRAIN REFUSED | {brain_id} | tag={context_tag or '-'} | {refusal}")
+            return {"ok": False, "brain": brain_id, "model": spec.model, "text": None,
+                    "latency": elapsed, "error": f"refused: {refusal}",
+                    "timeout": False, "refused": True, "substrate": spec.substrate,
                     "cost": self._cost_of(spec, elapsed, usage)}
         except Exception as exc:
             elapsed = time.perf_counter() - t0
@@ -924,23 +1043,26 @@ class BrainPool:
             return {"ok": False, "brain": brain_id, "model": spec.model, "text": None,
                     "latency": elapsed, "error": f"{type(exc).__name__}: {exc}",
                     "timeout": timed_out, "rate_limited": limited, "unreachable": gone,
+                    "refused": False, "substrate": spec.substrate,
                     "cost": self._cost_of(spec, elapsed, usage)}
         finally:
             self._release(brain_id)
 
     @staticmethod
     def substrate_of(spec: BrainSpec) -> str:
-        """What kind of machinery this brain is, for cost accounting.
-
-        Derived from `local` for now. Phase 15 replaces this with a
-        declared field on BrainSpec, once a brain can be something other
-        than a language model; deriving it here keeps the cost units
-        honest without pre-empting that change.
-        """
-        return cost_units.LOCAL_LLM if spec.local else cost_units.REMOTE_LLM
+        """What kind of machinery this brain is, for cost accounting."""
+        return spec.substrate or (cost_units.LOCAL_LLM if spec.local
+                                  else cost_units.REMOTE_LLM)
 
     def _cost_of(self, spec: BrainSpec, elapsed: float,
                  usage: Dict[str, int]) -> Dict[str, Any]:
+        if spec.is_algorithmic:
+            one = cost_units.one_call(
+                substrate=cost_units.ALGORITHMIC, wall_seconds=elapsed,
+                tokens_in=0, tokens_out=0)
+            with self._lock:
+                self._cost = self._cost.add(one)
+            return one.as_dict()
         one = cost_units.one_call(
             substrate=self.substrate_of(spec), wall_seconds=elapsed,
             tokens_in=usage.get("tokens_in"), tokens_out=usage.get("tokens_out"))
@@ -962,7 +1084,8 @@ class BrainPool:
     def ask(self, prompt: str, *, system: str = "", temperature: float = 0.2, kind: str = "general",
             difficulty: Optional[float] = None, task: str = "", brain: str = "auto",
             policy: str = "", context_tag: str = "", timeout: Optional[float] = None,
-            avoid: Sequence[str] = (), max_attempts: Optional[int] = None) -> Dict[str, Any]:
+            avoid: Sequence[str] = (), max_attempts: Optional[int] = None,
+            exclude_substrates: Sequence[str] = ()) -> Dict[str, Any]:
         """Route to the best brain, failing over down the ranking.
 
         `brain` accepts a brain_id or a legacy provider name -- see
@@ -991,11 +1114,13 @@ class BrainPool:
                         "timeout": False, "avoided": False}
         if avoid and not order:
             order += self.select(kind=kind, difficulty=difficulty, task=task or prompt,
-                                 policy=policy, exclude=list(avoid), limit=attempts)
+                                 policy=policy, exclude=list(avoid), limit=attempts,
+                                 exclude_substrates=exclude_substrates)
             avoided = bool(order)
         if not order:
             order += self.select(kind=kind, difficulty=difficulty, task=task or prompt,
-                                 policy=policy, exclude=order, limit=attempts)
+                                 policy=policy, exclude=order, limit=attempts,
+                                 exclude_substrates=exclude_substrates)
         elif len(order) < attempts:
             order += self.select(kind=kind, difficulty=difficulty, task=task or prompt,
                                  policy=policy, exclude=order, limit=attempts - len(order))

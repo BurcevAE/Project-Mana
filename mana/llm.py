@@ -28,7 +28,7 @@ from .config import Config
 from .optional_deps import HAS_REQUESTS
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "2.0"
+__version__ = "2.2"
 
 
 @dataclass
@@ -72,14 +72,17 @@ class LLMClient:
 
     @property
     def enabled(self) -> bool:
-        """True when *any* brain can be called.
+        """True when a LANGUAGE MODEL can be called.
 
-        Deliberately broader than before: MANA used to be "enabled" only if
-        `enable_llm and HAS_REQUESTS`, i.e. only if the local backend was
-        on. With a pool, a machine with no Ollama but a free Gemini key is
-        a machine with a working LLM, and the agent should say so.
+        Broader than the original `enable_llm and HAS_REQUESTS`: a machine
+        with no Ollama but a free Gemini key has a working LLM and should
+        say so. Narrower than "any brain is configured", which is what
+        this checked until algorithmic brains existed -- and which made
+        `llm_generate` advertise itself on a machine whose only brain was
+        an AST arithmetic evaluator that refuses every open prompt.
         """
-        return bool(self.config.brain_pool_enabled) and bool(self.pool.configured())
+        return (bool(self.config.brain_pool_enabled)
+                and bool(self.pool.language_models()))
 
     def available_providers(self) -> List[str]:
         """Legacy name; returns brain ids that are ready right now."""
