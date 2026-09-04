@@ -99,6 +99,34 @@ def test_no_external_brains_leaves_only_local(isolated_config):
     assert pool.available() == ["local"]
 
 
+def test_an_exported_key_cannot_change_what_a_test_sees(isolated_config, monkeypatch):
+    """The property the live run showed was missing.
+
+    Not about enable_llm -- that legitimately leaves remote brains
+    usable. About the suite: exporting a provider key must not change
+    what any test observes, or a passing run means nothing until you
+    know which shell it ran in.
+    """
+    import os
+    monkeypatch.setenv("GROQ_API_KEY", "gsk_live_looking_value")
+    isolated_config.enable_llm = True
+    seen = {name: os.environ.get(name) for name in ("GEMINI_API_KEY",
+                                                    "OPENAI_API_KEY",
+                                                    "OPENROUTER_API_KEY")}
+    assert seen == {"GEMINI_API_KEY": None, "OPENAI_API_KEY": None,
+                    "OPENROUTER_API_KEY": None},         "conftest._no_ambient_api_keys must hide every provider key"
+
+
+def test_the_real_catalog_finds_no_brains_in_a_clean_environment(isolated_config):
+    """The four tests that broke did so because the real catalog picked
+    up a real key. With the environment cleared, only keyless brains
+    remain -- which is what an offline test is entitled to assume."""
+    from mana.brains import BrainPool
+    isolated_config.enable_llm = False
+    pool = BrainPool(isolated_config, transport=lambda **kw: "ok")
+    assert pool.available() == []
+
+
 def test_a_brain_without_its_api_key_is_simply_absent(isolated_config, monkeypatch):
     monkeypatch.delenv("NOPE_KEY", raising=False)
     isolated_config.enable_llm = True

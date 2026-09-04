@@ -63,6 +63,11 @@ class Config:
     hardware_auto_adapt: bool = True
 
     # LLM
+    #: A LOCAL backend is on. NOT "any LLM is allowed": a remote brain
+    #: with a key stays usable when this is False, so a machine with a
+    #: free key and no Ollama still works. Use brain_external_enabled
+    #: for remote; --no-llm clears both. The name reads like the wider
+    #: promise and the test suite once assumed it did.
     enable_llm: bool = True
     llm_backend: str = "ollama"
     ollama_url: str = "http://localhost:11434/api/generate"
