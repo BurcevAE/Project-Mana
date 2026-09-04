@@ -220,6 +220,24 @@ def default_catalog(cfg: Config) -> List[BrainSpec]:
             strengths=("programming",), local=True, free=True,
             notes="Выполняет код из задачи в песочнице и возвращает вывод.",
         ),
+        BrainSpec(
+            brain_id="sequence-solver", provider="algorithmic", model="difference-table",
+            substrate="algorithmic", tier="small",
+            strengths=("sequence",), local=True, free=True,
+            notes="Продолжает последовательность по ДОКАЗАННОМУ правилу, иначе отказ.",
+        ),
+        BrainSpec(
+            brain_id="text-ops", provider="algorithmic", model="counter",
+            substrate="algorithmic", tier="small",
+            strengths=("general",), local=True, free=True,
+            notes="Считает и выбирает по данному тексту точно.",
+        ),
+        BrainSpec(
+            brain_id="order-logic", provider="algorithmic", model="toposort",
+            substrate="algorithmic", tier="small",
+            strengths=("reasoning",), local=True, free=True,
+            notes="Топологическая сортировка ограничений «раньше». Отказ при неоднозначности.",
+        ),
         # --- local, always free, no key --------------------------------
         BrainSpec(
             brain_id="ollama", provider="ollama", model=cfg.ollama_model,
@@ -1101,6 +1119,7 @@ class BrainPool:
         """
         attempts = max(1, int(max_attempts or self.config.brain_max_attempts))
         tried: List[str] = []
+        refused: List[str] = []
         errors: List[Dict[str, str]] = []
         order: List[str] = []
         avoided = False
@@ -1118,8 +1137,11 @@ class BrainPool:
                                  exclude_substrates=exclude_substrates)
             avoided = bool(order)
         if not order:
+            # Enough room for every cheap brain to decline and still reach
+            # a model: `limit` is a selection width, not the attempt budget.
             order += self.select(kind=kind, difficulty=difficulty, task=task or prompt,
-                                 policy=policy, exclude=order, limit=attempts,
+                                 policy=policy, exclude=order,
+                                 limit=attempts + len(self.brains),
                                  exclude_substrates=exclude_substrates)
         elif len(order) < attempts:
             order += self.select(kind=kind, difficulty=difficulty, task=task or prompt,
@@ -1130,10 +1152,22 @@ class BrainPool:
                     "timeout": False, "avoided": False}
         total_latency = 0.0
         last_timeout = False
-        for brain_id in order[:attempts]:
+        # A refusal does not consume the attempt budget. That budget exists
+        # to stop retrying FAILURES; a brain declining what it cannot answer
+        # exactly has not attempted anything. Without this, five cheap
+        # algorithmic brains ranked above the models would exhaust three
+        # attempts on three refusals and the language model would never be
+        # reached -- adding a cheap substrate would silently make the
+        # system worse at everything that substrate cannot do.
+        budget = attempts
+        for brain_id in order:
+            if len([b for b in tried if b not in refused]) >= budget:
+                break
             res = self.ask_brain(brain_id, prompt, system=system, temperature=temperature,
                                  timeout=timeout, context_tag=context_tag)
             tried.append(brain_id)
+            if res.get("refused"):
+                refused.append(brain_id)
             total_latency += float(res.get("latency", 0.0))
             if res.get("ok"):
                 res["attempts"] = tried

@@ -131,7 +131,8 @@ def test_the_real_catalog_finds_no_language_model_in_a_clean_environment(isolate
     isolated_config.enable_llm = False
     pool = BrainPool(isolated_config, transport=lambda **kw: "ok")
     assert pool.language_models() == []
-    assert set(pool.available()) == {"arithmetic", "code-exec"}
+    assert set(pool.available()) == {"arithmetic", "code-exec", "sequence-solver",
+                                    "text-ops", "order-logic"}
 
 
 def test_a_brain_without_its_api_key_is_simply_absent(isolated_config, monkeypatch):

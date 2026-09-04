@@ -39,6 +39,7 @@ from mana.brains import BrainPool                                # noqa: E402
 from mana.core import gates, oracle, splits, tasks as core_tasks  # noqa: E402
 from mana.core.cost import CostVector, efficiency                # noqa: E402
 from mana.core.gates import Claim, Evidence, PairedOutcome       # noqa: E402
+from mana.cognition.brain_factory import choose_mechanism        # noqa: E402
 
 FORMAT = ("Ответь только итоговым значением, без пояснений, без единиц "
           "измерения и без знаков препинания вокруг него.")
@@ -46,7 +47,11 @@ FORMAT = ("Ответь только итоговым значением, без
 #: Домены, на которых мозг НЕ должен помогать. Проверка того, что
 #: измеряется механизм, а не удача: улучшение здесь означало бы, что
 #: измеряется что-то другое.
-FOREIGN_DOMAINS = ("text_ops", "logic")
+#: Какой алгоритмический мозг отвечает за какой домен. Правило выбора
+#: механизма (brain_factory.choose_mechanism) отвечает "algorithmic" для
+#: всех четырёх: ответ в каждом из них вычислим точно.
+DOMAIN_BRAIN = {"arithmetic": "arithmetic", "sequence": "sequence-solver",
+                "text_ops": "text-ops", "logic": "order-logic"}
 
 
 def ask(pool: BrainPool, brain: str, prompt: str, domain: str,
@@ -132,7 +137,8 @@ def hidden_arms(pool: BrainPool, per_domain: int):
     return base, cand
 
 
-def counterexample_search(pool: BrainPool, probes: int) -> Tuple[int, int, List[str]]:
+def counterexample_search(pool: BrainPool, probes: int, brain: str,
+                          foreign: Tuple[str, ...]) -> Tuple[int, int, List[str]]:
     """Ищем то, что убило бы идею: уверенный неверный ответ вместо отказа.
 
     Молчаливый отказ — это правильное поведение и НЕ контрпример.
@@ -141,10 +147,10 @@ def counterexample_search(pool: BrainPool, probes: int) -> Tuple[int, int, List[
     sought = 0
     found = 0
     examples: List[str] = []
-    for domain in FOREIGN_DOMAINS:
+    for domain in foreign:
         for task in core_tasks.generate(domain, probes, seed=31337):
             sought += 1
-            text, _ = ask(pool, "arithmetic", task.prompt, task.domain, task.difficulty)
+            text, _ = ask(pool, brain, task.prompt, task.domain, task.difficulty)
             if not text:
                 continue                       # отказался — так и надо
             if not oracle.grade(task, text).correct:
@@ -155,6 +161,8 @@ def counterexample_search(pool: BrainPool, probes: int) -> Tuple[int, int, List[
 
 def main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--domain", default="arithmetic",
+                        choices=sorted(DOMAIN_BRAIN))
     parser.add_argument("--trials", type=int, default=30)
     parser.add_argument("--hidden-per-domain", type=int, default=3)
     parser.add_argument("--probes", type=int, default=6)
@@ -172,21 +180,26 @@ def main() -> int:
     log: Dict[str, Any] = {}
     started = time.perf_counter()
 
-    tasks = core_tasks.generate("arithmetic", args.trials, seed=int(time.time()) % 90000)
-    print(f"\nпарный прогон на {len(tasks)} задачах arithmetic...")
+    domain = args.domain
+    brain = DOMAIN_BRAIN[domain]
+    foreign = tuple(d for d in DOMAIN_BRAIN if d != domain)[:2]
+    tasks = core_tasks.generate(domain, args.trials, seed=int(time.time()) % 90000)
+    print(f"\nмеханизм для {domain}: "
+          f"{choose_mechanism(domain, exactly_computable=True).mechanism}")
+    print(f"парный прогон на {len(tasks)} задачах {domain}...")
     outcomes, base_cost, cand_cost = paired_run(pool, tasks, log)
 
     print("скрытая выборка для обеих рук...")
     base_res, cand_res = hidden_arms(pool, args.hidden_per_domain)
     base_hidden, cand_hidden = base_res.strict_accuracy, cand_res.strict_accuracy
 
-    print(f"поиск контрпримеров в {', '.join(FOREIGN_DOMAINS)}...")
-    sought, found, examples = counterexample_search(pool, args.probes)
+    print(f"поиск контрпримеров в {', '.join(foreign)}...")
+    sought, found, examples = counterexample_search(pool, args.probes, brain, foreign)
 
     claim = Claim(
-        claim_id="algorithmic-arithmetic-brain", kind="program",
-        description="каскад с алгоритмическим мозгом точнее одной модели на арифметике",
-        asserts_domains=("arithmetic",))
+        claim_id=f"algorithmic-{brain}", kind="program",
+        description=f"каскад с мозгом {brain} точнее одной модели на {domain}",
+        asserts_domains=(domain,))
     # with_hidden берёт СТРОГУЮ точность и разбивку по доменам: гейт
     # сам сузит подтверждение до доменов заявки и проверит, не обвалился
     # ли какой-то другой. Передавать .accuracy руками — это и есть способ
