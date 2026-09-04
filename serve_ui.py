@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+import webbrowser
 
 from mana import events
 from mana.cli import build_config, build_parser
@@ -24,6 +25,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="MANA UI without the window")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--no-llm", action="store_true")
+    parser.add_argument("--no-browser", action="store_true",
+                        help="не открывать браузер, только поднять сервер")
     opts = parser.parse_args()
 
     events.install_console_sink()
@@ -35,12 +38,29 @@ def main() -> int:
 
     session = AgentSession(config)
     httpd = start_server(session, port=opts.port)
-    print(f"UI: http://127.0.0.1:{httpd.server_address[1]}/")
+    url = f"http://127.0.0.1:{httpd.server_address[1]}/"
+
+    # Printing a URL and then sleeping forever looks exactly like a hang:
+    # nothing opens, nothing else is printed, and the prompt never comes
+    # back. Reported from a live run as "the browser never opened and it
+    # said nothing". Open it, and say plainly that the silence afterwards
+    # is the server running rather than a stall.
+    if not opts.no_browser:
+        try:
+            webbrowser.open(url)
+        except Exception as exc:                       # pragma: no cover
+            print(f"не смог открыть браузер ({exc}); откройте адрес вручную")
+
+    print("")
+    print(f"MANA UI: {url}")
+    print("Сервер работает. Это не зависание — терминал занят, пока UI открыт.")
+    print("Ctrl+C чтобы остановить.")
+    print("")
     try:
         while True:
             time.sleep(3600)
     except KeyboardInterrupt:
-        pass
+        print("остановлено")
     finally:
         httpd.shutdown()
         session.close()

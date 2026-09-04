@@ -305,3 +305,72 @@ def test_onefile_extraction_outside_the_app_folder_is_ephemeral(monkeypatch, tmp
     monkeypatch.setattr(sys, "executable", str(app_dir / "MANA.exe"), raising=False)
     monkeypatch.setattr(paths, "package_root", lambda: extraction / "mana")
     assert paths.package_is_ephemeral() is True
+
+# ---------------------------------------------------------------------------
+# the window has to stay a window
+# ---------------------------------------------------------------------------
+
+def _ui_css() -> str:
+    from mana import paths
+    page = Path(paths.package_root()).parent / "mana_desktop" / "web" / "index.html"
+    if not page.exists():                       # packaged layouts differ
+        page = Path(__file__).resolve().parent.parent / "mana_desktop" / "web" / "index.html"
+    return page.read_text(encoding="utf-8")
+
+
+#: Every element between the viewport and the scrolling chat log. A grid or
+#: flex item defaults to min-height:auto -- "never shrink below my content"
+#: -- so one missing declaration anywhere in this chain stops the log
+#: scrolling and lets the column grow past the window instead.
+_MUST_NOT_GROW = (".chat", ".log", "aside", ".pane")
+
+
+def test_the_scroll_chain_declares_min_height_zero():
+    """Reported from a live run of the window: the first messages sat above
+    the top edge, the composer and Send button were pushed below the
+    bottom, and the chat had no scrollbar.
+
+    Measured in a browser before the fix: .log reached 39 622px inside an
+    800px window and `log.scrollHeight > log.clientHeight` was false --
+    it never scrolled, it grew. Every rule below is load-bearing; the
+    layout looks correct in the source without them, which is why this is
+    a test and not a comment.
+    """
+    css = _ui_css()
+    missing = []
+    for selector in _MUST_NOT_GROW:
+        start = css.find(selector + " {")
+        if start < 0:
+            start = css.find(selector + " ")
+        block = css[start:css.find("}", start)] if start >= 0 else ""
+        if "min-height: 0" not in block:
+            missing.append(selector)
+    assert not missing, (
+        f"these must declare min-height: 0 or the window stops containing "
+        f"its own content: {missing}")
+
+
+def test_the_grid_row_cannot_outgrow_the_viewport():
+    """An implicit grid row is sized by its content, so `height: 100vh` on
+    the body did not stop the row itself from being taller."""
+    css = _ui_css()
+    assert "grid-template-rows: minmax(0, 1fr)" in css
+
+
+def test_the_log_still_scrolls_itself_to_the_newest_message():
+    """The auto-scroll was always there; it did nothing because the log
+    was not a scrolling box. Keeping both facts pinned together."""
+    css = _ui_css()
+    assert "overflow-y: auto" in css
+    assert 'scrollTop = $("log").scrollHeight' in css
+
+
+def test_serving_the_ui_opens_a_browser_and_says_it_is_running():
+    """Printing a URL and then sleeping forever is indistinguishable from
+    a hang: nothing opens, nothing more is printed, the prompt never
+    returns. Reported as exactly that."""
+    source = (Path(__file__).resolve().parent.parent / "serve_ui.py").read_text(
+        encoding="utf-8")
+    assert "webbrowser.open(url)" in source
+    assert "--no-browser" in source
+    assert "не зависание" in source
