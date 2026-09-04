@@ -59,10 +59,11 @@ from pathlib import Path
 from typing import Any, Callable, Deque, Dict, List, Optional, Sequence, Tuple
 
 from .config import Config
+from .core import cost as cost_units
 from .optional_deps import requests, HAS_REQUESTS
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "2.0"
+__version__ = "2.1"
 
 
 # ---------------------------------------------------------------------------
@@ -478,6 +479,11 @@ class BrainPool:
         self.calls = 0
         self.failures = 0
         self.timeouts = 0
+        #: Everything this pool has spent, in real units. Accumulated here
+        #: rather than by each caller, because a caller that forgets to
+        #: add up its own cost reports a cheaper run than happened, and
+        #: the whole point of the unit change is that nobody can.
+        self._cost = cost_units.CostVector()
         catalog = load_catalog(config)
         # One probe per pool, not per call, and only when a real network
         # is in play: an injected transport means a test, and a test must
@@ -746,33 +752,58 @@ class BrainPool:
     # ---------- transport ----------
 
     def _call_brain(self, spec: BrainSpec, prompt: str, system: str, temperature: float,
-                    timeout: float) -> str:
+                    timeout: float, usage: Optional[Dict[str, int]] = None) -> str:
+        """`usage` is an out-parameter the adapters fill with token counts.
+
+        Passed explicitly rather than stashed on the instance because the
+        pool is threaded: an instance slot would be written by whichever
+        call finished last. An adapter that cannot report tokens simply
+        leaves the dict empty, and that absence is recorded as
+        "unmeasured" rather than as zero -- see core.cost.
+        """
         if self._transport is not None:
+            # An injected transport is a test double. It reports no usage,
+            # which is honest: nothing was spent.
             return self._transport(spec=spec, prompt=prompt, system=system,
                                    temperature=temperature, timeout=timeout)
         if spec.provider == "ollama":
-            return self._call_ollama(spec, prompt, system, temperature, timeout)
+            return self._call_ollama(spec, prompt, system, temperature, timeout, usage)
         if spec.provider == "gemini":
-            return self._call_gemini(spec, prompt, system, temperature, timeout)
+            return self._call_gemini(spec, prompt, system, temperature, timeout, usage)
         if spec.provider == "openai_responses":
             return self._call_openai_responses(spec, prompt, system, timeout)
-        return self._call_openai_chat(spec, prompt, system, temperature, timeout)
+        return self._call_openai_chat(spec, prompt, system, temperature, timeout, usage)
+
+    @staticmethod
+    def _record_usage(usage: Optional[Dict[str, int]], tokens_in: Any, tokens_out: Any) -> None:
+        """Write token counts only when the provider actually sent them."""
+        if usage is None:
+            return
+        try:
+            if tokens_in is not None:
+                usage["tokens_in"] = int(tokens_in)
+            if tokens_out is not None:
+                usage["tokens_out"] = int(tokens_out)
+        except (TypeError, ValueError):                 # pragma: no cover
+            pass
 
     def _call_ollama(self, spec: BrainSpec, prompt: str, system: str, temperature: float,
-                     timeout: float) -> str:
+                     timeout: float, usage: Optional[Dict[str, int]] = None) -> str:
         payload = {"model": spec.model,
                    "prompt": ((system + "\n\n") if system else "") + prompt,
                    "stream": False,
                    "options": {"temperature": float(temperature), "num_predict": int(spec.max_tokens)}}
         r = requests.post(spec.base_url, json=payload, timeout=timeout)
         r.raise_for_status()
-        text = (r.json().get("response") or "").strip()
+        data = r.json()
+        self._record_usage(usage, data.get("prompt_eval_count"), data.get("eval_count"))
+        text = (data.get("response") or "").strip()
         if not text:
             raise RuntimeError("empty response")
         return text
 
     def _call_openai_chat(self, spec: BrainSpec, prompt: str, system: str, temperature: float,
-                          timeout: float) -> str:
+                          timeout: float, usage: Optional[Dict[str, int]] = None) -> str:
         headers = {"Content-Type": "application/json"}
         if spec.api_key:
             headers["Authorization"] = f"Bearer {spec.api_key}"
@@ -786,6 +817,9 @@ class BrainPool:
         r = requests.post(spec.base_url, headers=headers, json=payload, timeout=timeout)
         r.raise_for_status()
         data = r.json()
+        reported = data.get("usage") or {}
+        self._record_usage(usage, reported.get("prompt_tokens"),
+                           reported.get("completion_tokens"))
         choices = data.get("choices") or []
         text = ""
         if choices:
@@ -864,13 +898,15 @@ class BrainPool:
         t0 = time.perf_counter()
         self._log(f"BRAIN START | {brain_id} ({spec.model}) | tag={context_tag or '-'} | "
                   f"timeout={eff_timeout:.0f}s")
+        usage: Dict[str, int] = {}
         try:
-            text = self._call_brain(spec, prompt, system, temperature, eff_timeout)
+            text = self._call_brain(spec, prompt, system, temperature, eff_timeout, usage)
             elapsed = time.perf_counter() - t0
             self._note_success(brain_id, elapsed)
             self._log(f"BRAIN OK | {brain_id} | tag={context_tag or '-'} | time={elapsed:.2f}s")
             return {"ok": True, "brain": brain_id, "model": spec.model, "text": text,
-                    "latency": elapsed, "error": "", "timeout": False}
+                    "latency": elapsed, "error": "", "timeout": False,
+                    "cost": self._cost_of(spec, elapsed, usage)}
         except Exception as exc:
             elapsed = time.perf_counter() - t0
             timed_out, limited, retry_after = classify_error(exc)
@@ -881,11 +917,47 @@ class BrainPool:
             self._log(f"BRAIN FAIL | {brain_id} | tag={context_tag or '-'} | "
                       f"{'429' if limited else ('unreachable' if gone else ('timeout' if timed_out else type(exc).__name__))} | "
                       f"time={elapsed:.2f}s")
+            # A failed call still cost time, and often tokens. Reporting it
+            # as free would make an unreliable brain look cheap -- exactly
+            # backwards, since its failures are paid for twice: once here
+            # and again by the failover that follows.
             return {"ok": False, "brain": brain_id, "model": spec.model, "text": None,
                     "latency": elapsed, "error": f"{type(exc).__name__}: {exc}",
-                    "timeout": timed_out, "rate_limited": limited, "unreachable": gone}
+                    "timeout": timed_out, "rate_limited": limited, "unreachable": gone,
+                    "cost": self._cost_of(spec, elapsed, usage)}
         finally:
             self._release(brain_id)
+
+    @staticmethod
+    def substrate_of(spec: BrainSpec) -> str:
+        """What kind of machinery this brain is, for cost accounting.
+
+        Derived from `local` for now. Phase 15 replaces this with a
+        declared field on BrainSpec, once a brain can be something other
+        than a language model; deriving it here keeps the cost units
+        honest without pre-empting that change.
+        """
+        return cost_units.LOCAL_LLM if spec.local else cost_units.REMOTE_LLM
+
+    def _cost_of(self, spec: BrainSpec, elapsed: float,
+                 usage: Dict[str, int]) -> Dict[str, Any]:
+        one = cost_units.one_call(
+            substrate=self.substrate_of(spec), wall_seconds=elapsed,
+            tokens_in=usage.get("tokens_in"), tokens_out=usage.get("tokens_out"))
+        with self._lock:
+            self._cost = self._cost.add(one)
+        return one.as_dict()
+
+    def total_cost(self) -> cost_units.CostVector:
+        """What this pool has spent since it was built.
+
+        Includes failed calls: a failure costs time and often tokens, and
+        reporting it as free would make an unreliable brain look cheap --
+        backwards, since its failures are paid for twice, once here and
+        again by the failover that follows.
+        """
+        with self._lock:
+            return self._cost
 
     def ask(self, prompt: str, *, system: str = "", temperature: float = 0.2, kind: str = "general",
             difficulty: Optional[float] = None, task: str = "", brain: str = "auto",

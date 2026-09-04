@@ -49,7 +49,7 @@ from typing import Dict
 __version__ = "2.0"
 
 #: The release as a whole.
-PRODUCT_VERSION = "2.0.2"
+PRODUCT_VERSION = "2.1.0"
 
 #: Modules that carry their own version. Kept as an explicit list rather
 #: than discovered by scanning, so a module added without a version number
@@ -60,6 +60,7 @@ VERSIONED_MODULES = (
     "brains", "decompose", "paths", "events",
     "core", "core.tasks", "core.oracle", "core.splits",
     "core.gates", "core.evaluation", "core.transaction",
+    "core.cost", "core.instrument",
     "cognition", "cognition.ir", "cognition.genome",
     "cognition.programs", "cognition.compiler", "cognition.runtime",
     "cognition.self_model", "cognition.gaps", "cognition.experiments",

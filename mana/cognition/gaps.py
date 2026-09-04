@@ -38,11 +38,12 @@ import math
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
+from ..core import instrument
 from .self_model import (MIN_OBSERVATIONS, Capability, SelfModel,
                          wilson_interval)
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "2.0"
+__version__ = "2.1"
 
 COMPETENCE = "competence"      # measured, and low
 KNOWLEDGE = "knowledge"        # not measured well enough to say
@@ -237,14 +238,21 @@ def _action_for(cap: Capability, dominant_failure: str) -> str:
 def _build(kind: str, cap: Capability, description: str, severity: float,
            uncertainty: float, frequency: float, information_gain: float,
            capability_gain: float, cost: float, action: str) -> Gap:
-    priority = (
-        PRIORITY_WEIGHTS["severity"] * severity +
-        PRIORITY_WEIGHTS["uncertainty"] * uncertainty +
-        PRIORITY_WEIGHTS["frequency"] * frequency +
-        PRIORITY_WEIGHTS["information_gain"] * information_gain +
-        PRIORITY_WEIGHTS["capability_gain"] * capability_gain +
-        PRIORITY_WEIGHTS["cost"] * min(1.0, cost)
-    )
+    # Counted at the point of USE, not at import. A meta-experiment that
+    # varies one of these weights has no way to tell "the parameter does
+    # not matter" from "the code that reads it never ran" -- both produce
+    # identical numbers. A live run hit exactly that: two policies scored
+    # an identical 1.398 because every step went to unmeasured slices,
+    # where this function is never reached.
+    terms = {
+        "severity": severity, "uncertainty": uncertainty, "frequency": frequency,
+        "information_gain": information_gain, "capability_gain": capability_gain,
+        "cost": min(1.0, cost),
+    }
+    priority = 0.0
+    for name, value in terms.items():
+        instrument.record_read(f"gap.{name}")
+        priority += PRIORITY_WEIGHTS[name] * value
     return Gap(
         gap_id=f"{cap.capability_id}:{kind}", kind=kind,
         capability_id=cap.capability_id, domain=cap.domain, band=cap.band,

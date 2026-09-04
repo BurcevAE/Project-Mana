@@ -93,6 +93,19 @@ def main() -> int:
             print(f"  {f['field_name']}: разделяет {f['separates_pairs']} "
                   f"противоречащих пар, осталось бы {f['remaining_pairs']}")
 
+    # Что прогон стоил на самом деле. До фазы 14 здесь можно было
+    # напечатать только число вызовов, в котором обращение к 120B и к
+    # локальной 7B — одна и та же единица.
+    from mana.core.cost import efficiency
+    spent = pool.total_cost()
+    gain = float(report["total_resolution"])
+    print("\nстоимость прогона в реальных единицах:")
+    print(f"  {spent.describe()}")
+    print(f"\nприрост {gain:.3f} на единицу стоимости:")
+    for name, value in efficiency(gain, spent).items():
+        shown = "не измерено" if value is None else f"{value:.5f}"
+        print(f"  {name:14s} {shown}")
+
     print("\nчто система теперь о себе знает:")
     for key, cap in sorted(model.capabilities().items()):
         if cap.band == "all":

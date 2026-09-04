@@ -52,6 +52,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from ..core import transaction
+from ..core.cost import CostVector
 from . import curriculum as cur
 from . import experiments as lab
 from .gaps import COMPETENCE, KNOWLEDGE, detect
@@ -545,7 +546,10 @@ class ResearchCycle:
         self.calls_used += confirmation.calls_used
         install_evidence = self._external_evidence(confirm_plan)
         installed = self.synthesizer.install(
-            proposal, confirmation.outcomes, cost_calls=confirmation.calls_used,
+            proposal, confirmation.outcomes,
+            cost=CostVector(calls=confirmation.calls_used,
+                            wall_seconds=confirmation.elapsed,
+                            unmeasured_token_calls=confirmation.calls_used),
             **install_evidence)
         if installed:
             self.adopted.append(proposal.name)

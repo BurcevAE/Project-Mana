@@ -22,6 +22,7 @@ from mana.cognition.synthesis import (ADOPTED, CapabilityProposal,
                                       CapabilitySynthesizer, PROPOSED, REJECTED,
                                       RETIRED, adopt, applicability_for, confirm,
                                       propose_capability, should_retire)
+from mana.core.cost import CostVector
 from mana.core.gates import PairedOutcome
 
 
@@ -58,7 +59,7 @@ def outcomes(n=40, baseline_ok=0.4, candidate_ok=0.8):
 
 def confirmed(proposal, **kw):
     return confirm(proposal, outcomes(), hidden=(0.40, 0.72),
-                   counterexamples=(3, 0), cost_calls=80, **kw)
+                   counterexamples=(3, 0), cost=CostVector(calls=80), **kw)
 
 
 # ---------------------------------------------------------------------------
@@ -317,7 +318,7 @@ def test_the_synthesizer_installs_and_reports(isolated_config):
     proposal = s.consider(discovery())
     assert proposal is not None
     assert s.install(proposal, outcomes(), hidden=(0.40, 0.72),
-                     counterexamples=(3, 0), cost_calls=80)
+                     counterexamples=(3, 0), cost=CostVector(calls=80))
     report = s.report()
     assert proposal.name in report["templates"]
     assert report["adopted"] == [proposal.name]
@@ -335,7 +336,7 @@ def test_a_review_withdraws_what_stopped_working(isolated_config):
     s = CapabilitySynthesizer(CognitiveGenome())
     proposal = s.consider(discovery())
     s.install(proposal, outcomes(), hidden=(0.40, 0.72),
-              counterexamples=(3, 0), cost_calls=80)
+              counterexamples=(3, 0), cost=CostVector(calls=80))
     assert proposal.name in s.genome.program_templates
     s.review(model_using(proposal.name, False))
     assert proposal.name not in s.genome.program_templates

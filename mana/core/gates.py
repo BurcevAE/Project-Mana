@@ -44,8 +44,10 @@ import math
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from .cost import CostVector
+
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "2.0"
+__version__ = "2.1"
 
 #: Minimum paired observations before any verdict is meaningful. Chosen
 #: against what the tests can actually deliver (100+ per split), not
@@ -109,7 +111,13 @@ class Evidence:
     candidate_transfer: Optional[float] = None
     counterexamples_sought: int = 0
     counterexamples_found: int = 0
-    cost_calls: int = 0
+    #: What the evidence cost to produce. Recorded, never judged: no gate
+    #: reads this field, and a gate that started to would make acceptance
+    #: depend on how expensive the proof was, which is not a property of
+    #: whether the claim is true. It replaced a plain `cost_calls: int`
+    #: because a call to a 120B remote model and a call to a local 7B were
+    #: the same number, which made "cheaper" unmeasurable.
+    cost: CostVector = field(default_factory=CostVector)
     notes: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -258,5 +266,5 @@ def judge(claim: Claim, evidence: Evidence) -> Verdict:
     accepted = not failed_required
     reason = "accepted" if accepted else "failed: " + ", ".join(failed_required)
     m["required_gates"] = sorted(required)
-    m["cost_calls"] = evidence.cost_calls
+    m["cost"] = evidence.cost.as_dict()
     return Verdict(accepted=accepted, reason=reason, failed_gates=failed_required, measurements=m)

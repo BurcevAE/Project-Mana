@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from ..core import gates, transaction
+from ..core.cost import CostVector
 from ..core.gates import Claim, Evidence, PairedOutcome
 from .gaps import Gap, detect
 from .programs import Budget, CognitiveProgram
@@ -378,7 +379,9 @@ class ExperimentLab:
             candidate_transfer=transfer[1] if transfer else None,
             counterexamples_sought=counterexamples[0],
             counterexamples_found=counterexamples[1],
-            cost_calls=measurement.calls_used)
+            cost=CostVector(calls=measurement.calls_used,
+                            wall_seconds=measurement.elapsed,
+                            unmeasured_token_calls=measurement.calls_used))
 
         with transaction.TransactionScope(
                 plan_.plan_id, "experiment", plan_.hypothesis.statement[:120]) as txn:

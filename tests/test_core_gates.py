@@ -13,6 +13,7 @@ import random
 import pytest
 
 from mana.core import evaluation, gates, transaction
+from mana.core.cost import CostVector
 from mana.core.gates import Claim, Evidence, PairedOutcome
 
 
@@ -34,7 +35,7 @@ def paired(n, base_rate, cand_rate, domain="arithmetic", seed=1):
 def full_evidence(outcomes, **overrides):
     """Evidence that passes everything except what a test overrides."""
     data = dict(paired_dev=outcomes, baseline_hidden=0.60, candidate_hidden=0.72,
-                counterexamples_sought=25, counterexamples_found=0, cost_calls=900)
+                counterexamples_sought=25, counterexamples_found=0, cost=CostVector(calls=900))
     data.update(overrides)
     return Evidence(**data)
 

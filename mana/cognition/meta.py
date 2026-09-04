@@ -61,13 +61,14 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from ..core import gates, transaction
+from ..core import gates, instrument, transaction
+from ..core.cost import CostVector
 from ..core.gates import Claim, Evidence, PairedOutcome
 from . import genome as genome_mod
 from .genome import CognitiveGenome
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "2.0"
+__version__ = "2.1"
 
 #: Modules whose constants this layer may tune. Every one of them is a
 #: *search* weight: it changes which experiment gets run first, never
@@ -176,6 +177,10 @@ class EpisodeResult:
     capability_gain: float   # hidden-holdout accuracy gained, if measured
     calls_used: int
     accepted_claims: int = 0     # recorded, never optimised -- see rule 3
+    #: What the episode actually chose to do, in order. Compared between
+    #: the two arms to tell "the parameter changed nothing" from "the
+    #: parameter changed no decision" -- see MetaProposal.decisions_differed.
+    decisions: Tuple[str, ...] = ()
 
     @property
     def value(self) -> float:
@@ -202,6 +207,12 @@ class MetaProposal:
     new_value: float
     rationale: str
     status: str = "PROPOSED"
+    #: How many times the parameter under test was actually read during
+    #: the episodes. Zero means the experiment measured something else.
+    parameter_reads: int = 0
+    #: On how many seeds the two arms made different decisions. Zero
+    #: means the parameter was consulted and its answer discarded.
+    decisions_differed: int = 0
     verdict: Dict[str, Any] = field(default_factory=dict)
     baseline: List[EpisodeResult] = field(default_factory=list)
     candidate: List[EpisodeResult] = field(default_factory=list)
@@ -219,6 +230,8 @@ class MetaProposal:
         return {"proposal_id": self.proposal_id, "parameter": self.parameter.as_dict(),
                 "new_value": self.new_value, "rationale": self.rationale,
                 "status": self.status, "verdict": dict(self.verdict),
+                "parameter_reads": self.parameter_reads,
+                "decisions_differed": self.decisions_differed,
                 "baseline": [e.as_dict() for e in self.baseline],
                 "candidate": [e.as_dict() for e in self.candidate]}
 
@@ -254,18 +267,29 @@ def propose(parameter: MetaParameter, new_value: float, rationale: str = "",
 
 def run_episodes(proposal: MetaProposal, seeds: Sequence[int],
                  runner: EpisodeRunner) -> None:
-    """Run both policies on the same seeds.
+    """Run both policies on the same seeds, and count whether the
+    parameter was ever consulted.
 
     The same seeds, so the comparison is paired: episode-to-episode
     variance is enormous -- one lucky gap found early changes a whole
     run -- and unpaired samples would need far more episodes than anyone
     can afford to see an effect through it.
+
+    The activation count is not decoration. Without it an episode that
+    never reached the code reading the parameter is indistinguishable
+    from an episode where the parameter made no difference: identical
+    numbers, opposite meanings. See `judge`, which refuses the first.
     """
     base_policy = {proposal.parameter.name: proposal.parameter.value}
     new_policy = {proposal.parameter.name: proposal.new_value}
-    for seed in seeds:
-        proposal.baseline.append(runner(seed, base_policy))
-        proposal.candidate.append(runner(seed, new_policy))
+    with instrument.watching() as used:
+        for seed in seeds:
+            proposal.baseline.append(runner(seed, base_policy))
+            proposal.candidate.append(runner(seed, new_policy))
+    proposal.parameter_reads = used.get(proposal.parameter.name, 0)
+    proposal.decisions_differed = sum(
+        1 for b, c in zip(proposal.baseline, proposal.candidate)
+        if tuple(b.decisions) != tuple(c.decisions))
 
 
 def paired_outcomes(proposal: MetaProposal, bar: float = EPISODE_BAR
@@ -291,6 +315,10 @@ def judge(proposal: MetaProposal, bar: float = EPISODE_BAR,
     sample-size gate applies to episodes, which is what makes this layer
     honestly expensive rather than quietly cheap.
     """
+    refusal = _not_a_result(proposal)
+    if refusal is not None:
+        return refusal
+
     outcomes = paired_outcomes(proposal, bar)
     claim = Claim(claim_id=proposal.proposal_id, kind="genome",
                   description=f"мета: {proposal.describe()}")
@@ -300,11 +328,16 @@ def judge(proposal: MetaProposal, bar: float = EPISODE_BAR,
         candidate_hidden=hidden[1] if hidden else None,
         counterexamples_sought=counterexamples[0],
         counterexamples_found=counterexamples[1],
-        cost_calls=sum(e.calls_used for e in proposal.baseline + proposal.candidate))
+        cost=CostVector(
+            calls=sum(e.calls_used for e in proposal.baseline + proposal.candidate),
+            unmeasured_token_calls=sum(e.calls_used for e in
+                                       proposal.baseline + proposal.candidate)))
 
     with transaction.TransactionScope(
             proposal.proposal_id, "meta", proposal.describe()[:120]) as txn:
         txn.step(transaction.MEASURED, episodes=len(outcomes), bar=bar,
+                 parameter_reads=proposal.parameter_reads,
+                 decisions_differed=proposal.decisions_differed,
                  baseline_value=round(_mean(proposal.baseline), 4),
                  candidate_value=round(_mean(proposal.candidate), 4))
         verdict = gates.judge(claim, evidence)
@@ -313,6 +346,54 @@ def judge(proposal: MetaProposal, bar: float = EPISODE_BAR,
         proposal.verdict = verdict.as_dict()
         txn.commit(result=proposal.status)
     return verdict
+
+
+def _not_a_result(proposal: MetaProposal) -> Optional[Any]:
+    """Refuse to rule when the episodes cannot say anything about the
+    parameter. Returns a Verdict to hand back, or None to proceed.
+
+    Two distinct ways an experiment can produce clean-looking numbers
+    about nothing, and the second was found by fixing the first.
+
+    **Never read.** The code consulting the parameter did not run. The
+    arms are identical because nothing varied.
+
+    **Read and discarded.** The parameter was consulted -- a live run
+    counted 48 reads -- and every decision came out the same anyway,
+    because the options it ranks lost to a category of options that is
+    not ranked by it at all. Identical decisions on the same seed give
+    identical outcomes necessarily, so "no effect" is vacuous rather
+    than measured.
+
+    Neither is recorded as REFUTED. A refutation goes into the record as
+    evidence about the parameter, and there is none; worse, it would stop
+    the parameter being tried again on the strength of an experiment that
+    never tested it.
+    """
+    if not proposal.baseline:
+        return None
+    episodes = len(proposal.baseline)
+
+    if proposal.parameter_reads == 0:
+        reason = (f"{proposal.parameter.name} ни разу не прочитан за "
+                  f"{episodes} эпизодов — измерялось что-то другое")
+        gate = "parameter_not_exercised"
+    elif (proposal.decisions_differed == 0
+          and any(e.decisions for e in proposal.baseline)):
+        reason = (f"{proposal.parameter.name} прочитан "
+                  f"{proposal.parameter_reads} раз, но ни на одном сиде не изменил "
+                  f"ни одного решения — его ответ отбрасывается")
+        gate = "parameter_had_no_influence"
+    else:
+        return None
+
+    proposal.status = "NOT_EXERCISED"
+    measurements = {"parameter_reads": proposal.parameter_reads,
+                    "decisions_differed": proposal.decisions_differed}
+    proposal.verdict = {"accepted": False, "failed_gates": [gate],
+                        "reason": reason, "measurements": measurements}
+    return gates.Verdict(accepted=False, reason=reason, failed_gates=(gate,),
+                         measurements=measurements)
 
 
 def _mean(episodes: Sequence[EpisodeResult]) -> float:
@@ -333,6 +414,8 @@ def yield_report(proposal: MetaProposal) -> Dict[str, Any]:
         "candidate_accepted": sum(e.accepted_claims for e in proposal.candidate),
         "calls": sum(e.calls_used for e in proposal.baseline + proposal.candidate),
         "episodes": len(proposal.baseline),
+        "parameter_reads": proposal.parameter_reads,
+        "decisions_differed": proposal.decisions_differed,
     }
 
 

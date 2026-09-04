@@ -77,7 +77,13 @@ def make_episode_runner(pool: BrainPool, budget: int, steps: int):
                 resolved=float(report["total_resolution"]),
                 capability_gain=0.0,
                 calls_used=int(report["calls_used"]) + 6,
-                accepted_claims=len(report["adopted_capabilities"]))
+                accepted_claims=len(report["adopted_capabilities"]),
+                # What the episode chose, in order. Without this the
+                # verdict cannot tell "the parameter changed nothing"
+                # from "the parameter changed no decision" -- and the
+                # first live run of this script was the second case.
+                decisions=tuple(step["description"]
+                                for step in report["history"]))
         finally:
             gaps.PRIORITY_WEIGHTS.clear()
             gaps.PRIORITY_WEIGHTS.update(original)
@@ -138,6 +144,11 @@ def main() -> int:
     print(f"  базовая политика:  ценность {report['baseline_value']:.3f}")
     print(f"  кандидат:          ценность {report['candidate_value']:.3f}")
     print(f"  вызовов потрачено: {report['calls']} ({per_episode:.0f} на эпизод)")
+    # Ноль здесь означает, что эксперимент измерял что-то другое: код,
+    # читающий параметр, ни разу не выполнился. Числа при этом выглядят
+    # как нормальный отрицательный результат.
+    print(f"  параметр прочитан: {report['parameter_reads']} раз")
+    print(f"  изменил решений:   {report['decisions_differed']} из {report['episodes']} сидов")
     print(f"\nвердикт: {'ПРИНЯТО' if verdict.accepted else 'ОТКЛОНЕНО'} — {verdict.reason}")
     print(f"не прошли гейты: {', '.join(verdict.failed_gates) or '—'}")
     print(f"\nстоимость одного мета-вывода при этой цене эпизода: "
