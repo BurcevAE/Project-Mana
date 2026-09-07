@@ -142,3 +142,58 @@ def test_the_intent_is_checked_before_the_model():
     source = inspect.getsource(core.CoreMixin.solve_task)
     assert "_perform_app_intent" in source
     assert source.index("_perform_app_intent") < source.index("self.answer(task")
+
+
+# ------------------------------------------------- naming a specific base
+
+def test_a_base_named_without_quotes_is_recognised(monkeypatch):
+    """Reported: asked for a specific base, got the chooser.
+
+    The first version only saw a name in quotes, so "Запусти 1С базу
+    UT11-ER" -- how a person actually types it -- opened the chooser and
+    MANA looked like it had ignored half the instruction.
+    """
+    monkeypatch.setattr(intent, "_known_bases",
+                        lambda: ["UT11-ER", "Информационная база"])
+    found = intent.match("Запусти 1С базу UT11-ER")
+    assert found.params["base"] == "UT11-ER"
+
+
+def test_a_base_name_alone_is_enough(monkeypatch):
+    """A name out of the machine's own list is as strong a signal as the
+    word "1С", and grounded rather than guessed."""
+    monkeypatch.setattr(intent, "_known_bases", lambda: ["UT11-ER"])
+    found = intent.match("Запусти UT11-ER")
+    assert found is not None
+    assert found.action == "launch_onec"
+    assert found.params["base"] == "UT11-ER"
+
+
+def test_cyrillic_lookalikes_still_find_the_base(monkeypatch):
+    """"UT11-ER" typed as "ут11-er" looks identical to a person and
+    matches nothing at all to a comparison over code points -- the same
+    trap the "1С" pattern already had to allow for."""
+    monkeypatch.setattr(intent, "_known_bases", lambda: ["UT11-ER"])
+    found = intent.match("запусти ут11-er")
+    assert found is not None
+    assert found.params["base"] == "UT11-ER"
+
+
+def test_the_longest_matching_base_wins(monkeypatch):
+    """A base called "УТ" must not win over "УТ11-ER" in a message that
+    names the longer one."""
+    monkeypatch.setattr(intent, "_known_bases", lambda: ["УТ", "УТ11-ER"])
+    assert intent.match("Запусти УТ11-ER").params["base"] == "УТ11-ER"
+
+
+def test_an_unknown_base_is_passed_on_rather_than_dropped(monkeypatch):
+    """`onec_launch` refuses with the list of what exists, which tells
+    the person more than silently opening the chooser."""
+    monkeypatch.setattr(intent, "_known_bases", lambda: ["UT11-ER"])
+    found = intent.match("Запусти 1С базу Бухгалтерия")
+    assert found.params.get("base")
+
+
+def test_a_question_naming_a_base_is_still_not_an_instruction(monkeypatch):
+    monkeypatch.setattr(intent, "_known_bases", lambda: ["UT11-ER"])
+    assert intent.match("Как запустить UT11-ER?") is None

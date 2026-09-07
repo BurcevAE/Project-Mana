@@ -119,6 +119,15 @@
             margin: 0 0 .8rem; font-size: .8rem; line-height: 1.45; }
   .no-llm b { color: var(--crit); font-weight: 600; }
   .no-llm ul { margin: .4rem 0 0; padding-left: 1.1rem; }
+  .no-llm .offer { margin-top: .7rem; padding-top: .6rem;
+                   border-top: 1px solid var(--line); }
+  .no-llm .pick { display: flex; gap: .5rem; align-items: center;
+                  flex-wrap: wrap; margin-top: .45rem; }
+  .no-llm select { background: var(--panel-2); color: var(--ink);
+                   border: 1px solid var(--line); border-radius: 5px;
+                   padding: .25rem .4rem; font-size: .78rem;
+                   font-family: var(--mono); }
+  .no-llm .why { color: var(--ink-faint); font-size: .74rem; margin-top: .35rem; }
   .no-llm li { margin: .15rem 0; }
   .switch { display: flex; align-items: center; gap: .45rem; font-size: .78rem;
             margin: .9rem 0 .3rem; cursor: pointer; }
@@ -787,20 +796,72 @@ function renderNoLLM(state) {
   box.appendChild(head);
 
   const list = document.createElement("ul");
-  [["Поставить ollama и модель — работает без ключей и без интернета:",
-    "ollama pull qwen2.5:7b-instruct"],
-   ["Либо ввести ключ любого провайдера справа, во вкладке «Мозги» — " +
-    "у cerebras и groq есть бесплатные.", ""]].forEach(([text, code]) => {
-    const item = document.createElement("li");
-    item.appendChild(document.createTextNode(text));
-    if (code) {
-      const pre = document.createElement("code");
-      pre.textContent = " " + code;
-      item.appendChild(pre);
-    }
-    list.appendChild(item);
-  });
+  const item = document.createElement("li");
+  item.textContent = "Либо ввести ключ любого провайдера справа, во вкладке " +
+    "«Мозги» — у cerebras и groq есть бесплатные.";
+  list.appendChild(item);
   box.appendChild(list);
+  offerLocalModel(box);
+}
+
+/* The offer is built from a measurement of THIS machine: memory
+   bandwidth is measured, and the expected speed is that divided by the
+   model size, because decoding reads the whole model per token. A
+   recommendation that cannot say "about 11 tokens a second" is one
+   nobody can judge, and "8 GB of RAM, take a 7B" ignores the term that
+   decides whether it is usable. */
+async function offerLocalModel(box) {
+  let state;
+  try { state = await api("/api/ollama"); } catch (e) { return; }
+  const pick = state.recommended;
+  if (!pick) return;
+
+  const offer = document.createElement("div");
+  offer.className = "offer";
+
+  const head = document.createElement("div");
+  head.textContent = state.installed
+    ? "Ollama уже установлена — не хватает модели."
+    : "Могу поставить Ollama и модель. Работает без ключей и без интернета.";
+  offer.appendChild(head);
+
+  const row = document.createElement("div");
+  row.className = "pick";
+  const select = document.createElement("select");
+  (pick.alternatives || []).filter(a => a.fits).forEach(a => {
+    const option = document.createElement("option");
+    option.value = a.model;
+    option.textContent = `${a.model} — ${a.size_gb} ГБ, ~${a.tokens_per_second} ток/с`;
+    if (a.model === pick.model) option.selected = true;
+    select.appendChild(option);
+  });
+  const go = document.createElement("button");
+  go.textContent = "Установить";
+  go.addEventListener("click", async () => {
+    go.disabled = true;
+    select.disabled = true;
+    go.textContent = "Ставлю…";
+    const res = await api("/api/ollama/setup", { model: select.value });
+    if (!res.ok) {
+      go.disabled = false;
+      select.disabled = false;
+      go.textContent = "Установить";
+      head.textContent = res.error || "не удалось начать";
+      return;
+    }
+    head.textContent = "Идёт установка. Ход виден в Журнале; " +
+      "по окончании модель подключится без перезапуска.";
+  });
+  row.append(select, go);
+  offer.appendChild(row);
+
+  const why = document.createElement("div");
+  why.className = "why";
+  why.textContent = `Выбрано по замеру этой машины: ${pick.reason}. ` +
+    `Оценка по полосе памяти, не замер самой модели. ${pick.gpu?.why || ""}`;
+  offer.appendChild(why);
+
+  box.appendChild(offer);
 }
 
 refreshNoLLM();

@@ -77,6 +77,72 @@ def _path_in(text: str) -> str:
     return found.group(0).strip().rstrip(".,;") if found else ""
 
 
+def _known_bases() -> List[str]:
+    """The base names this machine actually has. Empty on any trouble."""
+    try:
+        from .onec_launch import bases
+        return [str(b.get("name") or "") for b in bases() if b.get("name")]
+    except Exception:
+        return []
+
+
+#: Cyrillic letters that are visually identical to Latin ones, plus У,
+#: which is what a Russian keyboard produces where a base name has U.
+#: A base called "UT11-ER" typed as "ут11-er" looks the same to a person
+#: and matches nothing at all to a comparison over code points -- the same
+#: trap the "1С" pattern already had to allow for.
+_HOMOGLYPHS = str.maketrans(
+    "АВЕКМНОРСТУХаветкмнорсух",
+    "ABEKMHOPCTUXabetkmhopcux")
+
+
+def _fold(text: str) -> str:
+    return (text or "").lower().translate(_HOMOGLYPHS)
+
+
+def _match_known_base(text: str) -> str:
+    """A base from this machine's own list that the message mentions.
+
+    Longest first: a base called "УТ" must not win over "УТ11-ER" in a
+    message that names the longer one.
+    """
+    folded = _fold(text)
+    for name in sorted(_known_bases(), key=len, reverse=True):
+        if name and _fold(name) in folded:
+            return name
+    return ""
+
+
+def _base_named(text: str) -> str:
+    """Which base the message names, matched against the real list.
+
+    Against the LIST, not against a quoting convention. The first version
+    only recognised a name in quotes, so "Запусти 1С базу UT11-ER" -- how
+    a person actually types it -- opened the chooser instead of the base,
+    and MANA looked like it had ignored half the instruction.
+
+    Ground truth beats a pattern here: the machine knows exactly which
+    bases exist, so the question is which of those the message mentions,
+    not what shape a base name has.
+    """
+    lowered = (text or "").lower()
+
+    exact = _match_known_base(text)
+    if exact:
+        return exact
+
+    # Nothing matched a real base. A name in quotes is still worth
+    # passing on -- `onec_launch` refuses with the list of what exists,
+    # which tells the person more than silently opening the chooser.
+    quoted = re.search(r"[«\"']([^»\"']{2,60})[»\"']", text or "")
+    if quoted:
+        return quoted.group(1).strip()
+
+    # "запусти базу <что-то>" without quotes and without a match.
+    after = re.search(r"баз[уые]\s+([^\s,.;]{2,60})", lowered)
+    return after.group(1).strip() if after else ""
+
+
 def match(task: str) -> Optional[Intent]:
     """The action this message asks for, or None.
 
@@ -96,11 +162,21 @@ def match(task: str) -> Optional[Intent]:
     path = _path_in(text)
 
     if re.search(_APPS["onec"], head):
-        # A base named in quotes, if the message names one.
-        quoted = re.search(r"[«\"']([^»\"']{2,60})[»\"']", text)
         params: Dict[str, Any] = {}
-        if quoted:
-            params["base"] = quoted.group(1).strip()
+        named = _base_named(text)
+        if named:
+            params["base"] = named
+        if re.search(r"конфигуратор", head):
+            params["designer"] = True
+        return Intent("launch_onec", "onec_launch", params, launcher.group(0))
+
+    # A real base name is as strong a signal as the word "1С", and it is
+    # grounded rather than guessed: the name came from the machine's own
+    # list. "Запусти УТ11-ER" is not ambiguous to a person and should not
+    # be to this.
+    named_base = _match_known_base(text)
+    if named_base:
+        params = {"base": named_base}
         if re.search(r"конфигуратор", head):
             params["designer"] = True
         return Intent("launch_onec", "onec_launch", params, launcher.group(0))

@@ -252,6 +252,75 @@ class AgentSession:
             "confidence": result.get("confidence"),
         }
 
+    # ---------- getting a local model ----------
+
+    def ollama_status(self) -> Dict[str, Any]:
+        """What is installed, what is running, and what would suit here."""
+        from mana.apps import ollama_setup
+        state = ollama_setup.status()
+        if not state["has_model"]:
+            suggestion = ollama_setup.recommend()
+            state["recommended"] = suggestion.as_dict() if suggestion else None
+        return state
+
+    def ollama_setup_start(self, model: str = "") -> Dict[str, Any]:
+        """Install Ollama and pull a model, in the background.
+
+        Never on its own initiative. Several gigabytes of download and a
+        software installation are the user's decision, and this is only
+        reached from a button they pressed.
+        """
+        with self._cycle_lock:
+            if getattr(self, "_ollama_busy", False):
+                return {"ok": False, "error": "установка уже идёт"}
+            self._ollama_busy = True
+        threading.Thread(target=self._ollama_setup, name="MANA-Ollama",
+                         daemon=True, args=(model,)).start()
+        return {"ok": True}
+
+    def _ollama_setup(self, model: str) -> None:
+        from mana.apps import ollama_setup
+        try:
+            if not ollama_setup.executable():
+                events.emit(events.STATUS, "Устанавливаю Ollama...")
+                ollama_setup.install_runtime(
+                    on_line=lambda line: events.emit(events.PROGRESS, line[:160]))
+                events.emit(events.STATUS, "Ollama установлена")
+
+            if not model:
+                suggestion = ollama_setup.recommend()
+                if suggestion is None:
+                    events.emit(events.ERROR,
+                                "Не нашлось модели, которая пойдёт на этой машине")
+                    return
+                model = suggestion.model
+
+            events.emit(events.STATUS, f"Скачиваю {model}. Это гигабайты.")
+            ollama_setup.pull_model(
+                model, on_line=lambda line: events.emit(events.PROGRESS, line[:160]))
+
+            # Hot connect: the pool probed once at startup and has been
+            # calling this brain unusable ever since. Asking somebody to
+            # restart after a download they just waited through would be
+            # a poor way to end this.
+            pool = self._pool()
+            if pool is not None:
+                changed = pool.reprobe_local()
+                if changed.get("connected"):
+                    events.emit(events.STATUS,
+                                f"Модель подключена: {model}. Перезапуск не нужен.")
+                else:
+                    events.emit(events.STATUS,
+                                f"{model} скачана, но пул её не принял — "
+                                f"проверьте, запущена ли служба Ollama")
+            else:
+                events.emit(events.STATUS, f"{model} скачана")
+        except Exception as exc:
+            events.emit(events.ERROR, f"Не вышло: {type(exc).__name__}: {exc}")
+        finally:
+            with self._cycle_lock:
+                self._ollama_busy = False
+
     # ---------- the cognitive layer ----------
 
     def cycle_status(self) -> Dict[str, Any]:

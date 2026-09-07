@@ -426,7 +426,14 @@ def probe_ollama(base_url: str, timeout: float = 1.5) -> Dict[str, Any]:
         result["error"] = "requests not installed"
         return result
     # cfg.ollama_url points at /api/generate; the inventory lives next door.
-    tags_url = (base_url.rsplit("/api/", 1)[0] + "/api/tags") if "/api/" in base_url else base_url
+    #
+    # A bare base URL used to fall through to `base_url` itself, and the
+    # Ollama root answers "Ollama is running" as plain text -- so the probe
+    # reported reachable=True, models=[] and a JSONDecodeError, which reads
+    # as "the service is up and has nothing". A caller passing the natural
+    # http://127.0.0.1:11434 got a wrong answer shaped like a right one.
+    root = base_url.rsplit("/api/", 1)[0] if "/api/" in base_url else base_url
+    tags_url = root.rstrip("/") + "/api/tags"
     try:
         r = requests.get(tags_url, timeout=timeout)
         r.raise_for_status()
@@ -585,6 +592,35 @@ class BrainPool:
                     adapt_local_brain(spec, probe_ollama(spec.base_url))
         for spec in catalog:
             self.add(spec)
+
+    def reprobe_local(self) -> Dict[str, Any]:
+        """Ask the local server again, and adopt what it has now.
+
+        The probe at construction is once per pool, which is right for a
+        pool that outlives the question. It is wrong the moment a model
+        is installed while MANA is running: the brain stays marked
+        unusable and the only way to pick it up is a restart, which is a
+        poor thing to ask of somebody who just waited for a download.
+
+        Returns what changed, so a caller can say "qwen2.5:7b-instruct
+        подключена" rather than "готово".
+        """
+        before: Dict[str, Any] = {}
+        after: Dict[str, Any] = {}
+        with self._lock:
+            specs = [s for s in self.brains.values()
+                     if s.provider == "ollama" and s.enabled]
+        for spec in specs:
+            before[spec.brain_id] = {"model": spec.model,
+                                     "usable": self.usable(spec)}
+            adapt_local_brain(spec, probe_ollama(spec.base_url))
+            after[spec.brain_id] = {"model": spec.model,
+                                    "usable": self.usable(spec)}
+        connected = [b for b in after
+                     if after[b]["usable"] and not before[b]["usable"]]
+        return {"checked": list(after), "connected": connected,
+                "models": {b: after[b]["model"] for b in after},
+                "usable": [b for b in after if after[b]["usable"]]}
 
     # ---------- catalog ----------
 
