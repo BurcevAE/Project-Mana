@@ -145,6 +145,17 @@ def self_check() -> int:
         report["instance_error"] = f"{type(exc).__name__}: {exc}"
     capabilities["identity_signs"] = signs
 
+    # What the window needs, which is not what the agent needs: a
+    # machine can pass every check above and still be unable to draw a
+    # window, and on Windows 10 that is the likely case.
+    try:
+        from mana_desktop import preflight
+        window = preflight.status()
+        report["window"] = window
+        capabilities["window_can_open"] = bool(window["can_open_window"])
+    except Exception as exc:
+        report["window"] = {"error": f"{type(exc).__name__}: {exc}"}
+
     from mana import apps
     report["applications"] = apps.available()
     capabilities["onec_com"] = apps.available()["onec"]["available"]
