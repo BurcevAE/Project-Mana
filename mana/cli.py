@@ -274,6 +274,75 @@ def _show_proposals(limit: int) -> int:
     return 0
 
 
+def _show_capabilities() -> int:
+    """What MANA can do beyond what it shipped with, and whether it is
+    proved. A capability that is installed but failed its checks is
+    reported as REFUSED and must not be used: a rules engine that is
+    quietly wrong is a lying oracle, and every measurement built on it is
+    poisoned invisibly."""
+    from .acquire import status_all
+
+    for reported in status_all():
+        verification = reported["verification"]
+        print(f"{reported['name']}: {reported['what']}")
+        print(f"  {reported['describe']}")
+        print(f"  истина из: {reported['truth_source']}")
+        for check in verification.get("checks", []):
+            mark = "OK  " if check["ok"] else "СБОЙ"
+            print(f"    {mark} {check['name']}: "
+                  f"ждали {check['expected']}, получили {check['got']}")
+        if verification["status"] == "ABSENT":
+            print(f"  установить: MANA.exe --acquire {reported['name']} --yes")
+        print()
+    return 0
+
+
+def _acquire_capability(name: str, consented: bool) -> int:
+    """Install a declared provider, only when a person said so.
+
+    `pip install` executes code from the package, so consent is the line
+    between self-improving and self-compromising. It is a separate word
+    on the command line rather than a prompt, so it also cannot be
+    implied by a script or a hook.
+    """
+    from .acquire import capability, install, packages_dir, ConsentRequired
+
+    known = capability(name)
+    if known is None:
+        print(f"Способность «{name}» не объявлена. Доступные: "
+              f"MANA.exe --capabilities")
+        return 2
+
+    if not consented:
+        provider = known.providers[0]
+        print(f"Способность:  {known.name} — {known.what}")
+        print(f"Поставщик:    пакет «{provider.package}» ({provider.why})")
+        print(f"Проверка:     {known.truth_source}")
+        print(f"Куда:         {packages_dir()}")
+        print()
+        print("pip install исполняет код из пакета. Ничего не установлено.")
+        print(f"Если согласны:  MANA.exe --acquire {name} --yes")
+        return 0
+
+    print(f"Устанавливаю {known.providers[0].package}...")
+    try:
+        result = install(name, consented=True,
+                         on_line=lambda line: print(f"  {line[:120]}"))
+    except ConsentRequired as exc:
+        print(str(exc))
+        return 2
+    print()
+    if not result.get("ok"):
+        print("Не вышло: " + str(result.get("error") or result.get("describe")))
+        for check in (result.get("verification") or {}).get("checks", []):
+            if not check["ok"]:
+                print(f"  СБОЙ {check['name']}: ждали {check['expected']}, "
+                      f"получили {check['got']}")
+        return 1
+    print(result["describe"])
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Argument parser, split out of main() so tests can construct it
     without running the agent."""
@@ -331,6 +400,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--propose", nargs="?", const=200, type=int, metavar="N",
                         help="Какие изменения MANA предлагает себе по последним "
                              "N ходам журнала (ничего не применяет)")
+    parser.add_argument("--capabilities", action="store_true",
+                        help="Что MANA умеет сверх поставки и доказано ли это")
+    parser.add_argument("--acquire", metavar="ИМЯ",
+                        help="Приобрести способность: показывает план; "
+                             "устанавливает только вместе с --yes")
+    parser.add_argument("--yes", action="store_true",
+                        help="Согласие на установку для --acquire")
     parser.add_argument("--list-brains", action="store_true",
                         help="Показать все мозги: какие настроены, готовы, в кулдауне или исчерпали free-tier")
     parser.add_argument("--brains-status", action="store_true",
@@ -395,6 +471,12 @@ def main() -> int:
 
     if args.propose is not None:
         return _show_proposals(int(args.propose))
+
+    if args.capabilities:
+        return _show_capabilities()
+
+    if args.acquire:
+        return _acquire_capability(str(args.acquire), bool(args.yes))
 
     # Handled before any agent is constructed: reporting the version must
     # not require loading embedding models or opening databases.

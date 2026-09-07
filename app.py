@@ -274,6 +274,17 @@ def main() -> int:
         from mana.net.cli import command_line as peer_command
         return peer_command(argv[1:])
 
+    if argv and argv[0] == "--capabilities":
+        from mana.cli import _show_capabilities
+        return _show_capabilities()
+
+    if argv and argv[0] == "--acquire":
+        from mana.cli import _acquire_capability
+        if len(argv) < 2:
+            print("Использование: MANA.exe --acquire ИМЯ [--yes]")
+            return 2
+        return _acquire_capability(argv[1], "--yes" in argv[2:])
+
     if argv and argv[0] == "--propose":
         from mana.cli import _show_proposals
         count = 200
