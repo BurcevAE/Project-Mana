@@ -105,6 +105,11 @@ def find_executable(name: str) -> str:
         candidate = Path(root) / stem / name
         if candidate.is_file():
             return str(candidate)
+    # 1C does not follow the "<Program Files>/<name>/<name>.exe" shape:
+    # the launcher sits in 1cv8/common and each client in 1cv8/<version>/bin.
+    if name.lower() == "1cestart.exe":
+        from .onec_launch import executables
+        return executables().get("starter", "")
     return ""
 
 
@@ -148,6 +153,13 @@ CAPABILITIES = (
     Capability("onec", "запросы к 1С:Предприятие 8 и запись с подтверждением",
                modules=("win32com.client", "pythoncom"),
                com_id="V83.COMConnector"),
+    # Separate from `onec` because the requirements differ: starting the
+    # client needs the executables and nothing else, while talking to the
+    # data needs pywin32 and a registered COM connector. Merging them
+    # would make "запусти 1С" unavailable on a machine where only the COM
+    # part is missing -- a refusal with the wrong reason attached.
+    Capability("onec_client", "запуск 1С:Предприятия и создание баз",
+               executable="1cestart.exe"),
 )
 
 

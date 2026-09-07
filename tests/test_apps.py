@@ -314,3 +314,167 @@ def test_the_executor_is_reachable_only_from_confirm():
                     and inner.func.id == "_execute"):
                 callers.append(node.name)
     assert callers == ["confirm"], callers
+
+
+# ------------------------------------------------------- 1C: launching it
+#
+# Nothing in this section starts 1C. A test run that opened windows on the
+# developer's screen would be a test run nobody lets finish, and the parts
+# worth testing -- how the command line is built, and what is refused --
+# do not need a running client.
+
+
+IBASES_SAMPLE = """[UT11-ER]
+Connect=Srvr="192.168.0.9";Ref="UT11-ER";
+Version=8.3
+[Информационная база]
+Connect=File="C:\\1С\\Базы\\Тестовая пустая база";
+Version=8.3
+"""
+
+
+@pytest.fixture
+def fake_bases(tmp_path, monkeypatch):
+    from mana.apps import onec_launch
+    listing = tmp_path / "ibases.v8i"
+    listing.write_text("\ufeff" + IBASES_SAMPLE, encoding="utf-8")
+    monkeypatch.setattr(onec_launch, "IBASES", listing)
+    return onec_launch
+
+
+def test_bases_are_read_from_the_list_1c_itself_shows(fake_bases):
+    """Read, not reconstructed: this is the list the person recognises."""
+    found = fake_bases.bases()
+    assert [b["name"] for b in found] == ["UT11-ER", "Информационная база"]
+    assert found[0]["kind"] == "клиент-сервер"
+    assert found[0]["location"] == "192.168.0.9 / UT11-ER"
+    assert found[1]["kind"] == "файловая"
+    assert found[1]["location"].endswith("Тестовая пустая база")
+
+
+def test_the_connection_string_keeps_the_quotes_1c_needs(fake_bases):
+    """The bug this is written against, measured against a real 1C.
+
+    subprocess builds a command line from a list and escapes the inner
+    quotes of `File="C:\\path";` as \\", which 1C rejects with "Неверные
+    или отсутствующие параметры соединения". Passing the argument without
+    quotes works -- right up to the first path containing a space, and
+    every base on this machine lives under C:\\1С\\Базы\\... So the line is
+    built here, and a literal quote inside a quoted Windows argument is
+    written twice.
+    """
+    line = fake_bases._connection(r"C:\1С\Базы\Новая база")
+    assert line.startswith('"File=""')
+    assert line.endswith('"";"')
+    assert "Новая база" in line
+
+
+def test_quoting_doubles_embedded_quotes(fake_bases):
+    assert fake_bases._quoted('простой') == '"простой"'
+    assert fake_bases._quoted('с "кавычкой"') == '"с ""кавычкой"""'
+
+
+def test_launching_an_unknown_base_names_the_ones_that_exist(fake_bases):
+    with pytest.raises(apps.AppUnavailable) as caught:
+        fake_bases.launch(base="НетТакой")
+    assert "UT11-ER" in str(caught.value)
+
+
+def test_launching_without_a_base_falls_through_to_the_selector(
+        fake_bases, monkeypatch):
+    """"Запусти 1С" means the base list, not some base of our choosing."""
+    called = []
+    monkeypatch.setattr(fake_bases, "launch_selector",
+                        lambda *a, **k: called.append(True) or {"launched": True})
+    fake_bases.launch()
+    assert called == [True]
+
+
+def test_the_password_is_passed_to_1c_and_kept_out_of_the_result(
+        fake_bases, monkeypatch):
+    """Both halves matter.
+
+    1C has no way to take a password except the command line, so it has to
+    go there for scenario 2 to work at all. But the returned dict lands in
+    a trace, and a trace is a file on disk, so the password must not be in
+    it -- and the caller has to be told what the command line costs.
+    """
+    seen = {}
+
+    class FakeProcess:
+        pid = 4242
+
+    def fake_popen(line, *a, **k):
+        seen["line"] = line
+        return FakeProcess()
+
+    monkeypatch.setattr(fake_bases.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(fake_bases, "_require", lambda kind: r"C:\1cv8.exe")
+
+    result = fake_bases.launch(base="UT11-ER", user="Иванов",
+                               password="тайна123")
+
+    assert "тайна123" in seen["line"]          # 1C really gets it
+    assert "тайна123" not in result["command"]  # the trace does not
+    assert "тайна123" not in repr(result)
+    assert result["warning"]                    # and the caller is told
+
+
+def test_no_password_means_no_warning_and_1c_will_ask(fake_bases, monkeypatch):
+    class FakeProcess:
+        pid = 1
+
+    monkeypatch.setattr(fake_bases.subprocess, "Popen",
+                        lambda *a, **k: FakeProcess())
+    monkeypatch.setattr(fake_bases, "_require", lambda kind: r"C:\1cv8.exe")
+    result = fake_bases.launch(base="UT11-ER", user="Иванов")
+    assert result["warning"] == ""
+    assert result["user"] == "Иванов"
+
+
+def test_creating_a_base_without_a_path_is_the_question(fake_bases):
+    """The refusal IS the "где разместить?" the person expects.
+
+    Picking a directory for them would put a database somewhere nobody
+    chose, to be found later by accident.
+    """
+    with pytest.raises(apps.AppUnavailable) as caught:
+        fake_bases.create_base()
+    assert "где" in str(caught.value).lower()
+
+
+def test_creating_into_a_non_empty_directory_is_refused(fake_bases, tmp_path):
+    occupied = tmp_path / "занято"
+    occupied.mkdir()
+    (occupied / "чужой.txt").write_text("данные", encoding="utf-8")
+    with pytest.raises(apps.AppUnavailable):
+        fake_bases.create_base(path=str(occupied))
+
+
+def test_versions_sort_numerically_not_alphabetically(fake_bases, tmp_path):
+    """"8.3.9" sorts after "8.3.27" as text, and opening a new base with an
+    old client fails with a message that explains nothing."""
+    for name in ("8.3.9.1", "8.3.27.2214", "8.3.10.5"):
+        (tmp_path / name).mkdir()
+    newest = fake_bases._versions(tmp_path)[0].name
+    assert newest == "8.3.27.2214"
+
+
+def test_the_launch_tools_are_registered_and_available():
+    from mana.apps.tools import register_app_tools
+    from mana.tools import ToolRegistry
+    registry = ToolRegistry()
+    register_app_tools(registry)
+    for name in ("onec_list_bases", "onec_launch", "onec_create_base"):
+        assert registry.get(name) is not None, name
+
+
+def test_launching_is_a_separate_capability_from_the_com_connection():
+    """Starting the client needs the executables; reading the data needs
+    pywin32 and a registered connector. Merging them would refuse
+    "запусти 1С" with the wrong reason on a machine missing only COM."""
+    names = {c.name for c in apps.CAPABILITIES}
+    assert {"onec", "onec_client"} <= names
+    client = next(c for c in apps.CAPABILITIES if c.name == "onec_client")
+    assert client.modules == ()
+    assert client.com_id == ""

@@ -233,8 +233,70 @@ class OneCConfirmWriteTool(_AppTool):
                           meta={"request_id": request_id})
 
 
+class OneCListBasesTool(_AppTool):
+    name = "onec_list_bases"
+    description = ("Какие базы 1С есть в списке на этой машине: имя, "
+                   "файловая или клиент-серверная, где лежит.")
+    requires_exec = False
+    cost_hint = 0.2
+    capability = "onec_client"
+
+    def run(self, **kwargs: Any) -> ToolResult:
+        if not self.is_available():
+            return self._refusal()
+        from . import onec_launch
+        found = onec_launch.bases()
+        return ToolResult(ok=True, output={"bases": found,
+                                           "count": len(found)})
+
+
+class OneCLaunchTool(_AppTool):
+    name = "onec_launch"
+    description = ("Запустить 1С. Без имени базы открывает окно выбора и "
+                   "базу выбирает человек. С именем — открывает её; "
+                   "designer=true открывает конфигуратор.")
+    cost_hint = 1.0
+    capability = "onec_client"
+
+    def run(self, **kwargs: Any) -> ToolResult:
+        if not self.is_available():
+            return self._refusal()
+        from . import onec_launch
+        data = onec_launch.launch(
+            base=str(kwargs.get("base", "")),
+            user=str(kwargs.get("user", "")),
+            password=str(kwargs.get("password", "")),
+            designer=bool(kwargs.get("designer", False)),
+            thin=bool(kwargs.get("thin", False)))
+        # The warning rides in meta as well as output: a caller that only
+        # reads meta still learns the password was exposed.
+        return ToolResult(ok=True, output=data,
+                          meta={"warning": data.get("warning", "")})
+
+
+class OneCCreateBaseTool(_AppTool):
+    name = "onec_create_base"
+    description = ("Создать новую файловую базу 1С по указанному пути и "
+                   "открыть конфигуратор. БЕЗ пути отказывает — спросите "
+                   "у человека, где размещать.")
+    cost_hint = 3.0
+    capability = "onec_client"
+
+    def run(self, **kwargs: Any) -> ToolResult:
+        if not self.is_available():
+            return self._refusal()
+        from . import onec_launch
+        data = onec_launch.create_base(
+            path=str(kwargs.get("path", "")),
+            name=str(kwargs.get("name", "")),
+            open_designer=bool(kwargs.get("open_designer", True)),
+            add_to_list=bool(kwargs.get("add_to_list", True)))
+        return ToolResult(ok=True, output=data)
+
+
 #: Registered by build_default_registry. Order is presentation only.
 APP_TOOLS = (ReadDocumentTool, WriteDocumentTool, OpenInEditorTool,
+             OneCListBasesTool, OneCLaunchTool, OneCCreateBaseTool,
              OneCQueryTool, OneCMetadataTool, OneCProposeWriteTool,
              OneCConfirmWriteTool)
 
