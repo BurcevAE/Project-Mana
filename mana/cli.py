@@ -343,6 +343,60 @@ def _acquire_capability(name: str, consented: bool) -> int:
     return 0
 
 
+def _practice(games: int) -> int:
+    """Play games against itself and add them to the corpus.
+
+    Refuses outright when the rules engine is not verified. A corpus
+    generated on a subtly wrong engine is wrong in a way nothing
+    downstream can detect, so this is a refusal rather than a warning.
+    """
+    from .cognition import chess_arena as arena
+
+    corpus = arena.Corpus()
+    if games <= 0:
+        stats = corpus.stats()
+        if not stats["exists"]:
+            print(f"Корпуса ещё нет: {stats['path']}")
+            print("Сыграть партии:  MANA.exe --practice 50")
+            return 0
+        print(f"{stats['path']}")
+        print(f"партий: {stats['games']}   позиций: {stats['positions']}")
+        print("Независимых наблюдений здесь столько же, сколько партий: "
+              "позиции одной партии делят дебют и исход.")
+        print(f"по результату: {stats['by_result']}")
+        print(f"по причине:    {stats['by_reason']}")
+        print(f"суммарно:      {stats['plies_total']} полуходов, "
+              f"{stats['seconds_total']:.0f}с игры")
+        return 0
+
+    try:
+        chess = arena.oracle()
+    except arena.Unverified as exc:
+        print(f"Играть нельзя: {exc}")
+        print("Приобрести правила:  MANA.exe --acquire chess_rules --yes")
+        return 1
+
+    player = arena.SearchPlayer(depth=2, name="material-d2")
+    before = len(corpus.games())
+    print(f"Играю {games} партий ({player.name} против себя)...")
+
+    played = []
+    def note(game):
+        played.append(game)
+        if len(played) % 10 == 0:
+            print(f"  {len(played)}/{games}", flush=True)
+
+    batch = arena.self_play(player, games, seed=before * 1000, chess=chess,
+                            on_game=note)
+    corpus.append(batch)
+    stats = corpus.stats()
+    print()
+    print(f"Сыграно {len(batch)}. В корпусе: {stats['games']} партий, "
+          f"{stats['positions']} позиций.")
+    print(f"по результату: {stats['by_result']}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Argument parser, split out of main() so tests can construct it
     without running the agent."""
@@ -400,6 +454,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--propose", nargs="?", const=200, type=int, metavar="N",
                         help="Какие изменения MANA предлагает себе по последним "
                              "N ходам журнала (ничего не применяет)")
+    parser.add_argument("--practice", nargs="?", const=0, type=int, metavar="N",
+                        help="Сыграть N партий на проверенном движке и добавить "
+                             "их в корпус; без числа — показать накопленное")
     parser.add_argument("--capabilities", action="store_true",
                         help="Что MANA умеет сверх поставки и доказано ли это")
     parser.add_argument("--acquire", metavar="ИМЯ",
@@ -471,6 +528,9 @@ def main() -> int:
 
     if args.propose is not None:
         return _show_proposals(int(args.propose))
+
+    if args.practice is not None:
+        return _practice(int(args.practice))
 
     if args.capabilities:
         return _show_capabilities()

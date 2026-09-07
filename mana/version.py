@@ -49,7 +49,7 @@ from typing import Dict
 __version__ = "2.0"
 
 #: The release as a whole.
-PRODUCT_VERSION = "2.31.0"
+PRODUCT_VERSION = "2.32.0"
 
 #: Modules that carry their own version. Kept as an explicit list rather
 #: than discovered by scanning, so a module added without a version number
@@ -70,7 +70,8 @@ VERSIONED_MODULES = (
     "cognition.research", "cognition.synthesis", "cognition.meta",
     "cognition.search", "cognition.brain_factory", "cognition.fields",
     "cognition.invariants", "cognition.failure_domain",
-    "cognition.candidates", "policy", "acquire",
+    "cognition.candidates", "cognition.chess_arena",
+    "policy", "acquire",
     "pipeline", "experience", "verifier", "memory", "graph_memory", "intent",
     "tools", "code_evolution", "voice", "cli", "version", "episode_affinity",
     "journal",
