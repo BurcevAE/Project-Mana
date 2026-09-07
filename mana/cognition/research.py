@@ -60,6 +60,8 @@ from .representations import (FIELD_LIBRARY, insufficiency_gap,
                               measure_insufficiency, propose_fields)
 from ..core import tasks as core_tasks
 from . import self_model
+from ..core import splits
+from . import exchange as exchange_mod
 from . import genome as genome_mod
 from . import fields as field_gen
 from .genome import CognitiveGenome
@@ -333,6 +335,7 @@ class ResearchCycle:
                  budget_calls: int = 600, max_steps: int = 12,
                  genome: Optional[CognitiveGenome] = None,
                  genome_path: Optional[Any] = None,
+                 exchange_path: Optional[Any] = None,
                  hidden_fn: Optional[Callable[[Sequence[str]], float]] = None,
                  counterexample_fn: Optional[Callable[[Any], Tuple[int, int]]] = None,
                  ) -> None:
@@ -363,6 +366,15 @@ class ResearchCycle:
         #: механизм сохранения был бы четвёртым в проекте, который
         #: написан, покрыт тестами и никем не вызывается.
         self.genome_path = Path(genome_path) if genome_path else None
+        #: Where this cycle's own hypotheses are written for exchange.
+        #:
+        #: Recorded whether or not they are confirmed here, and that is
+        #: the point: "worth trying" is the payload, and a change this
+        #: installation could not confirm may still be the one another
+        #: instance needed. Held optional so a cycle run for measurement
+        #: does not accumulate a queue nobody asked for.
+        self.exchange = (exchange_mod.Queue(exchange_path)
+                         if exchange_path else None)
         loaded = None
         self.genome_note = ""
         if self.genome_path is not None:
@@ -574,15 +586,25 @@ class ResearchCycle:
         proposal = self.synthesizer.consider(discovery)
         if proposal is None:
             return ""
+
+        # Recorded BEFORE the confirming experiment. A hypothesis is worth
+        # sharing on its own: this installation may lack the evidence to
+        # rule on it and another may not, and a queue that only held
+        # confirmed changes would share exactly the things everyone else
+        # can already derive.
+        hypothesis_id = self._record_hypothesis(proposal)
+
         if self._unmeasured_gates():
             # A confirmation that cannot clear the same gates the
             # discovery could not clear will spend the budget and refuse
             # the capability every time.
+            self._record_verdict(hypothesis_id, "NOT_EVALUATED")
             return (f"; способность {proposal.name} нельзя подтвердить: "
                     f"нет данных для {', '.join(self._unmeasured_gates())}")
         confirm_plan = lab.plan(_confirming_hypothesis(discovery), self.model,
                                 trials=lab.gates.MIN_PAIRED_TRIALS)
         if confirm_plan.estimated_calls > self.budget_left():
+            self._record_verdict(hypothesis_id, "NOT_EVALUATED")
             return f"; способность {proposal.name} ждёт подтверждения (не хватает бюджета)"
         fresh = task_source(confirm_plan.hypothesis.domain, confirm_plan.trials)
         confirmation = self.lab.run_experiment(confirm_plan, fresh, runner)
@@ -596,10 +618,55 @@ class ResearchCycle:
             **install_evidence)
         if installed:
             self.adopted.append(proposal.name)
+            self._record_verdict(hypothesis_id, "ACCEPTED",
+                                 trials=len(confirmation.outcomes))
             saved = self._persist_genome()
             return f"; принята способность {proposal.name}{saved}"
+        self._record_verdict(hypothesis_id, "REJECTED",
+                             trials=len(confirmation.outcomes))
         return (f"; способность {proposal.name} отклонена на подтверждении: "
                 f"{proposal.confirmation.get('reason', '?')[:60]}")
+
+    # ---------- the exchange queue ----------
+
+    def _record_hypothesis(self, proposal: Any) -> str:
+        """Put this proposal into the exchange queue, and return its id.
+
+        The mutation and its behavioural parameters, never the rationale:
+        that is generated here from local observations and is the field
+        most likely to quote them. `exchange` decides what is shareable;
+        this only hands over what was proposed.
+        """
+        if self.exchange is None:
+            return ""
+        try:
+            record = self.exchange.record_hypothesis(
+                "create_program_template",
+                {"name": proposal.name, "steps": list(proposal.steps),
+                 "applicability": list(proposal.applicability)})
+        except Exception:
+            # Bookkeeping for a federation must never take down the run
+            # that is doing the actual work.
+            return ""
+        return str(record.get("hypothesis_id") or "")
+
+    def _record_verdict(self, hypothesis_id: str, verdict: str,
+                        trials: int = 0) -> None:
+        """This installation's own ruling, for anyone who asks later.
+
+        NOT_EVALUATED is recorded as carefully as the other two. "Nobody
+        here had the evidence to judge it" is a different fact from "it
+        does not work", and a federation that collapsed them would read
+        an unmeasured gate as a refutation.
+        """
+        if self.exchange is None or not hypothesis_id:
+            return
+        try:
+            self.exchange.record_report(
+                hypothesis_id, verdict, trials=trials,
+                holdout=splits.HOLDOUT_V1.identity)
+        except Exception:
+            pass
 
     def run(self, lesson_runner: cur.LessonRunner,
             trial_runner: Optional[lab.TrialRunner] = None,

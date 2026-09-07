@@ -119,6 +119,36 @@ def check_shareable(params: Dict[str, Any]) -> None:
                 f"допустимы числа, строки-идентификаторы, списки из них")
 
 
+#: Parameters that document a change rather than determine it.
+#:
+#: `check_shareable` refuses free text, and it is right to: a task
+#: somebody typed must not leave. But `create_program_template` carries a
+#: `description` written for a human -- "синтезировано из открытия ..." --
+#: and dropping it changes nothing about what the template DOES. The
+#: distinction is behavioural versus annotative, and it has to be explicit:
+#: silently dropping a behavioural parameter would produce a hypothesis
+#: that means something other than what was proposed, and the receiving
+#: instance would measure the wrong thing without either side noticing.
+ANNOTATIVE = frozenset({"description", "rationale", "reason", "note", "comment"})
+
+
+def try_hypothesis(mutation: str, params: Dict[str, Any], note: str = ""
+                   ) -> Tuple[Optional["Hypothesis"], str]:
+    """Build a shareable hypothesis, or say why it is not one.
+
+    Returns a reason instead of raising because the caller is a research
+    cycle mid-run: a proposal that cannot be shared is still a proposal
+    worth pursuing locally, and an exception here would stop the work to
+    report on a side concern.
+    """
+    behavioural = {k: v for k, v in (params or {}).items()
+                   if k not in ANNOTATIVE}
+    try:
+        return Hypothesis(mutation=mutation, params=behavioural, note=note), ""
+    except ExchangeError as exc:
+        return None, str(exc)
+
+
 # ------------------------------------------------------------------ records
 
 
@@ -361,3 +391,132 @@ def to_local_proposal(hypothesis: Hypothesis, parent: CognitiveGenome,
         f"принимается только по локальным доказательствам")
     return propose(parent, hypothesis.mutation, rationale=rationale,
                    **hypothesis.params)
+
+
+# ----------------------------------------------------------------- the queue
+
+
+class Queue:
+    """Everything this installation has to offer, and what it heard back.
+
+    Kept as one file rather than two so that a hypothesis and the reports
+    about it cannot drift apart across a backup or a copy.
+
+    A hypothesis that could not be made shareable is stored anyway, marked,
+    with the reason. It is still something to try here, and dropping it
+    would lose local work to a federation concern; `export` filters, so
+    nothing unshareable can leave by accident.
+    """
+
+    def __init__(self, path: Any) -> None:
+        self.path = Path(path)
+
+    def _load(self) -> Dict[str, Any]:
+        if not self.path.is_file():
+            return {"hypotheses": [], "reports": []}
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {"hypotheses": [], "reports": []}
+        data.setdefault("hypotheses", [])
+        data.setdefault("reports", [])
+        return data
+
+    def _save(self, data: Dict[str, Any]) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        # Written through a temporary file: a cycle that dies mid-write
+        # would otherwise leave a truncated queue, and the next run would
+        # read it as empty and quietly start over.
+        temporary = self.path.with_suffix(self.path.suffix + ".tmp")
+        temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2),
+                             encoding="utf-8")
+        temporary.replace(self.path)
+
+    def record_hypothesis(self, mutation: str, params: Dict[str, Any],
+                          note: str = "") -> Dict[str, Any]:
+        """Add one, unless it is already here.
+
+        Deduplicated by the content-derived id, so a cycle that rediscovers
+        the same change on three separate runs contributes it once.
+        """
+        hypothesis, refusal = try_hypothesis(mutation, params, note)
+        data = self._load()
+        if hypothesis is None:
+            record = {"hypothesis_id": "", "mutation": mutation,
+                      "shareable": False, "refusal": refusal}
+            data["hypotheses"].append(record)
+            self._save(data)
+            return record
+
+        existing = {h.get("hypothesis_id") for h in data["hypotheses"]}
+        if hypothesis.hypothesis_id in existing:
+            return {"hypothesis_id": hypothesis.hypothesis_id, "known": True}
+        record = dict(hypothesis.as_dict(), shareable=True)
+        data["hypotheses"].append(record)
+        self._save(data)
+        return record
+
+    def record_report(self, hypothesis_id: str, verdict: str, **fields: Any
+                      ) -> Dict[str, Any]:
+        """Add this installation's own verdict on a hypothesis."""
+        from ..core.identity import fingerprint
+        report = Report(hypothesis_id=hypothesis_id, instance=fingerprint(),
+                        verdict=verdict, **fields)
+        data = self._load()
+        data["reports"].append(report.as_dict())
+        self._save(data)
+        return report.as_dict()
+
+    def hypotheses(self, shareable_only: bool = False) -> List[Hypothesis]:
+        out = []
+        for record in self._load()["hypotheses"]:
+            if shareable_only and not record.get("shareable", True):
+                continue
+            try:
+                out.append(Hypothesis(mutation=record["mutation"],
+                                      params=record.get("params") or {},
+                                      note=record.get("note", "")))
+            except (ExchangeError, KeyError):
+                continue
+            except TypeError:
+                continue
+        return out
+
+    def reports(self) -> List[Report]:
+        out = []
+        for record in self._load()["reports"]:
+            try:
+                out.append(Report(**record))
+            except (ExchangeError, TypeError, ValueError):
+                continue
+        return out
+
+    def known_ids(self) -> set:
+        return {h.get("hypothesis_id") for h in self._load()["hypotheses"]
+                if h.get("hypothesis_id")}
+
+    def stats(self) -> Dict[str, Any]:
+        data = self._load()
+        shareable = [h for h in data["hypotheses"] if h.get("shareable", True)]
+        return {"hypotheses": len(data["hypotheses"]),
+                "shareable": len(shareable),
+                "not_shareable": len(data["hypotheses"]) - len(shareable),
+                "reports": len(data["reports"])}
+
+    def absorb(self, result: "ImportResult") -> Dict[str, Any]:
+        """Take in what an import produced. Hypotheses only become known --
+        nothing here adopts anything."""
+        data = self._load()
+        existing = {h.get("hypothesis_id") for h in data["hypotheses"]}
+        added = 0
+        for hypothesis in result.hypotheses:
+            if hypothesis.hypothesis_id in existing:
+                continue
+            data["hypotheses"].append(dict(hypothesis.as_dict(), shareable=True,
+                                           foreign=True))
+            existing.add(hypothesis.hypothesis_id)
+            added += 1
+        for report in result.reports:
+            data["reports"].append(report.as_dict())
+        self._save(data)
+        return {"added": added, "reports": len(result.reports)}

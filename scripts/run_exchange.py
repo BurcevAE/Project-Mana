@@ -37,32 +37,17 @@ def queue_path() -> Path:
     return Path(paths.data_root()) / "exchange_queue.json"
 
 
-def load_queue() -> dict:
-    path = queue_path()
-    if not path.is_file():
-        return {"hypotheses": [], "reports": []}
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def save_queue(queue: dict) -> None:
-    path = queue_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(queue, ensure_ascii=False, indent=2),
-                    encoding="utf-8")
-
-
-def show(queue: dict) -> int:
+def show(queue: exchange.Queue) -> int:
+    stats = queue.stats()
     print(f"экземпляр: {identity.fingerprint()}")
-    print(f"очередь:   {queue_path()}")
+    print(f"очередь:   {queue.path}")
     print()
-    print(f"гипотез: {len(queue['hypotheses'])}, отчётов: {len(queue['reports'])}")
+    print(f"гипотез: {stats['hypotheses']} "
+          f"(передаваемых {stats['shareable']}, "
+          f"непередаваемых {stats['not_shareable']}), "
+          f"отчётов: {stats['reports']}")
 
-    reports = []
-    for record in queue["reports"]:
-        try:
-            reports.append(exchange.Report(**record))
-        except Exception:
-            continue
+    reports = queue.reports()
     if not reports:
         print()
         print("воспроизведений пока нет: отчётов ни от кого не поступало")
@@ -89,20 +74,16 @@ def main() -> int:
     parser.add_argument("--show", action="store_true")
     args = parser.parse_args()
 
-    queue = load_queue()
+    queue = exchange.Queue(queue_path())
 
     if args.import_:
-        known = {h.get("hypothesis_id") for h in queue["hypotheses"]}
         try:
-            result = exchange.import_bundle(args.import_, known=known)
+            result = exchange.import_bundle(args.import_,
+                                            known=queue.known_ids())
         except exchange.ExchangeError as exc:
             print(f"пакет не принят: {exc}")
             return 1
-        for hypothesis in result.hypotheses:
-            queue["hypotheses"].append(hypothesis.as_dict())
-        for report in result.reports:
-            queue["reports"].append(report.as_dict())
-        save_queue(queue)
+        queue.absorb(result)
 
         print(f"от экземпляра {result.instance or '(не указан)'}:")
         print(f"  новых гипотез: {len(result.hypotheses)}")
@@ -118,20 +99,11 @@ def main() -> int:
         return 0
 
     if args.export:
-        hypotheses, reports = [], []
-        for record in queue["hypotheses"]:
-            try:
-                hypotheses.append(exchange.Hypothesis(
-                    mutation=record["mutation"], params=record.get("params") or {},
-                    note=record.get("note", "")))
-            except exchange.ExchangeError as exc:
-                print(f"не выгружена гипотеза: {exc}")
-        for record in queue["reports"]:
-            try:
-                reports.append(exchange.Report(**record))
-            except Exception:
-                pass
-        written = exchange.export_bundle(args.export, hypotheses, reports)
+        # shareable_only: a hypothesis that could not be vetted is still
+        # kept locally, and must not leave by accident.
+        hypotheses = queue.hypotheses(shareable_only=True)
+        written = exchange.export_bundle(args.export, hypotheses,
+                                         queue.reports())
         print(f"записано: {written['path']}")
         print(f"  гипотез: {written['hypotheses']}, отчётов: {written['reports']}")
         print(f"  от экземпляра: {written['instance']}")

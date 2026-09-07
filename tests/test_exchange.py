@@ -274,3 +274,139 @@ def test_non_latin_identifiers_do_not_cross_and_that_is_deliberate():
     with pytest.raises(exchange.ExchangeError):
         exchange.check_shareable({"name": "Номенклатура"})
     exchange.check_shareable({"name": "nomenclature"})
+
+
+# ------------------------------------------------------------------- queue
+
+def test_an_annotative_parameter_is_dropped_and_a_behavioural_one_is_not(tmp_path):
+    """The distinction the queue rests on.
+
+    `create_program_template` carries a `description` written for a person
+    -- "синтезировано из открытия ..." -- which free-text vetting rightly
+    refuses and which changes nothing about what the template DOES.
+    Dropping it is safe. Dropping `steps` would produce a hypothesis
+    meaning something other than what was proposed.
+    """
+    queue = exchange.Queue(tmp_path / "q.json")
+    record = queue.record_hypothesis("create_program_template", {
+        "name": "probe_then_answer",
+        "steps": ["OBSERVE", "RETRIEVE", "ANSWER"],
+        "applicability": ["arithmetic"],
+        "description": "Синтезировано из открытия d42; доказано на arithmetic."})
+    assert record["shareable"] is True
+    assert "description" not in record["params"]
+    assert record["params"]["steps"] == ["OBSERVE", "RETRIEVE", "ANSWER"]
+
+
+def test_a_hypothesis_that_cannot_be_shared_is_kept_with_the_reason(tmp_path):
+    """It is still something to try here. Losing local work to a
+    federation concern would be the wrong trade, and `export` filters, so
+    it cannot leave by accident."""
+    queue = exchange.Queue(tmp_path / "q.json")
+    record = queue.record_hypothesis(
+        "create_brain", {"brain_id": "мозг для 1С", "substrate": "algorithmic"})
+    assert record["shareable"] is False
+    assert record["refusal"]
+    assert queue.stats()["not_shareable"] == 1
+    assert queue.hypotheses(shareable_only=True) == []
+
+
+def test_the_same_hypothesis_twice_is_recorded_once(tmp_path):
+    """A cycle that rediscovers the same change on three runs contributes
+    it once -- otherwise a persistent instance would look like agreement."""
+    queue = exchange.Queue(tmp_path / "q.json")
+    params = {"name": "t", "steps": ["OBSERVE", "ANSWER"]}
+    first = queue.record_hypothesis("create_program_template", params)
+    second = queue.record_hypothesis("create_program_template", dict(params))
+    assert second.get("known") is True
+    assert first["hypothesis_id"] == second["hypothesis_id"]
+    assert queue.stats()["hypotheses"] == 1
+
+
+def test_a_truncated_queue_file_does_not_lose_the_next_run(tmp_path):
+    """Written through a temporary file, so a cycle dying mid-write cannot
+    leave a half-file the next run reads as empty."""
+    path = tmp_path / "q.json"
+    path.write_text('{"hypotheses": [{"mutat', encoding="utf-8")
+    queue = exchange.Queue(path)
+    assert queue.stats()["hypotheses"] == 0        # unreadable, not fatal
+    queue.record_hypothesis("create_program_template",
+                            {"name": "t", "steps": ["OBSERVE", "ANSWER"]})
+    assert queue.stats()["hypotheses"] == 1
+
+
+def test_absorbing_an_import_marks_what_came_from_elsewhere(tmp_path):
+    queue = exchange.Queue(tmp_path / "q.json")
+    bundle = tmp_path / "b.json"
+    exchange.export_bundle(bundle, [exchange.Hypothesis(
+        "create_program_template", {"name": "t", "steps": ["OBSERVE", "ANSWER"]})])
+    added = queue.absorb(exchange.import_bundle(bundle))
+    assert added["added"] == 1
+    stored = json.loads((tmp_path / "q.json").read_text(encoding="utf-8"))
+    assert stored["hypotheses"][0]["foreign"] is True
+
+
+# ------------------------------------------------- the cycle writes into it
+
+class _FakeProposal:
+    name = "probe_then_answer"
+    steps = ("OBSERVE", "RETRIEVE", "ANSWER")
+    applicability = ("arithmetic",)
+
+
+def _cycle(tmp_path):
+    from mana.cognition.research import ResearchCycle
+    from mana.cognition.self_model import SelfModel
+    return ResearchCycle(SelfModel(), task_texts={},
+                         exchange_path=tmp_path / "q.json")
+
+
+def test_the_cycle_records_its_hypothesis_before_confirming_it(tmp_path):
+    """Recorded whether or not it is confirmed here.
+
+    A queue holding only confirmed changes would share exactly the things
+    everyone else can already derive; the value of a hypothesis is that
+    somebody else might have the evidence this installation lacks.
+    """
+    cycle = _cycle(tmp_path)
+    hypothesis_id = cycle._record_hypothesis(_FakeProposal())
+    assert hypothesis_id
+    stored = cycle.exchange.hypotheses()
+    assert len(stored) == 1
+    assert stored[0].params["steps"] == ["OBSERVE", "RETRIEVE", "ANSWER"]
+
+
+@pytest.mark.parametrize("verdict", ["ACCEPTED", "REJECTED", "NOT_EVALUATED"])
+def test_all_three_verdicts_are_recorded(tmp_path, verdict):
+    """NOT_EVALUATED as carefully as the other two: "nobody here had the
+    evidence" is a different fact from "it does not work", and collapsing
+    them would read an unmeasured gate as a refutation."""
+    cycle = _cycle(tmp_path)
+    hypothesis_id = cycle._record_hypothesis(_FakeProposal())
+    cycle._record_verdict(hypothesis_id, verdict, trials=30)
+    reports = cycle.exchange.reports()
+    assert [r.verdict for r in reports] == [verdict]
+    assert reports[0].holdout.startswith("v1+")   # its own salted set
+
+
+def test_a_cycle_without_a_queue_records_nothing_and_does_not_crash(tmp_path):
+    """Optional on purpose: a cycle run for measurement should not
+    accumulate a queue nobody asked for."""
+    from mana.cognition.research import ResearchCycle
+    from mana.cognition.self_model import SelfModel
+    cycle = ResearchCycle(SelfModel(), task_texts={})
+    assert cycle.exchange is None
+    assert cycle._record_hypothesis(_FakeProposal()) == ""
+    cycle._record_verdict("", "ACCEPTED")          # must not raise
+
+
+def test_bookkeeping_failure_does_not_take_down_the_run(tmp_path, monkeypatch):
+    """The federation is a side concern. A cycle spending real brain calls
+    must not die because a queue file could not be written."""
+    cycle = _cycle(tmp_path)
+
+    def explode(*a, **k):
+        raise OSError("диск переполнен")
+
+    monkeypatch.setattr(cycle.exchange, "record_hypothesis", explode)
+    assert cycle._record_hypothesis(_FakeProposal()) == ""
