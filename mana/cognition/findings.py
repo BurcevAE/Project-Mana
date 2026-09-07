@@ -58,10 +58,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
-from ..core.gates import ACCEPTED, REJECTED, NOT_EVALUATED
+from ..core.gates import (ACCEPTED, REJECTED, NOT_EVALUATED,
+                          MIN_PAIRED_TRIALS)
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 #: The same three states as the acceptance gates, on purpose. "We tested
 #: it and it did not hold" and "we could not test it" are different facts
@@ -73,6 +74,144 @@ VERDICTS = (ACCEPTED, REJECTED, NOT_EVALUATED)
 MAX_FINDINGS = 5000
 
 LEDGER_DIRNAME = "findings"
+
+# --------------------------------------------------------------------------
+# why it failed, derived rather than asserted
+#
+# `"type": "NO_GENERALIZATION"` written onto the chess result would have
+# been an interpretation recorded as a fact. Reasoning built on labels a
+# system assigns itself is reasoning built on nothing, and this is exactly
+# the place where that matters: a later experiment would take the label as
+# a premise.
+#
+# So a class is COMPUTED from the measurement by a rule that names itself,
+# and computed on READ rather than stored -- a stored label can be edited,
+# or can drift out of agreement with the numbers printed beside it.
+# --------------------------------------------------------------------------
+
+#: The measurement did not carry what the rules need. Said plainly rather
+#: than guessed: "we cannot classify this" is a fact, and inventing a
+#: class for it is the failure this whole design avoids.
+UNCLASSIFIED = "UNCLASSIFIED"
+
+#: Too few trials for the interval to mean anything.
+NOT_MEASURED = "NOT_MEASURED"
+
+#: The interval lies entirely below the no-effect value.
+WORSE = "WORSE"
+
+#: The interval contains the no-effect value. The chess result is this
+#: one: 0.5 inside [0.376, 0.533].
+NOT_BETTER = "NOT_BETTER"
+
+#: Better, and the extra cost eats the gain by the rule below.
+COSTS_MORE_THAN_IT_GAINS = "COSTS_MORE_THAN_IT_GAINS"
+
+#: Better, and worth it.
+BETTER = "BETTER"
+
+FAILURE_CLASSES = (UNCLASSIFIED, NOT_MEASURED, WORSE, NOT_BETTER,
+                   COSTS_MORE_THAN_IT_GAINS, BETTER)
+
+#: What `measurement` must carry for a class to be derivable. Named here
+#: so a caller can see what to record, and so an old record missing them
+#: comes back UNCLASSIFIED instead of being force-fitted.
+#:
+#:   trials    independent observations (games, paired turns -- not
+#:             positions, and not anything correlated)
+#:   interval  [low, high] on the effect, at the stated confidence
+#:   null      the value that means "no effect": 0.5 for a match score,
+#:             0.0 for a margin
+#:   cost_ratio  optional. candidate cost / baseline cost, in real units
+REQUIRED_MEASUREMENT = ("trials", "interval", "null")
+
+#: How much cost a win has to justify. A candidate that is better by a
+#: hair and costs six times as much is not an improvement anybody can
+#: spend; the chess evaluation cost 6.2x per position. Stated as a rule so
+#: it can be argued with from evidence rather than taste.
+COST_TOLERANCE = 1.5
+
+
+@dataclass(frozen=True)
+class Classification:
+    """A failure class, the rule that produced it, and what it read."""
+    failure: str
+    rule: str
+    inputs: Dict[str, Any] = field(default_factory=dict)
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {"failure": self.failure, "rule": self.rule,
+                "inputs": dict(self.inputs)}
+
+
+def classify(verdict: str, measurement: Dict[str, Any]) -> Classification:
+    """Which class the numbers put this in. No opinion enters.
+
+    Every branch names the rule it applied, so a reader can disagree with
+    the rule instead of with the label.
+    """
+    missing = [k for k in REQUIRED_MEASUREMENT if k not in (measurement or {})]
+    if missing:
+        return Classification(
+            UNCLASSIFIED, f"в измерении нет {', '.join(missing)}",
+            {"has": sorted(measurement or {})})
+
+    try:
+        trials = int(measurement["trials"])
+        low, high = (float(x) for x in measurement["interval"])
+        null = float(measurement["null"])
+    except Exception as exc:
+        return Classification(UNCLASSIFIED,
+                              f"измерение нечитаемо: {type(exc).__name__}",
+                              {"measurement": measurement})
+
+    read = {"trials": trials, "interval": [low, high], "null": null}
+
+    if verdict == NOT_EVALUATED or trials < MIN_PAIRED_TRIALS:
+        return Classification(
+            NOT_MEASURED,
+            f"испытаний {trials} против порога {MIN_PAIRED_TRIALS}", read)
+
+    if high < null:
+        return Classification(WORSE, "интервал целиком ниже нуля эффекта", read)
+
+    if low <= null <= high:
+        return Classification(NOT_BETTER,
+                              "интервал накрывает ноль эффекта", read)
+
+    ratio = measurement.get("cost_ratio")
+    if ratio is not None:
+        try:
+            ratio = float(ratio)
+        except Exception:
+            ratio = None
+    if ratio is not None:
+        read["cost_ratio"] = ratio
+        if ratio > COST_TOLERANCE:
+            return Classification(
+                COSTS_MORE_THAN_IT_GAINS,
+                f"выигрыш есть, но цена {ratio}x превышает допуск "
+                f"{COST_TOLERANCE}x", read)
+
+    return Classification(BETTER, "интервал целиком выше нуля эффекта", read)
+
+
+def measurement_of(trials: int, interval: Sequence[float], null: float,
+                   cost_ratio: Optional[float] = None,
+                   **extra: Any) -> Dict[str, Any]:
+    """Build a measurement a class can be derived from.
+
+    A helper rather than a convention, because a convention is a thing
+    people follow until they are busy.
+    """
+    row: Dict[str, Any] = {"trials": int(trials),
+                           "interval": [float(interval[0]), float(interval[1])],
+                           "null": float(null)}
+    if cost_ratio is not None:
+        row["cost_ratio"] = float(cost_ratio)
+    row.update(extra)
+    return row
+
 
 
 def _canonical(value: Any) -> str:
@@ -94,6 +233,11 @@ class Finding:
     verdict: str
     measurement: Dict[str, Any] = field(default_factory=dict)
     conditions: Dict[str, Any] = field(default_factory=dict)
+    #: Guesses about WHY, and nothing else. Kept apart from `failure`,
+    #: which is derived, because a guess may seed the next experiment and
+    #: may never be a premise in a conclusion. Nothing branches on this;
+    #: a test enforces it.
+    suspected: Tuple[str, ...] = ()
     note: str = ""
     created: float = field(default_factory=time.time)
     version: str = ""
@@ -106,6 +250,11 @@ class Finding:
             raise ValueError("у находки должен быть вопрос, на который она отвечает")
 
     @property
+    def failure(self) -> Classification:
+        """Derived on read, so it cannot drift from the numbers."""
+        return classify(self.verdict, self.measurement)
+
+    @property
     def finding_id(self) -> str:
         body = _canonical({"question": self.question.strip().lower(),
                            "approach": self.approach})
@@ -115,16 +264,22 @@ class Finding:
         return {"finding_id": self.finding_id, "question": self.question,
                 "approach": self.approach, "verdict": self.verdict,
                 "measurement": self.measurement, "conditions": self.conditions,
+                "failure": self.failure.as_dict(),
+                "suspected": list(self.suspected),
                 "note": self.note, "created": self.created,
                 "version": self.version}
 
     @classmethod
     def from_dict(cls, row: Dict[str, Any]) -> "Finding":
+        # `failure` is deliberately NOT read back. It is derived, and
+        # accepting it from the file would let a hand-edited record carry
+        # a class its numbers do not support.
         return cls(question=str(row.get("question") or ""),
                    approach=dict(row.get("approach") or {}),
                    verdict=str(row.get("verdict") or NOT_EVALUATED),
                    measurement=dict(row.get("measurement") or {}),
                    conditions=dict(row.get("conditions") or {}),
+                   suspected=tuple(row.get("suspected") or ()),
                    note=str(row.get("note") or ""),
                    created=float(row.get("created") or 0.0),
                    version=str(row.get("version") or ""))
@@ -151,9 +306,15 @@ class Finding:
         when = time.strftime("%d.%m.%Y", time.localtime(self.created))
         head = {ACCEPTED: "сработало", REJECTED: "не сработало",
                 NOT_EVALUATED: "не удалось оценить"}[self.verdict]
-        return (f"[{when}] {head}: {self.question}\n"
-                f"  как: {_canonical(self.approach)}\n"
-                f"  измерено: {_canonical(self.measurement)}")
+        classified = self.failure
+        lines = [f"[{when}] {head}: {self.question}",
+                 f"  как: {_canonical(self.approach)}",
+                 f"  класс: {classified.failure} — {classified.rule}",
+                 f"  измерено: {_canonical(self.measurement)}"]
+        if self.suspected:
+            lines.append("  предполагаемая причина (догадка, не измерение): "
+                         + "; ".join(self.suspected))
+        return "\n".join(lines)
 
 
 def ledger_path() -> Path:

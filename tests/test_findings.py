@@ -200,5 +200,134 @@ def test_the_chess_result_is_actually_on_disk():
         pytest.skip("шахматный эксперимент на этой машине не проводился")
     result = about[0]
     assert result.verdict == REJECTED
-    assert result.measurement["games"] >= 240
+    # `trials` rather than `games`: the canonical key a failure class can
+    # be derived from, counting independent units.
+    assert result.measurement["trials"] >= 240
     assert result.conditions["corpus_games"] >= 1000
+
+
+# --------------------------------------------------------------------------
+# the failure class is derived, and a guess is kept apart from it
+#
+# `"type": "NO_GENERALIZATION"` written onto the chess result would have
+# been an interpretation recorded as a fact. Reasoning built on labels a
+# system assigns itself is reasoning built on nothing.
+# --------------------------------------------------------------------------
+
+from mana.cognition.findings import (  # noqa: E402
+    BETTER, COSTS_MORE_THAN_IT_GAINS, NOT_BETTER, NOT_MEASURED, UNCLASSIFIED,
+    WORSE, COST_TOLERANCE, classify, measurement_of)
+
+
+@pytest.mark.parametrize("verdict,measurement,expected", [
+    (REJECTED, measurement_of(240, [0.376, 0.533], 0.5, 6.2), NOT_BETTER),
+    (REJECTED, measurement_of(12, [0.2, 0.9], 0.5), NOT_MEASURED),
+    (REJECTED, measurement_of(200, [0.30, 0.44], 0.5), WORSE),
+    (ACCEPTED, measurement_of(200, [0.55, 0.62], 0.5, 6.2),
+     COSTS_MORE_THAN_IT_GAINS),
+    (ACCEPTED, measurement_of(200, [0.55, 0.62], 0.5, 1.1), BETTER),
+    (ACCEPTED, measurement_of(200, [0.55, 0.62], 0.5), BETTER),
+    (NOT_EVALUATED, measurement_of(500, [0.55, 0.62], 0.5), NOT_MEASURED),
+])
+def test_the_class_follows_from_the_numbers(verdict, measurement, expected):
+    assert classify(verdict, measurement).failure == expected
+
+
+def test_every_class_names_the_rule_that_produced_it():
+    """So a reader can disagree with the rule instead of with the label."""
+    for measurement in (measurement_of(240, [0.376, 0.533], 0.5),
+                        measurement_of(5, [0.1, 0.9], 0.5),
+                        {"score": 0.47}):
+        assert classify(REJECTED, measurement).rule.strip()
+
+
+def test_a_measurement_that_cannot_be_classified_says_so(tmp_path):
+    """"We cannot classify this" is a fact. Inventing a class for it is
+    the failure this whole design avoids."""
+    found = classify(REJECTED, {"score": 0.4708, "games": 240})
+    assert found.failure == UNCLASSIFIED
+    assert "trials" in found.rule
+
+
+def test_a_malformed_measurement_is_unclassified_not_a_crash():
+    assert classify(REJECTED, {"trials": "много", "interval": [0.1, 0.2],
+                               "null": 0.5}).failure == UNCLASSIFIED
+    assert classify(REJECTED, {"trials": 40, "interval": "широкий",
+                               "null": 0.5}).failure == UNCLASSIFIED
+
+
+def test_the_class_is_derived_on_read_not_stored(tmp_path):
+    """A stored label can be edited, or drift out of agreement with the
+    numbers printed beside it."""
+    ledger = Ledger(tmp_path / "findings.jsonl")
+    ledger.record(finding(REJECTED,
+                          measurement=measurement_of(240, [0.376, 0.533], 0.5)))
+
+    # Hand-edit the file to claim a class its numbers do not support.
+    path = tmp_path / "findings.jsonl"
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    rows[0]["failure"] = {"failure": BETTER, "rule": "потому что я так решил"}
+    path.write_text(json.dumps(rows[0], ensure_ascii=False) + "\n",
+                    encoding="utf-8")
+
+    assert ledger.findings()[0].failure.failure == NOT_BETTER
+
+
+def test_the_chess_result_classifies_as_not_better():
+    ledger = Ledger()
+    chess = [f for f in ledger.latest() if f.approach.get("domain") == "chess"]
+    if not chess:
+        pytest.skip("шахматный эксперимент на этой машине не проводился")
+    assert chess[0].failure.failure == NOT_BETTER
+
+
+# --------------------------------------------------------------------------
+# guesses
+# --------------------------------------------------------------------------
+
+def test_a_guess_is_stored_apart_from_the_derived_class():
+    """A guess may seed the next experiment; it may never be a premise in
+    a conclusion."""
+    guessed = finding(suspected=("признаки грубые", "метки от базового игрока"))
+    assert guessed.suspected
+    assert guessed.failure.failure in (NOT_BETTER, NOT_MEASURED, UNCLASSIFIED)
+    assert "признаки грубые" not in json.dumps(guessed.failure.as_dict(),
+                                               ensure_ascii=False)
+
+
+def test_a_guess_does_not_change_what_experiment_this_is():
+    """Otherwise adding a hunch would make an old result invisible."""
+    assert finding().finding_id == finding(
+        suspected=("что-то", "ещё что-то")).finding_id
+
+
+def test_nothing_branches_on_a_guess():
+    """The rule this design turns on. If `classify` ever reads
+    `suspected`, a self-assigned label becomes a premise."""
+    import inspect
+
+    from mana.cognition import findings as module
+
+    assert "suspected" not in inspect.getsource(module.classify)
+    assert "suspected" not in inspect.getsource(module.Ledger.already_tried)
+
+
+def test_guesses_survive_a_round_trip(tmp_path):
+    ledger = Ledger(tmp_path / "findings.jsonl")
+    ledger.record(finding(suspected=("догадка раз", "догадка два")))
+    assert ledger.findings()[0].suspected == ("догадка раз", "догадка два")
+
+
+def test_an_old_record_without_guesses_still_loads(tmp_path):
+    """Records written before the field existed must not become
+    unreadable -- losing the ledger would be worse than the gap it was
+    built to close."""
+    path = tmp_path / "findings.jsonl"
+    path.write_text(json.dumps({
+        "question": QUESTION, "approach": APPROACH, "verdict": REJECTED,
+        "measurement": {"score": 0.47}, "conditions": {}, "created": 1.0,
+    }, ensure_ascii=False) + "\n", encoding="utf-8")
+    read_back = Ledger(path).findings()
+    assert len(read_back) == 1
+    assert read_back[0].suspected == ()
+    assert read_back[0].failure.failure == UNCLASSIFIED
