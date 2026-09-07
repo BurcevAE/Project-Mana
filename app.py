@@ -234,6 +234,11 @@ def _deliver_self_check(report: dict, ok: bool) -> None:
 
 
 def main() -> int:
+    # Before anything prints. A frozen build wrote Russian as
+    # cp1251 into a UTF-8 console, so --peer show came out as
+    # question marks and the key it printed was unreadable.
+    from mana.console import speak_utf8
+    speak_utf8()
     argv = sys.argv[1:]
 
     if argv and argv[0] == "--self-check":

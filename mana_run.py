@@ -4,6 +4,10 @@
 from __future__ import annotations
 
 from mana.cli import main
+from mana.console import speak_utf8
 
 if __name__ == "__main__":
+    # Same reason as in app.py: the messages are Russian and the stream
+    # encoding is whatever the locale says unless somebody says otherwise.
+    speak_utf8()
     raise SystemExit(main())

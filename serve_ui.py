@@ -68,4 +68,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    from mana.console import speak_utf8
+    speak_utf8()
     raise SystemExit(main())
