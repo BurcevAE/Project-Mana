@@ -60,8 +60,11 @@ HIDDEN = ["webview.platforms.edgechromium", "webview.platforms.winforms",
           # no import and the packaged build fails on the first search.
           "ddgs", "ddgs.engines"]
 
-#: Packages whose submodules are pulled in wholesale.
-COLLECTED = ["sklearn", "ddgs"]
+#: Packages whose submodules are pulled in wholesale. pywin32 spreads
+#: itself over win32com, pythoncom and pywintypes with generated modules
+#: the analyser does not follow, and the failure is a COM call that works
+#: from source and raises ImportError in the package.
+COLLECTED = ["sklearn", "ddgs", "win32com"]
 
 
 def build(windowed: bool, allow_missing: bool = False,

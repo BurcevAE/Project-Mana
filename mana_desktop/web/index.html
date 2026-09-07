@@ -93,6 +93,22 @@
              border-radius: 3px; display: block; }
   .bar > u { position: absolute; top: -2px; bottom: -2px; width: 1px;
              background: var(--ink-faint); }
+  .apps-h { font-size: .8rem; font-weight: 600; margin: 1.1rem 0 .5rem;
+            padding-top: .8rem; border-top: 1px solid var(--line); }
+  .cap { display: grid; grid-template-columns: 1.1rem 5rem 1fr; gap: .45rem;
+         align-items: baseline; font-size: .76rem; padding: .18rem 0; }
+  .cap b { font-family: var(--mono); font-weight: 500; }
+  /* A write proposal is the one thing in this window that changes someone
+     else's database. It gets a red edge so it cannot be mistaken for the
+     status rows above it. */
+  .prop { border: 1px solid var(--crit); border-radius: 7px; padding: .6rem .7rem;
+          margin-bottom: .6rem; background: var(--panel-2); }
+  .prop .obj { font-family: var(--mono); font-size: .76rem; color: var(--ink); }
+  .prop .diff { font-family: var(--mono); font-size: .74rem; margin: .45rem 0; }
+  .prop .diff i { color: var(--crit); font-style: normal; }
+  .prop .diff b { color: var(--ok); font-weight: 500; }
+  .prop .acts { display: flex; gap: .5rem; margin-top: .55rem; }
+  .prop button { font-size: .75rem; padding: .3rem .7rem; }
   .switch { display: flex; align-items: center; gap: .45rem; font-size: .78rem;
             margin: .9rem 0 .3rem; cursor: pointer; }
   .switch input { accent-color: var(--ok); }
@@ -196,6 +212,7 @@
     <button class="on" data-pane="brains">Мозги</button>
     <button data-pane="cycle">Цикл</button>
     <button data-pane="genome">Геном</button>
+    <button data-pane="apps">Программы</button>
     <button data-pane="log">Журнал</button>
     <button data-pane="system">Система</button>
   </nav>
@@ -214,6 +231,11 @@
   </section>
   <section class="pane" id="pane-genome">
     <div id="genome-out" class="hint">Загрузка…</div>
+  </section>
+  <section class="pane" id="pane-apps">
+    <div id="apps-caps"></div>
+    <h4 class="apps-h">Ожидают подтверждения</h4>
+    <div id="apps-pending" class="hint">Нет заявок на запись.</div>
   </section>
   <section class="pane" id="pane-log"><pre id="logstream"></pre></section>
   <section class="pane" id="pane-system">
@@ -632,6 +654,101 @@ $("autostart").addEventListener("change", async (event) => {
   }
   $("autostart-note").textContent = res.enabled ? res.registered : "";
 });
+
+/* ---------- desktop applications ---------- */
+
+async function refreshApps() {
+  let caps;
+  try { caps = await api("/api/apps"); } catch (e) { return; }
+  const box = $("apps-caps");
+  box.textContent = "";
+  Object.entries(caps).forEach(([name, info]) => {
+    const row = document.createElement("div");
+    row.className = "cap";
+    const mark = document.createElement("span");
+    mark.textContent = info.available ? "✓" : "—";
+    mark.style.color = info.available ? "var(--ok)" : "var(--ink-faint)";
+    const id = document.createElement("b");
+    id.textContent = name;
+    const what = document.createElement("span");
+    /* Says WHY it is unavailable, not just that it is. An absence with no
+       reason is a dead end for whoever reads it. */
+    what.textContent = info.available ? info.what
+      : info.what + " — нет: " + (info.missing || []).join(", ");
+    if (!info.available) what.style.color = "var(--ink-faint)";
+    row.append(mark, id, what);
+    box.appendChild(row);
+  });
+
+  let state;
+  try { state = await api("/api/onec"); } catch (e) { return; }
+  const list = $("apps-pending");
+  const items = state.pending || [];
+  list.textContent = "";
+  if (!items.length) {
+    list.className = "hint";
+    list.textContent = "Нет заявок на запись.";
+    return;
+  }
+  list.className = "";
+  items.forEach(p => {
+    const card = document.createElement("div");
+    card.className = "prop";
+    const obj = document.createElement("div");
+    obj.className = "obj";
+    obj.textContent = p.object + "  ·  " + p.description;
+    card.appendChild(obj);
+    /* Before AND after. Without the current value in front of them, the
+       user is confirming the agent's reading of the database rather than
+       the change itself. */
+    Object.keys(p.changes || {}).forEach(field => {
+      const line = document.createElement("div");
+      line.className = "diff";
+      const was = document.createElement("i");
+      was.textContent = JSON.stringify(p.before ? p.before[field] : null);
+      const now = document.createElement("b");
+      now.textContent = JSON.stringify(p.changes[field]);
+      line.append(document.createTextNode(field + ": "), was,
+                  document.createTextNode(" → "), now);
+      card.appendChild(line);
+    });
+    const expiry = document.createElement("div");
+    expiry.className = "hint";
+    expiry.textContent = "истекает через " + p.expires_in + " с";
+    card.appendChild(expiry);
+
+    const acts = document.createElement("div");
+    acts.className = "acts";
+    const yes = document.createElement("button");
+    yes.textContent = "Записать в 1С";
+    yes.addEventListener("click", async () => {
+      yes.disabled = true;
+      const res = await api("/api/onec/confirm", { request_id: p.request_id });
+      expiry.textContent = res.error ? ("не записано: " + res.error)
+                                     : "записано";
+      refreshApps();
+    });
+    const no = document.createElement("button");
+    no.textContent = "Отменить";
+    no.addEventListener("click", async () => {
+      await api("/api/onec/cancel", { request_id: p.request_id });
+      refreshApps();
+    });
+    acts.append(yes, no);
+    card.appendChild(acts);
+    list.appendChild(card);
+  });
+}
+
+document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", () => {
+  if (b.dataset.pane === "apps") refreshApps();
+}));
+/* Polled while the tab is open: a proposal expires on its own, and a
+   button that writes something the base no longer matches is worse than
+   a stale countdown. */
+setInterval(() => {
+  if (document.querySelector('[data-pane="apps"]').classList.contains("on")) refreshApps();
+}, 3000);
 </script>
 </body>
 </html>

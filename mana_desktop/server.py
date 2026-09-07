@@ -128,6 +128,14 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send(200, autostart.status())
             if route == "/api/build":
                 return self._send(200, build_manifest())
+            if route == "/api/apps":
+                from mana import apps
+                return self._send(200, apps.available())
+            if route == "/api/onec":
+                from mana.apps import onec
+                return self._send(200, {
+                    "connection": onec.describe_connection(),
+                    "pending": onec.pending()})
             if route == "/api/events":
                 return self._stream_events()
             return self._send(404, {"error": "not found"})
@@ -162,6 +170,22 @@ class _Handler(BaseHTTPRequestHandler):
                 wanted = bool(body.get("enabled"))
                 return self._send(200, autostart.enable() if wanted
                                   else autostart.disable())
+            if route == "/api/onec/confirm":
+                # The only route that writes to the infobase, and it
+                # carries no description of the change: what gets written
+                # was fixed when the proposal was made and read back from
+                # the base then. Accepting the change here would let the
+                # window confirm one thing and write another.
+                from mana.apps import onec
+                try:
+                    return self._send(200, onec.confirm(
+                        str(body.get("request_id", ""))))
+                except onec.OneCError as exc:
+                    return self._send(200, {"ok": False, "error": str(exc)})
+            if route == "/api/onec/cancel":
+                from mana.apps import onec
+                return self._send(200, onec.cancel(
+                    str(body.get("request_id", ""))))
             return self._send(404, {"error": "not found"})
         except Exception as exc:
             self._send(500, {"error": f"{type(exc).__name__}: {exc}",

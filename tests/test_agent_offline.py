@@ -72,5 +72,9 @@ def test_hardware_status_and_tools_status_shapes(isolated_agent):
     hw = isolated_agent.hardware_status()
     assert "profile" in hw and "adapted" in hw and "auto_adapt_enabled" in hw
     tools = isolated_agent.tools_status()
-    # 9 before 5.10, + llm_consensus and decompose_task with the brain pool.
-    assert len(tools["tools"]) == 11
+    # 9 before 5.10, + llm_consensus and decompose_task with the brain
+    # pool, + 7 desktop-application tools in 2.12 (documents, editor, 1C).
+    # The app tools are registered even where the application is absent:
+    # a tool that answers "Word is not installed" is a fact the agent can
+    # pass on, one that is missing teaches it nothing.
+    assert len(tools["tools"]) == 18

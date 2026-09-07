@@ -126,6 +126,15 @@ def self_check() -> int:
         "hardware_detection": optional_deps.HAS_PSUTIL,
         "llm_providers": optional_deps.HAS_REQUESTS,
     }
+    # The desktop-application layer has its own capabilities, and the
+    # risky one is pywin32: it spreads itself over win32com, pythoncom and
+    # pywintypes with generated modules PyInstaller's analyser does not
+    # follow, so "1C works from source" says nothing about the package.
+    from mana import apps
+    report["applications"] = apps.available()
+    capabilities["onec_com"] = apps.available()["onec"]["available"]
+    capabilities["office_files"] = (apps.available()["docx"]["available"]
+                                    and apps.available()["xlsx"]["available"])
     report["capabilities"] = capabilities
 
     if getattr(sys, "frozen", False):

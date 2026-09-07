@@ -458,4 +458,9 @@ def build_default_registry(agent: Any) -> ToolRegistry:
     registry.register(make_write_memory_tool(agent.memory))
     registry.register(make_memory_search_tool(agent.persistent_memory))
     registry.register(make_graph_memory_search_tool(agent.graph_memory))
+    # Desktop applications. Registered unconditionally: a tool that is
+    # absent teaches the agent nothing, while one that answers "Word is
+    # not installed on this machine" is a fact it can pass on.
+    from .apps.tools import register_app_tools
+    register_app_tools(registry)
     return registry

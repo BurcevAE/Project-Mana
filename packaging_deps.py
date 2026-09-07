@@ -127,6 +127,10 @@ BUNDLED = (
     Bundled("pymupdf", "pymupdf", "PDF не читаются"),
     Bundled("keyring", "keyring", "ключи API нельзя сохранить между запусками", required=True),
     Bundled("webview", "pywebview", "окно не открывается", required=True),
+    Bundled("docx", "python-docx", "нельзя читать и писать .docx"),
+    Bundled("openpyxl", "openpyxl", "нельзя читать и писать .xlsx"),
+    Bundled("win32com.client", "pywin32",
+            "нет доступа к 1С:Предприятие и к любому COM-приложению"),
 )
 
 #: NOT shipped, on purpose, with the reason. Written down because the
@@ -196,5 +200,24 @@ except Exception:
     pass
 try:
     import pymupdf          # noqa: F401,E402
+except Exception:
+    pass
+
+# mana/apps reaches these, and mana/ is excluded from PyInstaller's
+# analysis, so an import that appears only there is invisible to the
+# build. pythoncom and pywintypes are named separately because pywin32
+# loads them as extension modules rather than through a normal import.
+try:
+    import docx            # noqa: F401,E402
+except Exception:
+    pass
+try:
+    import openpyxl        # noqa: F401,E402
+except Exception:
+    pass
+try:
+    import pythoncom       # noqa: F401,E402
+    import pywintypes      # noqa: F401,E402
+    import win32com.client  # noqa: F401,E402
 except Exception:
     pass
