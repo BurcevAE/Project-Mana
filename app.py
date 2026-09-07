@@ -239,6 +239,14 @@ def main() -> int:
     if argv and argv[0] == "--self-check":
         return self_check()
 
+    if argv and argv[0] == "--exchange":
+        # An installed MANA could not export or import at all, so every
+        # installation that was not also a source checkout was unable to
+        # join the federation -- the machinery existed and nothing on a
+        # user's machine could reach it.
+        from mana.cognition.exchange import command_line
+        return command_line(argv[1:])
+
     if argv and argv[0] == "--cli":
         sys.argv = [sys.argv[0]] + argv[1:]
         from mana.cli import main as cli_main
