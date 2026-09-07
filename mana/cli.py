@@ -133,6 +133,94 @@ def format_brains(status: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _show_journal(limit: int) -> int:
+    """Print what the last turns actually did.
+
+    The tool list per turn is the column worth reading. An answer that
+    says "открываю" beside an empty tool list is the failure this record
+    was created for -- and this only shows it, deliberately: judging is a
+    separate step with its own decisions, and a viewer that graded turns
+    would be asserting a verdict nobody has yet defined.
+    """
+    from .journal import Journal
+
+    journal = Journal()
+    stats = journal.stats()
+    if not stats["exists"]:
+        print(f"Журнала ещё нет: {stats['path']}")
+        print("Он пишется при обычной работе — задайте пару вопросов и вернитесь.")
+        return 0
+
+    print(f"{stats['path']}")
+    print(f"эпизодов: {stats['episodes']}   сессий: {stats['sessions']}   "
+          f"без единого вызова инструмента: {stats['with_no_calls']}")
+    print(f"по маршрутам: {stats['by_route']}")
+    if stats["by_tool"]:
+        top = list(stats["by_tool"].items())[:8]
+        print("инструменты: " + ", ".join(f"{n}×{c}" for n, c in top))
+    print()
+
+    for ep in journal.episodes(limit=limit):
+        when = time.strftime("%d.%m %H:%M", time.localtime(ep.started))
+        tools = ", ".join(f"{c.tool}{'' if c.ok else '!'}" for c in ep.calls)
+        print(f"[{when}] {ep.route:<13} {ep.latency:5.1f}s")
+        print(f"  запрос:       {ep.request[:150]}")
+        print(f"  ответ:        {ep.answer[:150]}")
+        print(f"  инструменты:  {tools or '(ни одного)'}")
+        print()
+    return 0
+
+
+def _show_findings(limit: int) -> int:
+    """Report the invariant violations in the recorded episodes.
+
+    Shadow: this reads a record already written and changes nothing. The
+    two kinds are printed apart on purpose -- `mechanical` is decided by
+    comparing recorded fields, `pattern` is a word list making a guess,
+    and presenting a guess as a fact is the failure this project keeps
+    having to fix.
+    """
+    from .journal import Journal
+    from .cognition.invariants import scan, summarise, MECHANICAL
+
+    journal = Journal()
+    episodes = journal.episodes(limit=limit)
+    if not episodes:
+        print(f"Журнала ещё нет или он пуст: {journal.path}")
+        return 0
+
+    violations = scan(episodes)
+    summary = summarise(episodes, violations)
+    print(f"Просмотрено ходов: {summary['episodes']}   "
+          f"с нарушением: {summary['episodes_with_a_violation']}   "
+          f"всего нарушений: {summary['violations']}")
+    print(f"по инвариантам: {summary['by_invariant'] or '(ничего)'}")
+    if summary["episodes"] < 30:
+        print("Выборка мала: как оценка доли это число ничего не значит.")
+    print()
+
+    known = {ep.episode_id: ep for ep in episodes}
+    for kind, title in ((MECHANICAL, "ИЗМЕРЕНО (сравнение записанных полей)"),
+                        ("pattern", "ПО ШАБЛОНУ (догадка, проверьте глазами)")):
+        chosen = [v for v in violations if v.kind == kind]
+        if not chosen:
+            continue
+        print(f"── {title} ── {len(chosen)}")
+        for violation in chosen:
+            episode = known.get(violation.episode_id)
+            when = (time.strftime("%d.%m %H:%M", time.localtime(episode.started))
+                    if episode else "?")
+            print(f"  [{when}] {violation.invariant}")
+            if episode is not None:
+                print(f"    запрос: {episode.request[:120]}")
+                print(f"    ответ:  {episode.answer[:120]}")
+            print(f"    почему: {violation.reason}")
+            print()
+    if not violations:
+        print("Ни один инвариант не нарушен.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Argument parser, split out of main() so tests can construct it
     without running the agent."""
@@ -181,6 +269,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--paths-status", action="store_true",
                         help="Где MANA ищет состояние, песочницу и собственный код "
                              "(первое, что нужно смотреть, если память 'потерялась')")
+    parser.add_argument("--journal", nargs="?", const=20, type=int, metavar="N",
+                        help="Что MANA реально делала на последних N ходах: "
+                             "запрос, вызванные инструменты, ответ")
+    parser.add_argument("--findings", nargs="?", const=200, type=int, metavar="N",
+                        help="Прогнать инварианты по последним N ходам журнала "
+                             "и показать найденные отказы (ничего не меняет)")
     parser.add_argument("--list-brains", action="store_true",
                         help="Показать все мозги: какие настроены, готовы, в кулдауне или исчерпали free-tier")
     parser.add_argument("--brains-status", action="store_true",
@@ -233,6 +327,15 @@ def main() -> int:
     if args.paths_status:
         print(json.dumps(paths.status(), ensure_ascii=False, indent=2))
         return 0
+
+    # Before any agent is constructed: reading the record must not require
+    # loading embedding models, and a journal that cannot be read without
+    # starting the thing it observes is not evidence anybody will look at.
+    if args.journal is not None:
+        return _show_journal(int(args.journal))
+
+    if args.findings is not None:
+        return _show_findings(int(args.findings))
 
     # Handled before any agent is constructed: reporting the version must
     # not require loading embedding models or opening databases.

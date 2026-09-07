@@ -274,6 +274,33 @@ def main() -> int:
         from mana.net.cli import command_line as peer_command
         return peer_command(argv[1:])
 
+    if argv and argv[0] == "--findings":
+        from mana.cli import _show_findings
+        count = 200
+        if len(argv) > 1:
+            try:
+                count = int(argv[1])
+            except ValueError:
+                print("Использование: MANA.exe --findings [сколько ходов]")
+                return 2
+        return _show_findings(count)
+
+    if argv and argv[0] == "--journal":
+        # Reachable from the installed program, not only from a source
+        # checkout. The record of what MANA actually did is the first
+        # thing to look at when it says it opened something and nothing
+        # opened, and a diagnostic that requires the repository is one
+        # nobody on a user's machine can run.
+        from mana.cli import _show_journal
+        count = 20
+        if len(argv) > 1:
+            try:
+                count = int(argv[1])
+            except ValueError:
+                print("Использование: MANA.exe --journal [сколько ходов]")
+                return 2
+        return _show_journal(count)
+
     if argv and argv[0] == "--cli":
         sys.argv = [sys.argv[0]] + argv[1:]
         from mana.cli import main as cli_main

@@ -150,6 +150,11 @@ class Config:
     memory_root: str = "mana_memory"
     memory_db_path: str = "mana_memory/mana_memory.sqlite3"
     memory_session_id: str = "default"
+
+    # What each user turn actually did -- see mana/journal.py. A Config
+    # field rather than a path derived inside the journal, so the test
+    # suite's isolation redirects it like every other file MANA writes.
+    journal_path: str = "journal/episodes.jsonl"
     # Minimum similarity for a stored memory to be injected as context.
     # Without a floor, any query retrieves any entry (see KnowledgeBase.search)
     # -- a greeting once pulled back a stored answer about AI news.
@@ -367,7 +372,7 @@ class Config:
     #: sandbox directory was created lazily somewhere else entirely.
     STATE_PATH_FIELDS = ("knowledge_db_path", "state_file", "history_file", "cache_file",
                          "experience_db_path", "evolution_report_file", "memory_db_path",
-                         "memory_root", "local_exec_workdir")
+                         "memory_root", "local_exec_workdir", "journal_path")
 
     def ensure_dirs(self) -> None:
         """Resolve every state path and create its parent.
@@ -393,7 +398,8 @@ class Config:
                 continue
             setattr(self, name, str(resolve_data_path(value)))
         for name in ("knowledge_db_path", "state_file", "history_file", "cache_file",
-                     "experience_db_path", "evolution_report_file", "memory_db_path"):
+                     "experience_db_path", "evolution_report_file", "memory_db_path",
+                     "journal_path"):
             Path(getattr(self, name)).parent.mkdir(parents=True, exist_ok=True)
         Path(self.memory_root).mkdir(parents=True, exist_ok=True)
 

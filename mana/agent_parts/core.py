@@ -37,6 +37,7 @@ from ..llm import LLMClient, LLMCallMeta
 from ..pipeline import PipelineSpec, PipelineFactory, BenchmarkTask, BenchmarkSuite
 from ..experience import ExperienceDB
 from ..verifier import LocalVerifier
+from ..journal import Journal
 from ..memory import MemoryManager
 from ..version import PRODUCT_VERSION, format_version_report
 from ..hardware import detect_hardware, apply_hardware_profile
@@ -115,6 +116,13 @@ class CoreMixin:
         self.stop_policy_stats: Dict[str, Dict[str, Any]] = {}
         self.verifier = LocalVerifier(self.config, self._vlog)
         self.tools = build_default_registry(self)
+        # What a turn actually did, written down. Nothing before this
+        # recorded it: the answer went to memory and the trace of tool
+        # calls went nowhere, which is why a reply that narrated an
+        # action it never performed left no evidence behind. The journal
+        # only records -- it judges nothing and blocks nothing.
+        self.journal = Journal(self.config.journal_path, version=self.VERSION)
+        self.tools.observe(self.journal.note_call)
         self.learned_route_examples: List[Dict[str, Any]] = []
         self.learned_router_model = None
         self.learned_router_trained_n = 0
@@ -582,7 +590,49 @@ class CoreMixin:
             echo, retried=True, retry_helped=True)
         return retried
 
+    @staticmethod
+    def _route_of(result: Dict[str, Any]) -> str:
+        """Which path answered, read off the result rather than guessed.
+
+        The routes fail differently -- `app_intent` builds its reply from
+        a tool outcome, `pipeline` builds it from a model -- so anything
+        reading the journal later has to be able to tell them apart, and
+        deriving it from what came back keeps the four exits of
+        `solve_task` from each having to remember to say.
+        """
+        trace = result.get("trace") or {}
+        if trace.get("clarification_requested"):
+            return "clarification"
+        if result.get("memory_action"):
+            return "memory_write"
+        if trace.get("app_intent"):
+            return "app_intent"
+        return "pipeline"
+
     def solve_task(self, task: str) -> Dict[str, Any]:
+        """One user turn, recorded as it happens.
+
+        The journal wraps rather than being threaded through the four
+        exits below: an episode left open by an early return would
+        collect the next turn's tool calls and attribute them to this
+        one, and a raised exception would do the same. Wrapping is the
+        only version where every way out of this method closes the record.
+
+        Nothing here can fail the turn. `finish` and `abandon` swallow
+        their own errors, because evidence-keeping that can break the
+        thing it observes is not worth keeping.
+        """
+        self.journal.open(task, session=self.session_id)
+        try:
+            result = self._solve_task(task)
+        except Exception:
+            self.journal.abandon()
+            raise
+        self.journal.finish(str(result.get("answer") or ""),
+                            self._route_of(result))
+        return result
+
+    def _solve_task(self, task: str) -> Dict[str, Any]:
         if self.config.clarify_ambiguous_followups:
             ambiguous = self._ambiguous_followup(task)
             if ambiguous:

@@ -113,7 +113,9 @@ def test_the_guard_reads_before_the_turn_is_written():
 
     from mana.agent_parts import core
 
-    source = inspect.getsource(core.CoreMixin.solve_task)
+    # `solve_task` is now a thin journal wrapper; the ordering this test
+    # guards lives in the body it delegates to.
+    source = inspect.getsource(core.CoreMixin._solve_task)
     assert source.index("_previous_exchange") < source.index(
         'self.answer(task, self.pipeline, save_memory=True')
 

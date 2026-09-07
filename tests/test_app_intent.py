@@ -139,7 +139,10 @@ def test_the_intent_is_checked_before_the_model():
 
     from mana.agent_parts import core
 
-    source = inspect.getsource(core.CoreMixin.solve_task)
+    # `solve_task` is now a thin wrapper that opens and closes a journal
+    # episode around the turn; the ordering this test guards lives in the
+    # body it delegates to.
+    source = inspect.getsource(core.CoreMixin._solve_task)
     assert "_perform_app_intent" in source
     assert source.index("_perform_app_intent") < source.index("self.answer(task")
 

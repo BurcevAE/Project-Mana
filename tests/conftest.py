@@ -99,6 +99,7 @@ def isolated_config(tmp_path: Path) -> Config:
         memory_root=str(root / "memory"),
         memory_db_path=str(root / "memory" / "memory.sqlite3"),
         local_exec_workdir=str(root / "exec_sandbox"),
+        journal_path=str(root / "journal" / "episodes.jsonl"),
     )
     cfg.ensure_dirs()
     return cfg

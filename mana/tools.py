@@ -111,6 +111,23 @@ class FunctionTool(BaseTool):
 class ToolRegistry:
     def __init__(self) -> None:
         self._tools: Dict[str, BaseTool] = {}
+        self._observer: Optional[Callable[[str, bool, float, str], None]] = None
+
+    def observe(self, observer: Optional[Callable[[str, bool, float, str], None]]) -> None:
+        """Be told about every dispatch, or pass None to stop.
+
+        `call` is the single point every capability invocation goes
+        through, which makes it the only place a complete record of what
+        a turn actually did can be taken. Nothing before this took one:
+        the answer text was written to memory and the trace of actions
+        was written nowhere, so a reply that narrated an action it never
+        performed left no evidence of the discrepancy behind.
+
+        The observer is advisory. It is called after the tool returns and
+        its exceptions are swallowed, because an accounting hook that can
+        fail a capability call is worse than no accounting at all.
+        """
+        self._observer = observer
 
     def register(self, tool: BaseTool, replace: bool = False) -> None:
         if not replace and tool.name in self._tools:
@@ -135,8 +152,19 @@ class ToolRegistry:
         -handling path."""
         tool = self._tools.get(name)
         if tool is None:
-            return ToolResult(ok=False, error=f"no such tool: '{name}'")
-        return tool(**kwargs)
+            result = ToolResult(ok=False, error=f"no such tool: '{name}'")
+        else:
+            result = tool(**kwargs)
+        # An unknown tool is reported too: "the turn asked for something
+        # that does not exist" is precisely the kind of fact this record
+        # is being kept for.
+        if self._observer is not None:
+            try:
+                self._observer(name, bool(result.ok), float(result.latency),
+                               str(result.error or ""))
+            except Exception:
+                pass
+        return result
 
     def list_tools(self) -> List[Dict[str, Any]]:
         return [{"name": t.name, "description": t.description,
