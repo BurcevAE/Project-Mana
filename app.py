@@ -247,6 +247,10 @@ def main() -> int:
         from mana.cognition.exchange import command_line
         return command_line(argv[1:])
 
+    if argv and argv[0] == "--peer":
+        from mana.net.cli import command_line as peer_command
+        return peer_command(argv[1:])
+
     if argv and argv[0] == "--cli":
         sys.argv = [sys.argv[0]] + argv[1:]
         from mana.cli import main as cli_main
