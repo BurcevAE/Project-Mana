@@ -462,6 +462,38 @@ def _show_series() -> int:
     return 0
 
 
+def _show_next() -> int:
+    """Which condition is worth varying next, per question.
+
+    It ranks axes and delegates the choice to `experiments.select`, the
+    same selector and the same floor everything else is held to. Cost is
+    the caller's fact, so nothing is priced here and every axis comes back
+    unpriced -- visible rather than assumed cheap.
+    """
+    from .cognition import probes, series
+
+    runs = series.all_series()
+    if not runs:
+        print("Реестр находок пуст — предлагать нечего.")
+        return 0
+
+    for run in runs:
+        print(f"вопрос: {run.question}")
+        print(f"наблюдений: {len(run.observations)}")
+        if len(run.observations) < 2:
+            print("  серия из одного наблюдения — оси ещё не сравнивались")
+        for probe in probes.probes(run):
+            print("  " + probe.describe())
+        print()
+
+    print("Цена не задана: чем обходится опыт — факт предметной области, "
+          "и придумывать его здесь значило бы придумывать измерение.")
+    print("Управляемые оси не объявлены, поэтому список включает и "
+          "контекстные условия (версии компонентов). Это ранжирование, "
+          "а не выбор: отсеять их — задача того, кто ставит опыт.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Argument parser, split out of main() so tests can construct it
     without running the agent."""
@@ -519,6 +551,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--propose", nargs="?", const=200, type=int, metavar="N",
                         help="Какие изменения MANA предлагает себе по последним "
                              "N ходам журнала (ничего не применяет)")
+    parser.add_argument("--next", action="store_true", dest="next_probe",
+                        help="Какое условие стоит поварьировать дальше и почему")
     parser.add_argument("--series", action="store_true",
                         help="Как менялся результат по каждому вопросу при "
                              "изменении условий")
@@ -599,6 +633,9 @@ def main() -> int:
 
     if args.propose is not None:
         return _show_proposals(int(args.propose))
+
+    if args.next_probe:
+        return _show_next()
 
     if args.series:
         return _show_series()

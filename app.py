@@ -274,6 +274,10 @@ def main() -> int:
         from mana.net.cli import command_line as peer_command
         return peer_command(argv[1:])
 
+    if argv and argv[0] == "--next":
+        from mana.cli import _show_next
+        return _show_next()
+
     if argv and argv[0] == "--series":
         from mana.cli import _show_series
         return _show_series()
