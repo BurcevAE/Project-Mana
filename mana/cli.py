@@ -494,6 +494,46 @@ def _show_next() -> int:
     return 0
 
 
+def _show_laws() -> int:
+    """The law book: conditional claims and the status the evidence earns.
+
+    Statuses are derived, never set. PROPOSED means one supported
+    experiment and nothing beyond it -- a summary of counts alone would
+    let that read as "almost a law".
+    """
+    from .cognition import lawgiver, series
+    from .cognition.laws import LawBook
+
+    book = lawgiver.load_book()
+    made = []
+    for run in series.all_series():
+        made.extend(lawgiver.propose(run, book))
+    if made:
+        lawgiver.save_book(book)
+
+    if not book.all():
+        print("Законов пока нет.")
+        print("Закон рождается из ИЗОЛИРОВАННОГО переворота в серии: одно "
+              "условие изменилось, класс изменился, метод тот же.")
+        print("Смотреть серии:  MANA.exe --series")
+        return 0
+
+    for law in book.all():
+        print(law.describe())
+        for note in law.exceptions:
+            print(f"    исключение: {note}")
+        if law.history:
+            for step in law.history:
+                print(f"    статус {step['from']} -> {step['to']} "
+                      f"на {step['trials']} испытаниях")
+        print()
+
+    reported = lawgiver.report(book)
+    print(f"по статусам: {reported['by_status']}")
+    print(reported["note"])
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Argument parser, split out of main() so tests can construct it
     without running the agent."""
@@ -551,6 +591,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--propose", nargs="?", const=200, type=int, metavar="N",
                         help="Какие изменения MANA предлагает себе по последним "
                              "N ходам журнала (ничего не применяет)")
+    parser.add_argument("--laws", action="store_true",
+                        help="Законы: условные утверждения и статус, который "
+                             "им дало накопленное свидетельство")
     parser.add_argument("--next", action="store_true", dest="next_probe",
                         help="Какое условие стоит поварьировать дальше и почему")
     parser.add_argument("--series", action="store_true",
@@ -633,6 +676,9 @@ def main() -> int:
 
     if args.propose is not None:
         return _show_proposals(int(args.propose))
+
+    if args.laws:
+        return _show_laws()
 
     if args.next_probe:
         return _show_next()
