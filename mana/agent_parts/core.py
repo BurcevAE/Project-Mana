@@ -458,6 +458,50 @@ class CoreMixin:
             from ..intent import AmbiguousReference
             return AmbiguousReference(False, reason=f"check failed: {exc}")
 
+    def _perform_app_intent(self, task: str) -> Optional[Dict[str, Any]]:
+        """Carry out "запусти X", or return None and let the model answer.
+
+        None is the usual answer. This must stay out of the way of every
+        message that is not an instruction to launch something.
+
+        The reply is built from the tool's OUTCOME, never from the
+        request. That is the whole point: the defect was an answer
+        written from what was asked rather than from what happened, and a
+        refusal passed through honestly ("не найден Notepad++") is worth
+        more than a confident "открываю".
+        """
+        try:
+            from ..apps import intent as app_intent
+            found = app_intent.match(task)
+            if found is None:
+                return None
+            outcome = app_intent.perform(found, self.tools)
+            answer = app_intent.describe(found, outcome)
+        except Exception as exc:
+            self._vlog(f"app intent failed: {exc}")
+            return None
+
+        self._remember_exchange(task, answer)
+        return {
+            "task": task, "answer": answer, "latency": 0.0,
+            "trace": {"app_intent": found.as_dict(),
+                      "performed": outcome["ok"],
+                      "tool_error": outcome["error"]},
+            "pipeline": asdict(self.pipeline), "critic_score": 0.0,
+            "critic_trace": {}, "llm_ok": False, "passes_used": 0,
+            "timeout_count": 0, "fallback": False, "llm_latency": 0.0,
+            "verification_trust": "INDEPENDENTLY_VERIFIED" if outcome["ok"]
+                                  else "UNVERIFIED",
+        }
+
+    def _remember_exchange(self, task: str, answer: str) -> None:
+        """Record a turn the normal answer path did not write."""
+        try:
+            self.persistent_memory.remember_user(self.session_id, task)
+            self.persistent_memory.remember_assistant(self.session_id, answer)
+        except Exception as exc:
+            self._vlog(f"could not record the exchange: {exc}")
+
     def _previous_exchange(self) -> Tuple[str, str]:
         """The question and answer from before this turn."""
         try:
@@ -571,6 +615,19 @@ class CoreMixin:
         # question and answer as "previous" -- the guard then compares the
         # answer with itself, sees identical questions, calls it
         # consistency and passes everything. Which is what it did.
+        # An instruction to launch something is carried out, not
+        # narrated. Measured before this existed: "Открой Notepad++"
+        # answered "Открываю Notepad++." and called no tool at all --
+        # ten application tools were registered and none was reachable,
+        # because the answer pipeline calls a fixed list and never
+        # consults the registry for one that matches the request.
+        #
+        # Checked before the model, so it also works on an installation
+        # with no model -- which is the state a fresh one is in.
+        acted = self._perform_app_intent(task)
+        if acted is not None:
+            return acted
+
         before = self._previous_exchange()
         result = self.answer(task, self.pipeline, save_memory=True, context_tag="USER")
         result = self._reject_echo(task, result, before)

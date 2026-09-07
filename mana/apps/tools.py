@@ -130,9 +130,9 @@ class WriteDocumentTool(_AppTool):
 
 class OpenInEditorTool(_AppTool):
     name = "open_in_editor"
-    description = ("Открыть файл в Notepad++, при желании на нужной строке. "
-                   "Показывает файл человеку; прочитать введённое обратно "
-                   "нельзя.")
+    description = ("Запустить Notepad++, при желании сразу с файлом и на "
+                   "нужной строке. Показывает файл человеку; прочитать "
+                   "введённое обратно нельзя.")
     cost_hint = 0.3
     capability = "editor"
 
@@ -143,7 +143,8 @@ class OpenInEditorTool(_AppTool):
         data = editor.open_file(str(kwargs.get("path", "")),
                                 line=int(kwargs.get("line", 0)),
                                 column=int(kwargs.get("column", 0)),
-                                new_instance=bool(kwargs.get("new_instance", False)))
+                                new_instance=bool(kwargs.get("new_instance", False)),
+                                launch_only=bool(kwargs.get("launch_only", False)))
         return ToolResult(ok=True, output=data)
 
 
