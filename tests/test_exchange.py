@@ -410,3 +410,54 @@ def test_bookkeeping_failure_does_not_take_down_the_run(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cycle.exchange, "record_hypothesis", explode)
     assert cycle._record_hypothesis(_FakeProposal()) == ""
+
+
+# --------------------------------------------------------------- consensus
+
+def test_disagreement_is_the_finding_and_it_is_reported_as_one():
+    """Accepted somewhere, rejected somewhere else.
+
+    The most valuable outcome the bridge can produce: it says the change
+    is CONDITIONAL, and the condition is a fact about environments that no
+    single instance could have seen. `replication` counts votes; this says
+    what the count means, because the interesting category is easy to miss
+    in a table of numbers.
+    """
+    reports = [exchange.Report("h1", "a", "ACCEPTED"),
+               exchange.Report("h1", "b", "REJECTED")]
+    groups = exchange.consensus(reports)
+    assert [e["hypothesis_id"] for e in groups["divergent"]] == ["h1"]
+    assert groups["confirmed"] == []
+
+
+def test_two_agreeing_instances_are_not_yet_agreement():
+    """Two is not a pattern; it is two. Divergence is flagged from two
+    because one contradiction is enough to know a claim is conditional --
+    the asymmetry is deliberate."""
+    reports = [exchange.Report("h1", "a", "ACCEPTED"),
+               exchange.Report("h1", "b", "ACCEPTED")]
+    groups = exchange.consensus(reports)
+    assert groups["confirmed"] == []
+    assert [e["hypothesis_id"] for e in groups["undecided"]] == ["h1"]
+
+
+def test_enough_agreeing_instances_confirm():
+    reports = [exchange.Report("h1", who, "ACCEPTED") for who in "abc"]
+    assert [e["hypothesis_id"] for e in exchange.consensus(reports)["confirmed"]] == ["h1"]
+
+
+def test_a_unanimous_refutation_is_kept_not_discarded():
+    """Worth as much as a confirmation, and the result human research
+    systematically loses: nobody publishes what did not work."""
+    reports = [exchange.Report("h1", who, "REJECTED") for who in "abc"]
+    groups = exchange.consensus(reports)
+    assert [e["hypothesis_id"] for e in groups["refuted"]] == ["h1"]
+
+
+def test_untestable_everywhere_is_undecided_not_refuted():
+    """"Nobody could test it" is not "it does not work", and folding the
+    two together would publish an unmeasured gate as a refutation."""
+    reports = [exchange.Report("h1", who, "NOT_EVALUATED") for who in "abcde"]
+    groups = exchange.consensus(reports)
+    assert [e["hypothesis_id"] for e in groups["undecided"]] == ["h1"]
+    assert groups["refuted"] == []

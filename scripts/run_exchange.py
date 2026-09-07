@@ -64,6 +64,23 @@ def show(queue: exchange.Queue) -> int:
     print()
     print("«без силы» — NOT_EVALUATED: там не хватило наблюдений, чтобы судить.")
     print("Это не несогласие, и делить надо на «судили», а не на «сред».")
+
+    groups = exchange.consensus(reports)
+    print()
+    print("что из этого следует:")
+    for label, key, note in (
+            ("РАСХОЖДЕНИЯ", "divergent",
+             "принято на одних, отклонено на других — изменение условно"),
+            ("подтверждено", "confirmed",
+             f"судили не меньше {exchange.MIN_FOR_CONSENSUS}, все приняли"),
+            ("опровергнуто", "refuted",
+             "все отклонили — результат, который обычно теряют"),
+            ("не решено", "undecided",
+             "рулений слишком мало, чтобы говорить о чём-то")):
+        ids = [e["hypothesis_id"] for e in groups[key]]
+        print(f"  {label:14s} {len(ids):3d}  {note}")
+        for hypothesis_id in ids[:5]:
+            print(f"      {hypothesis_id}")
     return 0
 
 

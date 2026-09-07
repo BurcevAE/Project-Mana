@@ -370,6 +370,50 @@ def replication(reports: Sequence[Report]) -> Dict[str, Dict[str, Any]]:
     return summary
 
 
+#: How many ruling instances it takes before agreement is worth calling
+#: agreement. Two is not a pattern; it is two.
+MIN_FOR_CONSENSUS = 3
+
+
+def consensus(reports: Sequence[Report]) -> Dict[str, List[Dict[str, Any]]]:
+    """Sort hypotheses into what the federation actually learned.
+
+    `replication` counts votes. This says what the counts mean, and it
+    exists because the interesting category is easy to miss in a table:
+
+      divergent  -- accepted somewhere and rejected somewhere else. The
+                    most valuable outcome there is. It says the change is
+                    conditional, and the condition is a fact about
+                    environments that no single instance could have seen.
+      confirmed  -- ruled by enough instances, all accepting.
+      refuted    -- ruled by enough instances, all rejecting. Worth as
+                    much as `confirmed` and normally thrown away: this is
+                    the result human research systematically loses.
+      undecided  -- too few rulings to say anything, usually because
+                    NOT_EVALUATED dominates. Reported rather than folded
+                    into `refuted`, because "nobody could test it" is not
+                    "it does not work".
+
+    Divergence is flagged from two instances, while agreement needs three.
+    That asymmetry is deliberate: one contradiction is enough to know a
+    claim is conditional, whereas two instances agreeing is a coincidence
+    with a small sample.
+    """
+    out: Dict[str, List[Dict[str, Any]]] = {
+        "divergent": [], "confirmed": [], "refuted": [], "undecided": []}
+    for hypothesis_id, row in sorted(replication(reports).items()):
+        entry = dict(row, hypothesis_id=hypothesis_id)
+        if row["accepted"] and row["rejected"]:
+            out["divergent"].append(entry)
+        elif row["ruled"] < MIN_FOR_CONSENSUS:
+            out["undecided"].append(entry)
+        elif row["rejected"] == 0:
+            out["confirmed"].append(entry)
+        else:
+            out["refuted"].append(entry)
+    return out
+
+
 # ------------------------------------------------------- back into the local
 
 
