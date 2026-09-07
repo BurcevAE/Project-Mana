@@ -258,27 +258,74 @@ def dry_report(policy: Policy, situations: Sequence[Situation]) -> Dict[str, Any
     }
 
 
+def question_for(invariant: str) -> str:
+    """How a candidate's aim is phrased in the findings ledger.
+
+    Stable wording, because the ledger keys on it. Rephrasing this later
+    would make every past result invisible, which is exactly the failure
+    the ledger exists to prevent.
+    """
+    return f"Какая настройка политики устраняет «{invariant}»?"
+
+
+def prior_for(candidate: Candidate, ledger: Any = None) -> Optional[Dict[str, Any]]:
+    """What is already known about trying exactly this.
+
+    Consulted before proposing again. Without it the ledger is a diary:
+    it would hold "widening the verb list did not help" while the
+    generator proposed widening the verb list next week.
+    """
+    from .findings import Ledger
+
+    ledger = ledger if ledger is not None else Ledger()
+    try:
+        return ledger.already_tried(question_for(candidate.addresses),
+                                    candidate.policy.changes(),
+                                    {"observed_failures": candidate.observed})
+    except Exception:
+        return None
+
+
 def rank(violations: Sequence[Violation], situations: Sequence[Situation],
-         current: Optional[Policy] = None) -> List[Dict[str, Any]]:
-    """Every candidate, with what a dry run says about it, best first.
+         current: Optional[Policy] = None,
+         ledger: Any = None) -> List[Dict[str, Any]]:
+    """Every candidate, with what is already known and what a dry run
+    says, best first.
 
     Ordering is a suggestion of what to measure properly, not a verdict.
     Nothing here adopts anything: acceptance belongs to `core/gates.py`,
     on evidence, exactly as for a cognitive program -- a generator that
     could adopt its own output would be a second way to change the system.
+
+    A candidate already measured and rejected under conditions that still
+    hold sinks to the bottom rather than disappearing. Hiding it would
+    make the generator silently unable to revisit a result, and the whole
+    point of recording conditions is that a finding is a prior rather
+    than a prohibition.
     """
     out: List[Dict[str, Any]] = []
     for candidate in propose(violations, current):
         row = candidate.as_dict()
         row["dry"] = dry_report(candidate.policy, situations)
+        prior = prior_for(candidate, ledger)
+        if prior is not None:
+            row["already_tried"] = {
+                "verdict": prior["finding"]["verdict"],
+                "when": prior["finding"]["created"],
+                "measurement": prior["finding"]["measurement"],
+                "conditions_moved": prior["staleness"]["stale"],
+                "changed": prior["staleness"]["changed"]}
         out.append(row)
 
-    def key(row: Dict[str, Any]) -> Tuple[float, float, int]:
+    def key(row: Dict[str, Any]) -> Tuple[int, float, float, int]:
+        prior = row.get("already_tried") or {}
+        settled = (prior.get("verdict") == "REJECTED"
+                   and not prior.get("conditions_moved"))
         dry = row.get("dry") or {}
         if not dry.get("dry_evaluable"):
-            return (0.0, 0.0, 0)
+            return (0 if settled else 1, 0.0, 0.0, 0)
         gain = dry["candidate_pass_rate"] - dry["baseline_pass_rate"]
         broke = -float((dry.get("counterexamples") or {}).get("found", 0))
-        return (gain, broke, -len(row["changes"]))
+        return (0 if settled else 1, gain, broke, -len(row["changes"]))
 
     return sorted(out, key=key, reverse=True)

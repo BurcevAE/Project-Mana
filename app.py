@@ -274,6 +274,10 @@ def main() -> int:
         from mana.net.cli import command_line as peer_command
         return peer_command(argv[1:])
 
+    if argv and argv[0] == "--tried":
+        from mana.cli import _show_tried
+        return _show_tried()
+
     if argv and argv[0] == "--practice":
         from mana.cli import _practice
         count = 0

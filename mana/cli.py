@@ -397,6 +397,40 @@ def _practice(games: int) -> int:
     return 0
 
 
+def _show_tried() -> int:
+    """Print the findings ledger: what was tried and what came of it.
+
+    A negative result is the valuable one. "We tried this and it did not
+    work" saves more time than the positive case, which is usually
+    already visible in the behaviour, and it is invisible by construction
+    unless somebody writes it down.
+    """
+    from .cognition.findings import Ledger
+
+    ledger = Ledger()
+    stats = ledger.stats()
+    if not stats["exists"]:
+        print(f"Реестра находок ещё нет: {stats['path']}")
+        print("Он заполняется, когда эксперимент доходит до вердикта.")
+        return 0
+
+    print(f"{stats['path']}")
+    print(f"экспериментов: {stats['experiments']}   записей: {stats['records']}")
+    print(f"по вердиктам:  {stats['by_verdict']}")
+    print()
+    for finding in ledger.latest():
+        print(finding.describe())
+        moved = ", ".join(f"{k}={v}" for k, v in sorted(finding.conditions.items()))
+        if moved:
+            print(f"  условия: {moved}")
+        if finding.note:
+            print(f"  замечание: {finding.note[:400]}")
+        print()
+    print("Находка — это основание ожидать исхода, а не запрет проверять "
+          "снова: если условия сдвинулись, эксперимент имеет смысл повторить.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Argument parser, split out of main() so tests can construct it
     without running the agent."""
@@ -454,6 +488,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--propose", nargs="?", const=200, type=int, metavar="N",
                         help="Какие изменения MANA предлагает себе по последним "
                              "N ходам журнала (ничего не применяет)")
+    parser.add_argument("--tried", action="store_true",
+                        help="Что уже проверяли и чем это кончилось "
+                             "(чтобы не повторять эксперимент заново)")
     parser.add_argument("--practice", nargs="?", const=0, type=int, metavar="N",
                         help="Сыграть N партий на проверенном движке и добавить "
                              "их в корпус; без числа — показать накопленное")
@@ -528,6 +565,9 @@ def main() -> int:
 
     if args.propose is not None:
         return _show_proposals(int(args.propose))
+
+    if args.tried:
+        return _show_tried()
 
     if args.practice is not None:
         return _practice(int(args.practice))
