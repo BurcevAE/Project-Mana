@@ -612,3 +612,89 @@ def test_probe_never_raises_on_a_dead_endpoint():
     assert result["reachable"] is False
     assert result["models"] == []
     assert result["error"]
+
+
+# --------------------------------------------------------------------------
+# What text a brain is handed
+# --------------------------------------------------------------------------
+#
+# The bug these exist for: `pool.ask` passed the composed agent prompt to
+# every brain, including the exact ones. The arithmetic brain received
+# 4862 characters of system preamble, tool list and recalled memory,
+# found the bullet-list line `- 4821 * 37 + 145` left over from an
+# EARLIER question, read the list dash as a unary minus, and answered
+# -178232 to "Привет, Мана". A confident wrong number on a greeting, from
+# the brain whose entire purpose is being exact.
+#
+# Which memory happened to be recalled decided whether it answered or
+# refused, so the same question behaved differently on two machines.
+
+
+def _seen(pool):
+    """Record the text each brain is actually given."""
+    seen = {}
+    original = pool.ask_brain
+
+    def spy(brain_id, prompt, **kw):
+        seen[brain_id] = prompt
+        return original(brain_id, prompt, **kw)
+
+    pool.ask_brain = spy
+    return seen
+
+
+def test_algorithmic_brain_gets_the_question_not_the_prompt(isolated_config):
+    pool = make_pool(isolated_config, [
+        BrainSpec(brain_id="arithmetic", provider="algorithmic", model="ast-eval",
+                  substrate="algorithmic", strengths=("math",)),
+    ])
+    seen = _seen(pool)
+    pool.ask("СИСТЕМА: ты агент. Сегодня 2026-09-04.\n- 4821 * 37 + 145\n\nВопрос: Привет",
+             task="Привет", kind="general")
+    assert seen.get("arithmetic") == "Привет"
+
+
+def test_language_model_still_gets_the_whole_prompt(isolated_config):
+    """The context is what makes a model's answer good; only the exact
+    mechanisms are hurt by it."""
+    prompt = "СИСТЕМА: ты агент.\n\nВопрос: Привет"
+    pool = make_pool(isolated_config, [
+        BrainSpec(brain_id="ollama", provider="ollama", model="qwen2.5:7b",
+                  substrate="local_llm", base_url="http://localhost:11434"),
+    ])
+    seen = _seen(pool)
+    pool.ask(prompt, task="Привет", kind="general")
+    assert seen.get("ollama") == prompt
+
+
+def test_nothing_changes_when_no_separate_task_was_supplied(isolated_config):
+    """llm.py passes `task=task or prompt`, so most call sites make the two
+    identical. Those must behave exactly as before."""
+    prompt = "Вычисли: 91 * 17"
+    pool = make_pool(isolated_config, [
+        BrainSpec(brain_id="arithmetic", provider="algorithmic", model="ast-eval",
+                  substrate="algorithmic", strengths=("math",)),
+    ])
+    seen = _seen(pool)
+    pool.ask(prompt, task=prompt, kind="math")
+    assert seen.get("arithmetic") == prompt
+
+
+def test_the_greeting_that_used_to_be_answered_with_a_number(isolated_config):
+    """End to end on the real solver, with the real leftover expression.
+
+    Before the fix this returned -178232. It must now refuse: "Привет" is
+    not arithmetic, and a mechanism that answers exactly has nothing to
+    say about it.
+    """
+    from mana import substrates
+    prompt = ("Ты — когнитивный агент MANA.\n"
+              "Сегодняшняя дата: 2026-09-04.\n"
+              "Из памяти:\n- 4821 * 37 + 145\n\n"
+              "Вопрос пользователя: Привет, Мана")
+    # The whole prompt: this is what the brain used to get.
+    with pytest.raises(Exception):
+        substrates.call("arithmetic", "Привет, Мана")
+    # And the demonstration that the prompt was the problem, not the brain.
+    assert str(substrates.call("arithmetic", "Вычисли: 91 * 17")) == "1547"
+    assert "4821" in prompt        # the leftover really is in there

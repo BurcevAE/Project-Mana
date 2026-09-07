@@ -309,12 +309,75 @@ def test_the_full_holdout_covers_every_domain_and_rewords_them(isolated_config):
 
 def test_a_hidden_result_carries_which_holdout_produced_it(isolated_config):
     """A hidden score without its version is a number whose meaning
-    depends on when it was taken."""
+    depends on when it was taken -- and, since the salt, on where."""
     from mana.core import splits
     result = splits.hidden_score(lambda public: "0", per_domain=1,
                                  label="test-version", holdout=splits.HOLDOUT_V1)
-    assert result.holdout == "v1"
-    assert result.as_dict()["holdout"] == "v1"
+    assert result.holdout.startswith("v1+")
+    assert result.as_dict()["holdout"] == result.holdout
+
+
+def test_the_historical_holdout_is_not_salted(isolated_config):
+    """V0 must keep meaning what it meant.
+
+    Every hidden score recorded before phase 18 was measured against
+    exactly these tasks. Re-drawing them per installation would change,
+    retroactively and silently, what all of those numbers referred to --
+    and being frozen is the one thing V0 exists for.
+    """
+    from mana.core import splits
+    assert splits.HOLDOUT_V0.salted is False
+    assert splits.HOLDOUT_V0.identity == "v0"
+    assert splits.HOLDOUT_V0.effective_seed() == splits.HOLDOUT_V0.seed
+
+
+def test_two_installations_draw_different_hidden_tasks(monkeypatch):
+    """The reason the salt exists.
+
+    A fixed seed gives every copy of MANA the same hidden set. That is
+    harmless while there is one copy and a leak channel the moment two of
+    them exchange anything: one instance publishing something fitted to
+    the set invalidates everyone's gates at once, silently.
+    """
+    from mana.core import identity, splits
+
+    seeds, identities = [], []
+    for who in ("instance-a", "instance-b"):
+        monkeypatch.setenv(identity.INSTANCE_ENV, who)
+        identity.reset_cache()
+        seeds.append(splits.HOLDOUT_V1.effective_seed())
+        identities.append(splits.HOLDOUT_V1.identity)
+
+    assert seeds[0] != seeds[1]
+    assert identities[0] != identities[1]
+    # And both still say which holdout they are, so a reader can tell a
+    # different instance from a different version.
+    assert all(i.startswith("v1+") for i in identities)
+
+
+def test_one_installation_draws_the_same_tasks_every_run(monkeypatch):
+    """Otherwise scores taken today could not be compared with yesterday's,
+    which would cost more than the salt buys."""
+    from mana.core import identity, splits
+
+    monkeypatch.setenv(identity.INSTANCE_ENV, "stable-instance")
+    identity.reset_cache()
+    first = splits.HOLDOUT_V1.effective_seed()
+    identity.reset_cache()
+    assert splits.HOLDOUT_V1.effective_seed() == first
+
+
+def test_the_shared_fingerprint_does_not_carry_the_id(monkeypatch):
+    """It travels with every shared record, so it must say "a different
+    instance" and nothing whatsoever about whose machine that is."""
+    from mana.core import identity
+
+    secret = "workstation-of-a-named-company"
+    digest = identity.fingerprint(secret)
+    assert secret not in digest
+    assert len(digest) == 8
+    assert digest == identity.fingerprint(secret)      # stable
+    assert digest != identity.fingerprint(secret + "x")
 
 
 def test_a_variant_asks_the_same_question_with_different_words(isolated_config):
@@ -406,3 +469,60 @@ def test_per_domain_counts_are_allowed_to_differ(isolated_config):
                                  label="test-per-domain", holdout=splits.HOLDOUT_V1)
     assert "code" not in result.by_domain
     assert result.attempted >= 4
+
+
+def test_the_holdout_salt_cannot_be_derived_from_the_public_key(monkeypatch):
+    """The trap this nearly fell into.
+
+    The salt exists so another installation cannot fit anything to this
+    one's hidden set. Deriving it from the public key -- which travels in
+    every shared bundle -- would let anybody regenerate that set and undo
+    the salt completely. It derives from the private key instead.
+    """
+    from mana.core import identity, splits
+
+    monkeypatch.setenv(identity.INSTANCE_ENV, "keyed-instance")
+    identity.reset_cache()
+
+    real = splits.HOLDOUT_V1.effective_seed()
+    from_public = identity.salted_seed(splits.HOLDOUT_V1.seed,
+                                       identity.public_key().hex())
+    assert from_public != real
+
+
+def test_an_installation_signs_and_the_signature_checks(monkeypatch):
+    from mana.core import identity
+
+    monkeypatch.setenv(identity.INSTANCE_ENV, "signer")
+    identity.reset_cache()
+    record = {"claim": "operators compose", "trials": 40}
+    key, signature = identity.signed(record)
+    assert identity.signature_holds(record, key, signature)
+    assert not identity.signature_holds(dict(record, trials=41), key, signature)
+    assert not identity.signature_holds(record, "00" * 32, signature)
+
+
+def test_the_fingerprint_is_the_public_key_not_the_secret(monkeypatch):
+    """It travels with every shared record, so it must reveal nothing --
+    and it must be checkable by whoever receives it."""
+    from mana.core import identity
+
+    monkeypatch.setenv(identity.INSTANCE_ENV, "рабочая-станция-ООО-Ромашка")
+    identity.reset_cache()
+    digest = identity.fingerprint()
+    assert len(digest) == 8
+    assert "Ромашка" not in digest
+    # Anyone holding the public key computes the same fingerprint.
+    assert identity.fingerprint(identity.public_key()) == digest
+    assert identity.fingerprint(identity.public_key().hex()) == digest
+
+
+def test_two_installations_get_different_keys(monkeypatch):
+    from mana.core import identity
+
+    keys = []
+    for who in ("alpha", "beta"):
+        monkeypatch.setenv(identity.INSTANCE_ENV, who)
+        identity.reset_cache()
+        keys.append(identity.public_key())
+    assert keys[0] != keys[1]

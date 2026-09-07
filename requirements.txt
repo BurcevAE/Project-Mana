@@ -12,3 +12,17 @@ psutil
 requests
 # ddgs: web search backend. Without it, web_search is permanently unavailable.
 ddgs
+
+# --- Работа с установленными программами (mana/apps) ---
+# python-docx / openpyxl: чтение и запись .docx и .xlsx БЕЗ установленного
+#   Office. Без них соответствующие инструменты отказывают, называя причину.
+python-docx
+openpyxl
+# pywin32: COM. Без него нет доступа к 1С:Предприятие и к любому
+#   COM-приложению. Только Windows.
+pywin32
+
+# --- Личность установки (mana/core/identity.py) ---
+# cryptography: пара ключей Ed25519. Экземпляр подписывает свои отчёты и
+#   проверяет чужие; без этого обмен между установками бессмыслен.
+cryptography

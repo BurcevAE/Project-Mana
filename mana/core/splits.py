@@ -80,10 +80,50 @@ class Holdout:
     domains: Tuple[str, ...]
     seed: int
     surface: str
+    #: Whether this set is drawn differently on every installation.
+    #:
+    #: A fixed seed means every copy of MANA generates the SAME hidden
+    #: tasks. With one copy that is harmless; the moment two instances
+    #: exchange anything it is a leak channel, because one instance
+    #: publishing something fitted to the set invalidates everybody's
+    #: gates at once and silently. Salting makes each instance's set its
+    #: own, so a leak stops being contagious -- and so that two instances
+    #: agreeing is replication rather than an artefact of them having
+    #: drawn identical tasks.
+    #:
+    #: V0 is NOT salted, and that is deliberate: it is the frozen
+    #: historical baseline, every score recorded against it was measured
+    #: on exactly these tasks, and re-drawing them would retroactively
+    #: change what those numbers meant. Freezing it is the one thing it
+    #: exists for.
+    salted: bool = False
+
+    def effective_seed(self) -> int:
+        """The seed actually used to draw the tasks."""
+        if not self.salted:
+            return self.seed
+        from .identity import salted_seed
+        return salted_seed(self.seed)
+
+    @property
+    def identity(self) -> str:
+        """What a recorded score should name as its source.
+
+        A salted set carries the installation's fingerprint, so "v1 here"
+        and "v1 there" are visibly different strings. Anything comparing
+        two scores across instances then fails to match instead of
+        quietly comparing numbers taken on different tasks -- which is
+        the whole point of salting.
+        """
+        if not self.salted:
+            return self.name
+        from .identity import fingerprint
+        return f"{self.name}+{fingerprint()}"
 
     def as_dict(self) -> Dict[str, Any]:
-        return {"name": self.name, "domains": list(self.domains),
-                "surface": self.surface}
+        return {"name": self.name, "identity": self.identity,
+                "domains": list(self.domains), "surface": self.surface,
+                "salted": self.salted}
 
 
 #: The historical holdout. Frozen: every hidden score recorded before
@@ -99,7 +139,7 @@ HOLDOUT_V0 = Holdout("v0", DEVELOPMENT_DOMAINS, 3003, "canonical")
 #: nothing. Measured: of four solvers, three scored zero once the wording
 #: changed, and the fourth was unaffected because it parses structure.
 HOLDOUT_V1 = Holdout("v1", ("arithmetic", "sequence", "code", "logic", "text_ops"),
-                     5005, "variant")
+                     5005, "variant", salted=True)
 
 HOLDOUTS = {"v0": HOLDOUT_V0, "v1": HOLDOUT_V1}
 
@@ -250,10 +290,14 @@ def hidden_score(answer_fn: Callable[[Dict[str, Any]], str], *, verifier: Any = 
         count = (per_domain_counts or {}).get(domain, per_domain)
         if count <= 0:
             continue
-        tasks.extend(generate(domain, count, holdout.seed, surface=holdout.surface))
+        tasks.extend(generate(domain, count, holdout.effective_seed(),
+                              surface=holdout.surface))
     result = _run_hidden(tasks, answer_fn, verifier,
                          label or f"hidden-{holdout.name}", budget)
-    return replace(result, holdout=holdout.name)
+    # The identity, not the bare name: a score whose source cannot be
+    # told apart from another installation's is a score that can be
+    # compared with tasks it was never measured on.
+    return replace(result, holdout=holdout.identity)
 
 
 def transfer_score(answer_fn: Callable[[Dict[str, Any]], str], *, verifier: Any = None,

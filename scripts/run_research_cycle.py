@@ -54,6 +54,9 @@ def main() -> int:
     parser.add_argument("--budget", type=int, default=300)
     parser.add_argument("--steps", type=int, default=6)
     parser.add_argument("--out", default="mana_research_cycle.json")
+    parser.add_argument("--exchange", default="",
+                        help="файл очереди обмена; без него гипотезы никуда "
+                             "не записываются и делиться нечем")
     args = parser.parse_args()
 
     pool = BrainPool(Config())
@@ -66,7 +69,8 @@ def main() -> int:
     model = SelfModel()
     texts: dict = {}
     cycle = ResearchCycle(model, task_texts=texts,
-                          budget_calls=args.budget, max_steps=args.steps)
+                          budget_calls=args.budget, max_steps=args.steps,
+                          exchange_path=args.exchange or None)
 
     started = time.perf_counter()
     report = cycle.run(make_runner(pool, texts))
@@ -121,6 +125,13 @@ def main() -> int:
 
     Path(args.out).write_text(json.dumps(report, ensure_ascii=False, indent=2),
                               encoding="utf-8")
+    if cycle.exchange is not None:
+        stats = cycle.exchange.stats()
+        print(f"\nочередь обмена: {cycle.exchange.path}")
+        print(f"  гипотез {stats['hypotheses']} "
+              f"(передаваемых {stats['shareable']}), отчётов {stats['reports']}")
+        print("  выгрузить: python scripts/run_exchange.py --export пакет.json")
+
     print(f"\nотчёт: {args.out}")
     return 0
 
