@@ -431,6 +431,37 @@ def _show_tried() -> int:
     return 0
 
 
+def _show_series() -> int:
+    """Print each question's run of findings and where the class changed.
+
+    It reports differences between recorded rows and explains nothing. A
+    reader that said "increasing the corpus improves the result" would be
+    making a causal claim from two points and putting it into the record
+    with the authority of an observation.
+    """
+    from .cognition import series
+
+    runs = series.all_series()
+    if not runs:
+        print("Реестр находок пуст — серий нет.")
+        print("Он заполняется, когда эксперимент доходит до вердикта.")
+        return 0
+
+    for run in runs:
+        print(run.describe())
+        summary = run.summary()
+        if summary["confounded_flips"]:
+            print(f"  переворотов с несколькими изменёнными условиями: "
+                  f"{summary['confounded_flips']} — приписать перемену "
+                  f"одному условию нельзя")
+        if summary["unusable"]:
+            print(f"  пар, которые нельзя сравнить: {summary['unusable']}")
+        print()
+    print("Серия показывает, ГДЕ класс изменился и ЧТО при этом отличалось. "
+          "Почему — она не говорит.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Argument parser, split out of main() so tests can construct it
     without running the agent."""
@@ -488,6 +519,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--propose", nargs="?", const=200, type=int, metavar="N",
                         help="Какие изменения MANA предлагает себе по последним "
                              "N ходам журнала (ничего не применяет)")
+    parser.add_argument("--series", action="store_true",
+                        help="Как менялся результат по каждому вопросу при "
+                             "изменении условий")
     parser.add_argument("--tried", action="store_true",
                         help="Что уже проверяли и чем это кончилось "
                              "(чтобы не повторять эксперимент заново)")
@@ -565,6 +599,9 @@ def main() -> int:
 
     if args.propose is not None:
         return _show_proposals(int(args.propose))
+
+    if args.series:
+        return _show_series()
 
     if args.tried:
         return _show_tried()
