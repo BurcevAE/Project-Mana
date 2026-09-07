@@ -461,3 +461,103 @@ def test_untestable_everywhere_is_undecided_not_refuted():
     groups = exchange.consensus(reports)
     assert [e["hypothesis_id"] for e in groups["undecided"]] == ["h1"]
     assert groups["refuted"] == []
+
+
+# ------------------------------------------------------------------ signing
+
+@pytest.fixture
+def signer(monkeypatch):
+    from mana.core import identity
+    monkeypatch.setenv(identity.INSTANCE_ENV, "test-signer")
+    identity.reset_cache()
+    return identity
+
+
+def test_a_report_is_signed_and_verifies(signer):
+    report = exchange.Report("h1", signer.fingerprint(), "ACCEPTED",
+                             trials=40).sign()
+    assert report.signed_by_someone
+    assert report.verified
+
+
+def test_changing_any_field_breaks_the_signature(signer):
+    from dataclasses import replace
+    report = exchange.Report("h1", signer.fingerprint(), "ACCEPTED",
+                             trials=40).sign()
+    assert not replace(report, verdict="REJECTED").verified
+    assert not replace(report, trials=999).verified
+    assert not replace(report, hypothesis_id="h2").verified
+
+
+def test_claiming_someone_elses_fingerprint_fails(signer):
+    """Both halves are checked. Verifying only the signature would let
+    somebody sign with their own key while claiming another instance's
+    fingerprint -- which is the impersonation signing exists to stop."""
+    from dataclasses import replace
+    report = exchange.Report("h1", signer.fingerprint(), "ACCEPTED").sign()
+    assert not replace(report, instance="deadbeef").verified
+
+
+def test_a_tampered_report_is_refused_on_import(tmp_path, signer):
+    path = tmp_path / "b.json"
+    exchange.export_bundle(path, [], [exchange.Report(
+        "h1", signer.fingerprint(), "ACCEPTED", trials=40).sign()])
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw["reports"][0]["verdict"] = "REJECTED"
+    path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+
+    result = exchange.import_bundle(path)
+    assert result.reports == []
+    assert "подпись не сходится" in result.refused[0]["reason"]
+
+
+def test_an_unsigned_report_is_kept_but_not_verified(tmp_path):
+    """Absent is not the same as wrong. A record from an older version is
+    merely unverified; discarding it would lose history to a format
+    change."""
+    path = tmp_path / "b.json"
+    path.write_text(json.dumps({
+        "format": exchange.FORMAT, "format_version": exchange.FORMAT_VERSION,
+        "hypotheses": [],
+        "reports": [{"hypothesis_id": "h1", "instance": "old", "verdict": "ACCEPTED"}],
+    }, ensure_ascii=False), encoding="utf-8")
+    result = exchange.import_bundle(path)
+    assert len(result.reports) == 1
+    assert result.reports[0].verified is False
+
+
+def test_replication_can_be_asked_to_count_only_verified(signer):
+    """The Sybil count this closes: before signing, `instance` was a
+    self-declared string, so one installation could invent twelve of them
+    and manufacture "confirmed on twelve"."""
+    real = exchange.Report("h1", signer.fingerprint(), "ACCEPTED").sign()
+    invented = [exchange.Report("h1", f"fake{i:04d}", "ACCEPTED")
+                for i in range(11)]
+    everything = [real] + invented
+
+    assert exchange.replication(everything)["h1"]["instances"] == 12
+    verified = exchange.replication(everything, verified_only=True)
+    assert verified["h1"]["instances"] == 1
+
+
+def test_signing_does_not_stop_sybil_and_the_docstring_says_so():
+    """Recorded because overstating it would be worse than not having it.
+
+    Signatures stop impersonation. One person can still generate twelve
+    key pairs; what limits that here is deciding whose keys count, not
+    cryptography.
+    """
+    import inspect
+    source = inspect.getsource(exchange.Report)
+    assert "Sybil" in source
+    assert "does NOT" in source or "not stop" in source
+
+
+def test_the_queue_signs_what_it_records(tmp_path, signer):
+    queue = exchange.Queue(tmp_path / "q.json")
+    record = queue.record_hypothesis(
+        "create_program_template", {"name": "t", "steps": ["OBSERVE", "ANSWER"]})
+    queue.record_report(record["hypothesis_id"], "ACCEPTED", trials=30)
+    stored = queue.reports()
+    assert len(stored) == 1
+    assert stored[0].verified is True

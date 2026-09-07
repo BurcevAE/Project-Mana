@@ -469,3 +469,60 @@ def test_per_domain_counts_are_allowed_to_differ(isolated_config):
                                  label="test-per-domain", holdout=splits.HOLDOUT_V1)
     assert "code" not in result.by_domain
     assert result.attempted >= 4
+
+
+def test_the_holdout_salt_cannot_be_derived_from_the_public_key(monkeypatch):
+    """The trap this nearly fell into.
+
+    The salt exists so another installation cannot fit anything to this
+    one's hidden set. Deriving it from the public key -- which travels in
+    every shared bundle -- would let anybody regenerate that set and undo
+    the salt completely. It derives from the private key instead.
+    """
+    from mana.core import identity, splits
+
+    monkeypatch.setenv(identity.INSTANCE_ENV, "keyed-instance")
+    identity.reset_cache()
+
+    real = splits.HOLDOUT_V1.effective_seed()
+    from_public = identity.salted_seed(splits.HOLDOUT_V1.seed,
+                                       identity.public_key().hex())
+    assert from_public != real
+
+
+def test_an_installation_signs_and_the_signature_checks(monkeypatch):
+    from mana.core import identity
+
+    monkeypatch.setenv(identity.INSTANCE_ENV, "signer")
+    identity.reset_cache()
+    record = {"claim": "operators compose", "trials": 40}
+    key, signature = identity.signed(record)
+    assert identity.signature_holds(record, key, signature)
+    assert not identity.signature_holds(dict(record, trials=41), key, signature)
+    assert not identity.signature_holds(record, "00" * 32, signature)
+
+
+def test_the_fingerprint_is_the_public_key_not_the_secret(monkeypatch):
+    """It travels with every shared record, so it must reveal nothing --
+    and it must be checkable by whoever receives it."""
+    from mana.core import identity
+
+    monkeypatch.setenv(identity.INSTANCE_ENV, "рабочая-станция-ООО-Ромашка")
+    identity.reset_cache()
+    digest = identity.fingerprint()
+    assert len(digest) == 8
+    assert "Ромашка" not in digest
+    # Anyone holding the public key computes the same fingerprint.
+    assert identity.fingerprint(identity.public_key()) == digest
+    assert identity.fingerprint(identity.public_key().hex()) == digest
+
+
+def test_two_installations_get_different_keys(monkeypatch):
+    from mana.core import identity
+
+    keys = []
+    for who in ("alpha", "beta"):
+        monkeypatch.setenv(identity.INSTANCE_ENV, who)
+        identity.reset_cache()
+        keys.append(identity.public_key())
+    assert keys[0] != keys[1]

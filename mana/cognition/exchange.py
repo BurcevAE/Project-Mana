@@ -58,7 +58,7 @@ import hashlib
 import json
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -203,17 +203,63 @@ class Report:
     #: reader can see this was a DIFFERENT hidden set from their own.
     holdout: str = ""
     created: float = field(default_factory=time.time)
+    #: Ed25519 public key and signature over `payload()`.
+    #:
+    #: `instance` used to be a self-declared string, so one installation
+    #: could invent twelve fingerprints and manufacture "confirmed on
+    #: twelve instances" -- a Sybil attack on the replication count, which
+    #: was the one real hole the federation had. A signed report provably
+    #: comes from whoever it names.
+    #:
+    #: What this does NOT stop is one person generating twelve key pairs.
+    #: Cryptocurrencies answer that with proof of work, which is expensive
+    #: because they must agree among parties who cannot check a claim.
+    #: MANA checks locally, so it never needs agreement -- what limits
+    #: Sybil here is deciding whose keys count, the way known_hosts does.
+    public_key: str = ""
+    signature: str = ""
 
     def __post_init__(self) -> None:
         if self.verdict not in VERDICTS:
             raise ExchangeError(f"неизвестный вердикт {self.verdict!r}")
 
-    def as_dict(self) -> Dict[str, Any]:
+    def payload(self) -> Dict[str, Any]:
+        """Exactly what the signature covers: the claim, without itself."""
         return {"hypothesis_id": self.hypothesis_id, "instance": self.instance,
                 "verdict": self.verdict, "trials": self.trials,
                 "discordant": self.discordant, "p_value": self.p_value,
                 "margin": self.margin, "holdout": self.holdout,
                 "created": self.created}
+
+    def sign(self) -> "Report":
+        """A copy signed with this installation's key."""
+        from ..core.identity import signed
+        key, signature = signed(self.payload())
+        return replace(self, public_key=key, signature=signature)
+
+    @property
+    def signed_by_someone(self) -> bool:
+        return bool(self.public_key and self.signature)
+
+    @property
+    def verified(self) -> bool:
+        """Signature valid AND the fingerprint really is that key's.
+
+        Both halves are required. Checking only the signature would let
+        somebody sign with their own key while claiming another
+        instance's fingerprint, which is the impersonation this exists to
+        stop.
+        """
+        if not self.signed_by_someone:
+            return False
+        from ..core.identity import fingerprint, signature_holds
+        if self.instance and self.instance != fingerprint(self.public_key):
+            return False
+        return signature_holds(self.payload(), self.public_key, self.signature)
+
+    def as_dict(self) -> Dict[str, Any]:
+        return dict(self.payload(), public_key=self.public_key,
+                    signature=self.signature)
 
 
 # ------------------------------------------------------------------ bundles
@@ -310,7 +356,7 @@ def import_bundle(path: Any, known: Iterable[str] = ()) -> ImportResult:
 
     for record in raw.get("reports") or []:
         try:
-            result.reports.append(Report(
+            report = Report(
                 hypothesis_id=str(record.get("hypothesis_id", "")),
                 instance=str(record.get("instance", "")),
                 verdict=str(record.get("verdict", "")),
@@ -319,9 +365,23 @@ def import_bundle(path: Any, known: Iterable[str] = ()) -> ImportResult:
                 p_value=float(record.get("p_value", 1.0)),
                 margin=float(record.get("margin", 0.0)),
                 holdout=str(record.get("holdout", "")),
-                created=float(record.get("created", time.time()))))
+                created=float(record.get("created", time.time())),
+                public_key=str(record.get("public_key", "")),
+                signature=str(record.get("signature", "")))
         except (ExchangeError, TypeError, ValueError) as exc:
             result.refused.append({"kind": "report", "reason": str(exc)})
+            continue
+        # A signature that is present and wrong means the record was
+        # altered, or someone signed a claim they are not entitled to.
+        # Either way it is refused; an ABSENT signature is merely old,
+        # and is kept unverified rather than thrown away.
+        if report.signed_by_someone and not report.verified:
+            result.refused.append(
+                {"kind": "report",
+                 "reason": f"подпись не сходится для {report.instance or '?'}: "
+                           f"запись изменена или подписана чужим ключом"})
+            continue
+        result.reports.append(report)
 
     return result
 
@@ -329,7 +389,8 @@ def import_bundle(path: Any, known: Iterable[str] = ()) -> ImportResult:
 # -------------------------------------------------------------- replication
 
 
-def replication(reports: Sequence[Report]) -> Dict[str, Dict[str, Any]]:
+def replication(reports: Sequence[Report], verified_only: bool = False
+                ) -> Dict[str, Dict[str, Any]]:
     """How each hypothesis fared, per hypothesis, across instances.
 
     Counted over DISTINCT instances rather than over reports: an instance
@@ -342,6 +403,8 @@ def replication(reports: Sequence[Report]) -> Dict[str, Dict[str, Any]]:
     """
     out: Dict[str, Dict[str, Any]] = {}
     for report in reports:
+        if verified_only and not report.verified:
+            continue
         entry = out.setdefault(report.hypothesis_id, {
             "instances": {}, "holdouts": set()})
         # Latest report from an instance wins: a re-run with more trials
@@ -375,7 +438,8 @@ def replication(reports: Sequence[Report]) -> Dict[str, Dict[str, Any]]:
 MIN_FOR_CONSENSUS = 3
 
 
-def consensus(reports: Sequence[Report]) -> Dict[str, List[Dict[str, Any]]]:
+def consensus(reports: Sequence[Report], verified_only: bool = False
+              ) -> Dict[str, List[Dict[str, Any]]]:
     """Sort hypotheses into what the federation actually learned.
 
     `replication` counts votes. This says what the counts mean, and it
@@ -401,7 +465,8 @@ def consensus(reports: Sequence[Report]) -> Dict[str, List[Dict[str, Any]]]:
     """
     out: Dict[str, List[Dict[str, Any]]] = {
         "divergent": [], "confirmed": [], "refuted": [], "undecided": []}
-    for hypothesis_id, row in sorted(replication(reports).items()):
+    for hypothesis_id, row in sorted(
+            replication(reports, verified_only=verified_only).items()):
         entry = dict(row, hypothesis_id=hypothesis_id)
         if row["accepted"] and row["rejected"]:
             out["divergent"].append(entry)
@@ -506,6 +571,13 @@ class Queue:
         from ..core.identity import fingerprint
         report = Report(hypothesis_id=hypothesis_id, instance=fingerprint(),
                         verdict=verdict, **fields)
+        try:
+            report = report.sign()
+        except Exception:
+            # An unsigned report is still this installation's own record.
+            # Losing the verdict because a key could not be read would be
+            # the worse failure.
+            pass
         data = self._load()
         data["reports"].append(report.as_dict())
         self._save(data)

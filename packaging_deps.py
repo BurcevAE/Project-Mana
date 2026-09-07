@@ -131,6 +131,9 @@ BUNDLED = (
     Bundled("openpyxl", "openpyxl", "нельзя читать и писать .xlsx"),
     Bundled("win32com.client", "pywin32",
             "нет доступа к 1С:Предприятие и к любому COM-приложению"),
+    Bundled("cryptography", "cryptography",
+            "экземпляр не сможет подписывать свои отчёты, и чужие подписи "
+            "нечем будет проверить", required=True),
 )
 
 #: NOT shipped, on purpose, with the reason. Written down because the
@@ -202,6 +205,13 @@ try:
     import pymupdf          # noqa: F401,E402
 except Exception:
     pass
+
+# The instance identity is an Ed25519 key pair, so this is not optional:
+# without it an installation cannot sign its own reports and cannot check
+# anyone else's, which is the whole basis of the exchange.
+import cryptography        # noqa: F401,E402
+from cryptography.hazmat.primitives import serialization   # noqa: F401,E402
+from cryptography.hazmat.primitives.asymmetric import ed25519  # noqa: F401,E402
 
 # mana/apps reaches these, and mana/ is excluded from PyInstaller's
 # analysis, so an import that appears only there is invisible to the
