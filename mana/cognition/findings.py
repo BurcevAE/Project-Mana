@@ -62,7 +62,7 @@ from ..core.gates import (ACCEPTED, REJECTED, NOT_EVALUATED,
                           MIN_PAIRED_TRIALS)
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.1"
+__version__ = "1.2"
 
 #: The same three states as the acceptance gates, on purpose. "We tested
 #: it and it did not hold" and "we could not test it" are different facts
@@ -223,10 +223,17 @@ def _canonical(value: Any) -> str:
 class Finding:
     """One experiment, its verdict, and what would make it stale.
 
-    `question` and `approach` together give the id: two runs of the same
-    approach to the same question are the same experiment, whoever ran
-    them and whenever. An assigned id would make every repetition look
-    like a new result, which is the failure this exists to prevent.
+    Identity is `question` + `approach` + **conditions**. Conditions are
+    part of it because a series is "the same approach under different
+    conditions": with them outside, corpus=1000 and corpus=5000 collapsed
+    to one id, `latest()` kept only the newer, and the series reader
+    compared the new point against a stale record while reporting two
+    observations. Found by running it.
+
+    `approach_id` -- question and approach alone -- is what groups a
+    series and what a lookup asks about. An assigned id would make every
+    repetition look like a new result, which is the failure this exists
+    to prevent.
     """
     question: str
     approach: Dict[str, Any]
@@ -255,13 +262,22 @@ class Finding:
         return classify(self.verdict, self.measurement)
 
     @property
-    def finding_id(self) -> str:
+    def approach_id(self) -> str:
+        """One way of going at one question, across all conditions."""
         body = _canonical({"question": self.question.strip().lower(),
                            "approach": self.approach})
         return hashlib.blake2b(body.encode("utf-8"), digest_size=8).hexdigest()
 
+    @property
+    def finding_id(self) -> str:
+        """One run: this approach, under these conditions."""
+        body = _canonical({"approach_id": self.approach_id,
+                           "conditions": self.conditions})
+        return hashlib.blake2b(body.encode("utf-8"), digest_size=8).hexdigest()
+
     def as_dict(self) -> Dict[str, Any]:
-        return {"finding_id": self.finding_id, "question": self.question,
+        return {"finding_id": self.finding_id,
+                "approach_id": self.approach_id, "question": self.question,
                 "approach": self.approach, "verdict": self.verdict,
                 "measurement": self.measurement, "conditions": self.conditions,
                 "failure": self.failure.as_dict(),
@@ -396,13 +412,28 @@ class Ledger:
         "do not run this".
         """
         probe = Finding(question=question, approach=approach,
-                        verdict=NOT_EVALUATED)
-        for finding in self.latest():
+                        verdict=NOT_EVALUATED, conditions=dict(conditions or {}))
+        same_approach = [f for f in self.latest()
+                         if f.approach_id == probe.approach_id]
+        if not same_approach:
+            return None
+
+        # An exact condition match first: that is "we have run precisely
+        # this". Anything else on the same approach is "we have run this
+        # approach, elsewhere in the condition space", which is a
+        # different and weaker thing -- and saying so is the point.
+        for finding in same_approach:
             if finding.finding_id == probe.finding_id:
                 return {"finding": finding.as_dict(),
                         "describe": finding.describe(),
+                        "match": "exact",
                         "staleness": finding.stale_against(conditions or {})}
-        return None
+
+        nearest = max(same_approach, key=lambda f: f.created)
+        return {"finding": nearest.as_dict(), "describe": nearest.describe(),
+                "match": "same_approach_other_conditions",
+                "other_points": len(same_approach),
+                "staleness": nearest.stale_against(conditions or {})}
 
     def about(self, question: str) -> List[Finding]:
         """Everything tried against this question, whatever the approach.

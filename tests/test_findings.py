@@ -331,3 +331,66 @@ def test_an_old_record_without_guesses_still_loads(tmp_path):
     assert len(read_back) == 1
     assert read_back[0].suspected == ()
     assert read_back[0].failure.failure == UNCLASSIFIED
+
+
+# --------------------------------------------------------------------------
+# conditions belong to identity
+#
+# Found by running the series on the real ledger: corpus=1000 and
+# corpus=5000 collapsed to one id, `latest()` kept only the newer, and the
+# reader compared the new point against a stale record while reporting a
+# series of two that was really one.
+# --------------------------------------------------------------------------
+
+def test_the_same_approach_under_different_conditions_is_a_different_finding():
+    """A series is exactly "same approach, different conditions". With
+    conditions outside the identity those are the points that vanish."""
+    at_1000 = finding(conditions={"corpus_games": 1000, "depth": 2})
+    at_5000 = finding(conditions={"corpus_games": 5000, "depth": 2})
+    assert at_1000.approach_id == at_5000.approach_id
+    assert at_1000.finding_id != at_5000.finding_id
+
+
+def test_both_points_of_a_series_survive_deduplication(tmp_path):
+    ledger = Ledger(tmp_path / "findings.jsonl")
+    ledger.record(finding(conditions={"corpus_games": 1000}, created=1.0))
+    ledger.record(finding(conditions={"corpus_games": 5000}, created=2.0))
+    assert len(ledger.latest()) == 2
+
+
+def test_a_rerun_under_identical_conditions_still_supersedes(tmp_path):
+    ledger = Ledger(tmp_path / "findings.jsonl")
+    ledger.record(finding(REJECTED, conditions={"corpus_games": 1000},
+                          created=1.0))
+    ledger.record(finding(ACCEPTED, conditions={"corpus_games": 1000},
+                          created=2.0))
+    latest = ledger.latest()
+    assert len(latest) == 1 and latest[0].verdict == ACCEPTED
+
+
+def test_an_exact_condition_match_says_so(tmp_path):
+    ledger = Ledger(tmp_path / "findings.jsonl")
+    ledger.record(finding(conditions={"corpus_games": 1000, "depth": 2}))
+    found = ledger.already_tried(QUESTION, APPROACH,
+                                 {"corpus_games": 1000, "depth": 2})
+    assert found["match"] == "exact"
+
+
+def test_the_same_approach_elsewhere_is_reported_as_weaker(tmp_path):
+    """"We have run this approach, somewhere else in the condition space"
+    is a different and weaker thing than "we have run precisely this"."""
+    ledger = Ledger(tmp_path / "findings.jsonl")
+    ledger.record(finding(conditions={"corpus_games": 1000, "depth": 2}))
+
+    found = ledger.already_tried(QUESTION, APPROACH,
+                                 {"corpus_games": 20000, "depth": 2})
+    assert found is not None
+    assert found["match"] == "same_approach_other_conditions"
+    assert found["staleness"]["changed"]["corpus_games"] == {"was": 1000,
+                                                             "now": 20000}
+
+
+def test_a_different_approach_is_still_not_found(tmp_path):
+    ledger = Ledger(tmp_path / "findings.jsonl")
+    ledger.record(finding())
+    assert ledger.already_tried(QUESTION, {"model": "boosting"}, {}) is None

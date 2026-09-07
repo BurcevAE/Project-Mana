@@ -64,7 +64,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from .findings import Finding, Ledger, UNCLASSIFIED
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 
 @dataclass(frozen=True)
@@ -186,11 +186,36 @@ class Series:
 
     @property
     def constant(self) -> Tuple[str, ...]:
+        """Conditions recorded in EVERY observation with one value.
+
+        Presence in all of them is required, and that was the defect:
+        a key written down on one side only took a single value and was
+        reported as held constant, which is the opposite of true. What
+        was not recorded was not held -- it is unknown.
+        """
+        counts: Dict[str, int] = {}
         values: Dict[str, set] = {}
         for observation in self.observations:
             for key, value in observation.conditions.items():
+                counts[key] = counts.get(key, 0) + 1
                 values.setdefault(key, set()).add(_hashable(value))
-        return tuple(sorted(k for k, v in values.items() if len(v) == 1))
+        total = len(self.observations)
+        return tuple(sorted(k for k, v in values.items()
+                            if len(v) == 1 and counts.get(k) == total))
+
+    @property
+    def partial(self) -> Tuple[str, ...]:
+        """Conditions recorded in some observations but not all.
+
+        Neither varied nor held: simply unknown where they are missing,
+        and every comparison touching them is confounded.
+        """
+        counts: Dict[str, int] = {}
+        for observation in self.observations:
+            for key in observation.conditions:
+                counts[key] = counts.get(key, 0) + 1
+        total = len(self.observations)
+        return tuple(sorted(k for k, n in counts.items() if n != total))
 
     @property
     def classes(self) -> Tuple[str, ...]:
@@ -220,6 +245,7 @@ class Series:
                 "classes": list(self.classes),
                 "varied": list(self.varied),
                 "constant": list(self.constant),
+                "partial": list(self.partial),
                 "comparisons": len(self.comparisons),
                 "unusable": sum(1 for c in self.comparisons if not c.usable),
                 "flips": len(self.flips),
@@ -240,6 +266,9 @@ class Series:
 
         lines.append(f"варьировалось: {', '.join(self.varied) or 'ничего'}")
         lines.append(f"держалось постоянным: {', '.join(self.constant) or 'ничего'}")
+        if self.partial:
+            lines.append(f"записано не везде (не известно, а не постоянно): "
+                         f"{', '.join(self.partial)}")
         if not self.flips:
             lines.append("переворотов класса не обнаружено")
         for comparison in self.flips:

@@ -213,3 +213,54 @@ def test_the_real_ledger_reads_without_error():
     for read in series.all_series():
         assert read.summary()["observations"] >= 1
         assert read.describe()
+
+
+# --------------------------------------------------------------------------
+# a key absent on one side is not "held constant"
+# --------------------------------------------------------------------------
+
+def test_a_condition_recorded_on_one_side_only_is_not_constant(ledger):
+    """Found by running it on the real ledger: a key written down on one
+    side took a single value and was reported as held constant, which is
+    the opposite of true. What was not recorded was not held."""
+    add(ledger, corpus=1000, depth=2, interval=[0.376, 0.533], created=1.0)
+    add(ledger, corpus=5000, depth=2, interval=[0.40, 0.55], created=2.0,
+        feature_count=12)
+
+    read = series.read(QUESTION, ledger)
+    assert "feature_count" not in read.constant
+    assert read.partial == ("feature_count",)
+    assert "не известно" in read.describe()
+
+
+def test_a_condition_in_every_observation_is_constant(ledger):
+    add(ledger, corpus=1000, depth=2, interval=[0.376, 0.533], created=1.0,
+        feature_count=12)
+    add(ledger, corpus=5000, depth=2, interval=[0.40, 0.55], created=2.0,
+        feature_count=12)
+    read = series.read(QUESTION, ledger)
+    assert read.constant == ("depth", "feature_count")
+    assert read.partial == ()
+
+
+def test_varied_constant_and_partial_do_not_overlap(ledger):
+    add(ledger, corpus=1000, depth=2, interval=[0.376, 0.533], created=1.0)
+    add(ledger, corpus=5000, depth=2, interval=[0.40, 0.55], created=2.0,
+        feature_count=12)
+    read = series.read(QUESTION, ledger)
+    assert not set(read.constant) & set(read.partial)
+    assert not set(read.constant) & set(read.varied)
+
+
+def test_the_real_series_finds_the_isolated_pair():
+    """The chess series on this machine: corpus 1000 -> 5000, everything
+    else held. Whatever it says, it must be comparing cleanly."""
+    from mana.cognition.findings import Ledger as RealLedger
+
+    question = ("Может ли MANA обучить оценку позиции, "
+                "которая играет лучше подсчёта материала?")
+    read = series.read(question, RealLedger())
+    if len(read.observations) < 2:
+        pytest.skip("серия на этой машине короче двух наблюдений")
+    isolated = [c for c in read.comparisons if c.usable and c.isolated]
+    assert isolated, "ни одной чисто сравнимой пары"
