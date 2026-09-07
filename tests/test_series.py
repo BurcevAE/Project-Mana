@@ -33,8 +33,10 @@ def add(ledger, *, corpus, depth, interval, verdict=REJECTED,
     row.update(conditions)
     finding = Finding(
         question=QUESTION,
-        approach={"model": "ridge", "corpus": corpus, "depth": depth,
-                  **{k: v for k, v in conditions.items()}},
+        # One approach across the series. The fixture used to fold the
+        # conditions into it, which made every point a different method --
+        # exactly what the same-approach rule now catches.
+        approach={"model": "ridge"},
         verdict=verdict,
         measurement=(measurement if measurement is not None
                      else measurement_of(240, interval, 0.5)),

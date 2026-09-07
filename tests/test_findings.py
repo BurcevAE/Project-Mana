@@ -13,7 +13,8 @@ import time
 import pytest
 
 from mana.core.gates import ACCEPTED, REJECTED, NOT_EVALUATED
-from mana.cognition.findings import Finding, Ledger, VERDICTS
+from mana.cognition.findings import (Finding, Ledger, VERDICTS,
+                                     FAILURE_CLASSES)
 
 QUESTION = "Может ли обученная оценка играть лучше подсчёта материала?"
 APPROACH = {"domain": "chess", "model": "ridge", "features": 12}
@@ -198,12 +199,19 @@ def test_the_chess_result_is_actually_on_disk():
              if f.approach.get("domain") == "chess"]
     if not about:
         pytest.skip("шахматный эксперимент на этой машине не проводился")
-    result = about[0]
-    assert result.verdict == REJECTED
-    # `trials` rather than `games`: the canonical key a failure class can
-    # be derived from, counting independent units.
-    assert result.measurement["trials"] >= 240
-    assert result.conditions["corpus_games"] >= 1000
+    # Structure, not the current answer. Pinning the verdict here made
+    # the test fail the moment a later experiment changed it, which is a
+    # ledger doing its job -- a test that breaks when the record grows is
+    # testing the record instead of the code.
+    # The earliest records predate the canonical measurement keys and are
+    # legitimately UNCLASSIFIED. The invariant is about the ones that can
+    # be classified: those must carry what the rules read.
+    assert all(f.verdict in VERDICTS for f in about)
+    usable = [f for f in about if f.failure.failure != UNCLASSIFIED]
+    assert usable, "ни одной классифицируемой шахматной записи"
+    for result in usable:
+        assert result.conditions.get("corpus_games", 0) >= 1000
+        assert result.measurement["trials"] >= 240
 
 
 # --------------------------------------------------------------------------
@@ -273,12 +281,19 @@ def test_the_class_is_derived_on_read_not_stored(tmp_path):
     assert ledger.findings()[0].failure.failure == NOT_BETTER
 
 
-def test_the_chess_result_classifies_as_not_better():
+def test_every_chess_result_carries_a_derivable_class():
+    """Not "the answer is NOT_BETTER" -- that changed when a later
+    experiment changed it. What must hold is that every recorded point
+    carries a measurement a class can be derived from."""
     ledger = Ledger()
     chess = [f for f in ledger.latest() if f.approach.get("domain") == "chess"]
     if not chess:
         pytest.skip("шахматный эксперимент на этой машине не проводился")
-    assert chess[0].failure.failure == NOT_BETTER
+    classified = [f for f in chess if f.failure.failure != UNCLASSIFIED]
+    assert classified, "ни одна шахматная запись не классифицируется"
+    for finding in classified:
+        assert finding.failure.failure in FAILURE_CLASSES
+        assert finding.failure.rule.strip()
 
 
 # --------------------------------------------------------------------------

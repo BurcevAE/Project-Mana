@@ -54,17 +54,40 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 #: What the model sees. Every one is a difference (White minus Black), so
 #: a position and its mirror score opposite by construction rather than
 #: by the model happening to learn it.
-FEATURE_NAMES: Tuple[str, ...] = (
+BASE12: Tuple[str, ...] = (
     "pawns", "knights", "bishops", "rooks", "queens",
     "bishop_pair", "side_to_move", "castling",
     "doubled_pawns", "isolated_pawns", "passed_pawns",
     "central_pawns",
 )
+
+#: Five more, all antisymmetric like the first twelve. A symmetric feature
+#: -- a game-phase scalar, say -- would break the mirror property that
+#: stops the fit preferring a colour, so there is not one.
+EXTENDED: Tuple[str, ...] = BASE12 + (
+    "king_shield",       # own pawns beside the king
+    "rooks_open_file",   # rooks on files with no pawns at all
+    "central_pieces",    # knights and bishops on the sixteen central squares
+    "advanced_pawns",    # pawns past the middle of the board
+    "king_centrality",   # how central the king is, which flips sign by endgame
+)
+
+#: The sets a candidate may be fitted on. An allowlist, so "feature_set"
+#: is a condition with a stated range rather than an open invitation.
+FEATURE_SETS: Dict[str, Tuple[str, ...]] = {"base12": BASE12,
+                                            "extended": EXTENDED}
+
+DEFAULT_FEATURE_SET = "base12"
+
+#: Kept as the module-level name the older callers and tests import. It is
+#: the base set, unchanged: the point of parameterising was that the old
+#: twelve keep behaving exactly as they did.
+FEATURE_NAMES: Tuple[str, ...] = BASE12
 
 #: Predicted result is in [0, 1]; the search works in centipawns beside
 #: mate scores of +-100000. This stretches one to the other.
@@ -84,12 +107,18 @@ def _popcount(bits: int) -> int:
     return bin(bits).count("1")
 
 
-def features(board: Any, chess: Any) -> List[float]:
-    """A dozen numbers, all differences, all bitboard counts.
+def features(board: Any, chess: Any,
+             feature_set: str = DEFAULT_FEATURE_SET) -> List[float]:
+    """Differences, all bitboard counts, in the order the set names them.
 
     `chess` is passed in rather than imported: the module is only
     reachable through `acquire`, and importing it here would bypass the
     verification that everything downstream rests on.
+
+    The base twelve are computed exactly as before. That is the whole
+    point of the parameter: the old set has to keep behaving identically
+    under the new module version, or the version and the feature set
+    could not be varied one at a time.
     """
     white = board.occupied_co[True]
     black = board.occupied_co[False]
@@ -133,7 +162,7 @@ def features(board: Any, chess: Any) -> List[float]:
 
     centre = chess.BB_D4 | chess.BB_E4 | chess.BB_D5 | chess.BB_E5
 
-    return [
+    base = [
         float(diff(pawns)),
         float(diff(board.knights)),
         float(diff(board.bishops)),
@@ -148,6 +177,58 @@ def features(board: Any, chess: Any) -> List[float]:
         float(isolated),
         float(passed),
         float(diff(pawns & centre)),
+    ]
+    if feature_set == "base12":
+        return base
+    if feature_set != "extended":
+        raise ValueError(f"неизвестный набор признаков {feature_set!r}; "
+                         f"объявлены {sorted(FEATURE_SETS)}")
+    return base + _extended(board, chess, white, black, pawns, diff)
+
+
+def _extended(board: Any, chess: Any, white: int, black: int, pawns: int,
+              diff: Any) -> List[float]:
+    """The five added ones, each a White-minus-Black difference."""
+    white_pawns, black_pawns = pawns & white, pawns & black
+
+    def shield(colour_pawns: int, colour: bool) -> int:
+        square = board.king(colour)
+        if square is None:
+            return 0
+        return _popcount(chess.BB_KING_ATTACKS[square] & colour_pawns)
+
+    open_files = 0
+    for file_bb in chess.BB_FILES:
+        if not (pawns & file_bb):
+            open_files |= file_bb
+
+    central = 0
+    for file_bb in chess.BB_FILES[2:6]:
+        central |= file_bb
+    central &= (chess.BB_RANK_3 | chess.BB_RANK_4
+                | chess.BB_RANK_5 | chess.BB_RANK_6)
+    minors = board.knights | board.bishops
+
+    advanced_white = _popcount(white_pawns & (chess.BB_RANK_5 | chess.BB_RANK_6
+                                              | chess.BB_RANK_7))
+    advanced_black = _popcount(black_pawns & (chess.BB_RANK_4 | chess.BB_RANK_3
+                                              | chess.BB_RANK_2))
+
+    def centrality(colour: bool) -> int:
+        square = board.king(colour)
+        if square is None:
+            return 0
+        # Manhattan distance from the middle, negated so more central is
+        # larger. Files and ranks are 0..7, the middle sits at 3.5.
+        file_index, rank_index = chess.square_file(square), chess.square_rank(square)
+        return -(abs(2 * file_index - 7) + abs(2 * rank_index - 7)) // 2
+
+    return [
+        float(shield(white_pawns, True) - shield(black_pawns, False)),
+        float(diff(board.rooks & open_files)),
+        float(diff(minors & central)),
+        float(advanced_white - advanced_black),
+        float(centrality(True) - centrality(False)),
     ]
 
 
@@ -164,6 +245,10 @@ class LearnedEval:
     mean: Tuple[float, ...]
     scale: Tuple[float, ...]
     names: Tuple[str, ...] = FEATURE_NAMES
+    #: Which set the vector came from. Stored with the coefficients for
+    #: the same reason the scaling is: a model that does not know its own
+    #: feature set scores the wrong vector on the next run, silently.
+    feature_set: str = DEFAULT_FEATURE_SET
     trained_games: int = 0
     trained_positions: int = 0
     cv_r2: float = 0.0
@@ -172,7 +257,7 @@ class LearnedEval:
     def score(self, board: Any, chess: Any) -> float:
         """Centipawn-like, from White's point of view."""
         raw = self.intercept
-        values = features(board, chess)
+        values = features(board, chess, self.feature_set)
         for value, mean, scale, coefficient in zip(
                 values, self.mean, self.scale, self.coefficients):
             raw += coefficient * ((value - mean) / scale)
@@ -192,6 +277,7 @@ class LearnedEval:
         return {"coefficients": list(self.coefficients),
                 "intercept": self.intercept, "mean": list(self.mean),
                 "scale": list(self.scale), "names": list(self.names),
+                "feature_set": self.feature_set,
                 "trained_games": self.trained_games,
                 "trained_positions": self.trained_positions,
                 "cv_r2": self.cv_r2, "cv_folds": self.cv_folds}
@@ -203,6 +289,8 @@ class LearnedEval:
                    mean=tuple(float(x) for x in row["mean"]),
                    scale=tuple(float(x) for x in row["scale"]),
                    names=tuple(row.get("names") or FEATURE_NAMES),
+                   feature_set=str(row.get("feature_set")
+                                   or DEFAULT_FEATURE_SET),
                    trained_games=int(row.get("trained_games") or 0),
                    trained_positions=int(row.get("trained_positions") or 0),
                    cv_r2=float(row.get("cv_r2") or 0.0),
@@ -218,9 +306,9 @@ class NotEnoughGames(RuntimeError):
     """
 
 
-def design_matrix(games: Sequence[Any], chess: Any) -> Tuple[List[List[float]],
-                                                             List[float],
-                                                             List[int]]:
+def design_matrix(games: Sequence[Any], chess: Any,
+                  feature_set: str = DEFAULT_FEATURE_SET
+                  ) -> Tuple[List[List[float]], List[float], List[int]]:
     """Features, labels and the game each row came from.
 
     The groups are returned, not optional. Every split downstream needs
@@ -232,14 +320,15 @@ def design_matrix(games: Sequence[Any], chess: Any) -> Tuple[List[List[float]],
     groups: List[int] = []
     for index, game in enumerate(games):
         for fen in game.sampled:
-            rows.append(features(chess.Board(fen), chess))
+            rows.append(features(chess.Board(fen), chess, feature_set))
             labels.append(float(game.score))
             groups.append(index)
     return rows, labels, groups
 
 
 def fit(games: Sequence[Any], chess: Any,
-        min_games: Optional[int] = None) -> LearnedEval:
+        min_games: Optional[int] = None,
+        feature_set: str = DEFAULT_FEATURE_SET) -> LearnedEval:
     """Fit an evaluation, cross-validated with games kept whole.
 
     `min_games` defaults to `brain_factory.MIN_ML_EXAMPLES`, counted in
@@ -260,7 +349,9 @@ def fit(games: Sequence[Any], chess: Any,
             f"но позиции одной партии не независимы: обучение на них "
             f"запомнит партии, а не выучит оценку.")
 
-    rows, labels, groups = design_matrix(games, chess)
+    if feature_set not in FEATURE_SETS:
+        raise ValueError(f"неизвестный набор признаков {feature_set!r}")
+    rows, labels, groups = design_matrix(games, chess, feature_set)
     if not rows:
         raise NotEnoughGames("в партиях нет сохранённых позиций")
 
@@ -287,6 +378,7 @@ def fit(games: Sequence[Any], chess: Any,
         intercept=float(model.intercept_),
         mean=tuple(float(m) for m in scaler.mean_),
         scale=tuple(float(s) if s else 1.0 for s in scaler.scale_),
+        names=FEATURE_SETS[feature_set], feature_set=feature_set,
         trained_games=len(games), trained_positions=len(rows),
         cv_r2=round(sum(scores) / len(scores), 4) if scores else 0.0,
         cv_folds=len(scores))

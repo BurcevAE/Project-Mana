@@ -64,7 +64,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from .findings import Finding, Ledger, UNCLASSIFIED
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.1"
+__version__ = "1.2"
 
 
 @dataclass(frozen=True)
@@ -75,10 +75,15 @@ class Observation:
     failure: str
     verdict: str
     created: float
+    #: Which method this observation used. Carried because a comparison
+    #: that looks only at conditions would call two different methods
+    #: "isolated on corpus_games" and hide the larger difference.
+    approach_id: str = ""
 
     @classmethod
     def of(cls, finding: Finding) -> "Observation":
-        return cls(finding_id=finding.finding_id,
+        return cls(approach_id=finding.approach_id,
+                   finding_id=finding.finding_id,
                    conditions=dict(finding.conditions),
                    failure=finding.failure.failure,
                    verdict=finding.verdict,
@@ -100,6 +105,9 @@ class Comparison:
     only_in_one: Tuple[str, ...]
     from_class: str
     to_class: str
+    #: True when both sides used the same method. False makes the pair
+    #: confounded whatever the conditions say.
+    same_approach: bool = True
 
     @property
     def class_changed(self) -> bool:
@@ -124,7 +132,8 @@ class Comparison:
         whichever one you were interested in, which is how a series of
         experiments becomes a place to find the answer you came with.
         """
-        return len(self.changed) == 1 and not self.only_in_one
+        return (self.same_approach and len(self.changed) == 1
+                and not self.only_in_one)
 
     def describe(self) -> str:
         if not self.usable:
@@ -138,6 +147,9 @@ class Comparison:
                 f"изменился с {self.from_class} на {self.to_class}")
         if self.isolated:
             return head
+        if not self.same_approach:
+            return (head + ". Подход тоже другой — приписать перемену "
+                    "условию нельзя")
         return (head + ". Изменилось больше одного условия — приписать "
                 "перемену какому-то одному нельзя")
 
@@ -148,6 +160,7 @@ class Comparison:
                 "from_class": self.from_class, "to_class": self.to_class,
                 "class_changed": self.class_changed,
                 "isolated": self.isolated, "usable": self.usable,
+                "same_approach": self.same_approach,
                 "describe": self.describe()}
 
 
@@ -165,7 +178,8 @@ def _compare(left: Observation, right: Observation) -> Comparison:
     return Comparison(left=left.finding_id, right=right.finding_id,
                       changed=changed, held=tuple(held),
                       only_in_one=tuple(sorted(keys_left ^ keys_right)),
-                      from_class=left.failure, to_class=right.failure)
+                      from_class=left.failure, to_class=right.failure,
+                      same_approach=(left.approach_id == right.approach_id))
 
 
 @dataclass(frozen=True)
@@ -218,6 +232,11 @@ class Series:
         return tuple(sorted(k for k, n in counts.items() if n != total))
 
     @property
+    def approaches(self) -> Tuple[str, ...]:
+        """How many distinct methods this question has been attacked with."""
+        return tuple(sorted({o.approach_id for o in self.observations}))
+
+    @property
     def classes(self) -> Tuple[str, ...]:
         return tuple(o.failure for o in self.observations)
 
@@ -246,6 +265,7 @@ class Series:
                 "varied": list(self.varied),
                 "constant": list(self.constant),
                 "partial": list(self.partial),
+                "approaches": len(self.approaches),
                 "comparisons": len(self.comparisons),
                 "unusable": sum(1 for c in self.comparisons if not c.usable),
                 "flips": len(self.flips),
