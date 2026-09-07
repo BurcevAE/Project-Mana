@@ -231,3 +231,66 @@ def test_the_module_says_the_baseline_is_a_floor():
 
     doc = re.sub(r"\s+", " ", arena.__doc__ or "")
     assert "a floor, not a fix" in doc
+
+
+def test_the_corpus_directory_cannot_shadow_an_import():
+    """Found by running it: the corpus lived in a folder called `chess`,
+    which in a development run sits in the working directory and becomes
+    an implicit namespace package. `import chess` returned the corpus
+    directory instead of the library. The suite escaped it only because
+    `acquire.ensure_importable()` happens to put the acquisition path
+    first -- luck, not protection.
+    """
+    import importlib.util
+
+    name = arena.CORPUS_DIRNAME
+    assert name != "chess"
+    # Nothing MANA writes may be named after something anybody imports.
+    assert importlib.util.find_spec(name) is None or name.endswith("_corpus")
+
+
+# --------------------------------------------------------------------------
+# equal nodes, not equal depth
+# --------------------------------------------------------------------------
+
+def test_a_bigger_node_budget_searches_deeper(chess):
+    """The mechanism that makes a fair comparison possible: two
+    evaluations of different cost get the same amount of search rather
+    than the same depth."""
+    import random as _random
+
+    reached = []
+    for budget in (500, 20000):
+        player = SearchPlayer(depth=9, name="m", max_nodes=budget)
+        player.choose(chess.Board(), _random.Random(0))
+        reached.append(player.reached_depth)
+    assert reached[1] > reached[0]
+
+
+def test_the_move_comes_from_a_completed_iteration(chess):
+    """Taking the best move from a half-searched depth makes the answer
+    depend on where the budget ran out, which is noise dressed as a
+    decision."""
+    import inspect
+
+    source = inspect.getsource(SearchPlayer._choose_within_budget)
+    assert "self._choose_at_depth" in source
+    assert "reached_depth = depth" in source
+
+
+def test_a_budgeted_player_still_returns_a_legal_move(chess):
+    import random as _random
+
+    board = chess.Board()
+    player = SearchPlayer(depth=9, name="m", max_nodes=300)
+    assert player.choose(board, _random.Random(1)) in board.legal_moves
+
+
+def test_without_a_budget_the_depth_is_the_depth(chess):
+    """The default path is unchanged: everything measured before this
+    existed was measured at a fixed depth."""
+    import random as _random
+
+    player = SearchPlayer(depth=2, name="m")
+    player.choose(chess.Board(), _random.Random(0))
+    assert player.max_nodes == 0

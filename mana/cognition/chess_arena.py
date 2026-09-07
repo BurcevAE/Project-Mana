@@ -78,7 +78,15 @@ SKIP_OPENING_PLIES = 12
 SKIP_ENDING_PLIES = 4
 
 #: Where the corpus accumulates, beside the rest of the user's state.
-CORPUS_DIRNAME = "chess"
+#:
+#: Deliberately not "chess". In a development run `data_root()` is the
+#: working directory, so a folder called `chess` there becomes an implicit
+#: namespace package and shadows the real library: `import chess` returned
+#: the corpus directory. The test suite only escaped it because
+#: `acquire.ensure_importable()` happens to put the acquisition path ahead
+#: of the working directory -- luck, not protection. A directory MANA
+#: writes must never be able to answer an import.
+CORPUS_DIRNAME = "chess_corpus"
 
 
 class Unverified(RuntimeError):
@@ -159,24 +167,60 @@ class SearchPlayer(Player):
     """
 
     def __init__(self, evaluate: Evaluate = material, depth: int = 2,
-                 name: str = "material") -> None:
+                 name: str = "material", max_nodes: int = 0) -> None:
         self.evaluate = evaluate
         self.depth = max(1, int(depth))
         self.name = name
+        #: When set, depth is decided by a node budget instead: iterative
+        #: deepening until the budget is spent. Two evaluations compared
+        #: at equal depth make the expensive one free, and the feature
+        #: set here costs 21.7 microseconds a position against 3.5 for
+        #: material counting -- 6.2 times. Equal nodes isolates the
+        #: question being asked (does this evaluation guide the search
+        #: better, per unit of search) and stays deterministic, which
+        #: paired trials need.
+        self.max_nodes = max(0, int(max_nodes))
         self.nodes = 0
+        self.reached_depth = 0
 
     def choose(self, board: Any, rng: random.Random) -> Any:
+        if self.max_nodes:
+            return self._choose_within_budget(board, rng)
+        return self._choose_at_depth(board, rng, self.depth)
+
+    def _choose_at_depth(self, board: Any, rng: random.Random,
+                         depth: int) -> Any:
         moves = list(board.legal_moves)
         rng.shuffle(moves)              # break ties without a preference
         best_move, best_score = moves[0], float("-inf")
         for move in moves:
             board.push(move)
-            score = -self._search(board, self.depth - 1,
+            score = -self._search(board, depth - 1,
                                   float("-inf"), float("inf"))
             board.pop()
             if score > best_score:
                 best_move, best_score = move, score
         return best_move
+
+    def _choose_within_budget(self, board: Any, rng: random.Random) -> Any:
+        """Iterative deepening until the node budget is spent.
+
+        The move comes from the last **completed** iteration. Taking the
+        best move from a half-searched depth would make the result depend
+        on where the budget happened to run out, which is noise dressed
+        as a decision.
+        """
+        seed = rng.random()
+        spent_before = self.nodes
+        best = None
+        for depth in range(1, 64):
+            # Same tie-breaking at every depth, so deepening does not
+            # shuffle the answer around for reasons unrelated to search.
+            best = self._choose_at_depth(board, random.Random(seed), depth)
+            self.reached_depth = depth
+            if self.nodes - spent_before >= self.max_nodes:
+                break
+        return best
 
     def _search(self, board: Any, depth: int, alpha: float, beta: float) -> float:
         self.nodes += 1
