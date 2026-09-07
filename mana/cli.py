@@ -221,6 +221,59 @@ def _show_findings(limit: int) -> int:
     return 0
 
 
+def _show_proposals(limit: int) -> int:
+    """Print the changes MANA proposes for itself, ranked by a dry run.
+
+    Nothing here adopts anything. The ordering says what is worth
+    measuring properly, not what to ship -- acceptance belongs to
+    core/gates.py, on evidence.
+    """
+    from .journal import Journal
+    from .cognition import invariants, candidates, failure_domain
+
+    journal = Journal()
+    episodes = journal.episodes(limit=limit)
+    if not episodes:
+        print(f"Журнала ещё нет или он пуст: {journal.path}")
+        return 0
+
+    violations = invariants.scan(episodes)
+    if not violations:
+        print(f"Просмотрено ходов: {len(episodes)}. Нарушений нет — "
+              f"предлагать нечего.")
+        return 0
+
+    situations = failure_domain.situations_from(episodes)
+    rows = candidates.rank(violations, situations)
+    print(f"Ходов: {len(episodes)}   нарушений: {len(violations)}   "
+          f"кандидатов: {len(rows)}")
+    print("Оценка всухую — верхняя граница: считается, что выполнимое "
+          "действие удаётся.")
+    print()
+
+    for row in rows:
+        dry = row.get("dry") or {}
+        if dry.get("dry_evaluable"):
+            gain = dry["candidate_pass_rate"] - dry["baseline_pass_rate"]
+            head = (f"{dry['baseline_pass_rate']:.2f} -> "
+                    f"{dry['candidate_pass_rate']:.2f}  "
+                    f"({gain:+.2f}, сломано: "
+                    f"{dry['counterexamples']['found']})")
+        else:
+            head = "всухую не оценивается"
+        print(f"  {head}")
+        print(f"    менять:  {row['changes']}")
+        print(f"    целит в: {row['addresses']}  ({row['observed_failures']} наруш.)")
+        print(f"    почему:  {row['rationale'][:150]}")
+        if not dry.get("dry_evaluable") and dry.get("reason"):
+            print(f"    оценка:  {dry['reason'][:150]}")
+        print()
+
+    print("Ни одно из этих изменений не применено. Вердикт выносят ворота "
+          "по свидетельствам, а их пока недостаточно.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Argument parser, split out of main() so tests can construct it
     without running the agent."""
@@ -275,6 +328,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--findings", nargs="?", const=200, type=int, metavar="N",
                         help="Прогнать инварианты по последним N ходам журнала "
                              "и показать найденные отказы (ничего не меняет)")
+    parser.add_argument("--propose", nargs="?", const=200, type=int, metavar="N",
+                        help="Какие изменения MANA предлагает себе по последним "
+                             "N ходам журнала (ничего не применяет)")
     parser.add_argument("--list-brains", action="store_true",
                         help="Показать все мозги: какие настроены, готовы, в кулдауне или исчерпали free-tier")
     parser.add_argument("--brains-status", action="store_true",
@@ -336,6 +392,9 @@ def main() -> int:
 
     if args.findings is not None:
         return _show_findings(int(args.findings))
+
+    if args.propose is not None:
+        return _show_proposals(int(args.propose))
 
     # Handled before any agent is constructed: reporting the version must
     # not require loading embedding models or opening databases.

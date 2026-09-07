@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import difflib
 import re
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 #: Component version -- see mana/version.py for the bump conventions.
 __version__ = "1.0"
@@ -96,6 +96,53 @@ def previous_exchange(memory: Any, session_id: str,
     return question, answer
 
 
+def previous_exchanges(memory: Any, session_id: str,
+                       limit: int = 1, look_back: int = 40) -> list:
+    """The last `limit` question/answer pairs, newest first.
+
+    `previous_exchange` returns one, which is what the live guard has
+    always compared against -- and why a repeat older than a single turn
+    is invisible to it. Measured: an answer identical to one three turns
+    back scored 1.00 against that turn and 0.018 against the turn the
+    guard looked at, and passed.
+
+    How many are actually compared is `policy.echo_lookback`, whose
+    default is 1: today's behaviour exactly, until a candidate carrying a
+    larger value is accepted.
+    """
+    try:
+        recent = list(memory.recent(session_id, look_back))
+    except Exception:
+        return []
+
+    pairs, answer = [], ""
+    for record in reversed(recent):
+        kind = record.get("kind")
+        if not answer and kind == "MANA_RESPONSE":
+            answer = str(record.get("content") or "")
+            continue
+        if answer and kind == "USER_MESSAGE":
+            pairs.append((str(record.get("content") or ""), answer))
+            answer = ""
+            if len(pairs) >= max(1, int(limit)):
+                break
+    return pairs
+
+
+def repeats_any_previous(task: str, answer: str,
+                         pairs: Sequence[Tuple[str, str]]) -> Optional[Dict[str, Any]]:
+    """The first earlier exchange this answer repeats, if any.
+
+    Newest first, so the report names the nearest repeat rather than an
+    arbitrary one.
+    """
+    for question, previous in pairs:
+        found = repeats_previous(task, answer, question, previous)
+        if found is not None:
+            return found
+    return None
+
+
 def repeats_previous(task: str, answer: str, previous_question: str,
                      previous_answer: str) -> Optional[Dict[str, Any]]:
     """Details of the repetition, or None if this answer is its own.
@@ -109,12 +156,18 @@ def repeats_previous(task: str, answer: str, previous_question: str,
     if not previous_answer:
         return None
 
+    # Thresholds come from the policy in force, whose defaults are the
+    # constants above -- so nothing changes until a candidate is accepted.
+    from . import policy as policy_mod
+    same_answer = float(policy_mod.get("echo_same_answer"))
+    different_question = float(policy_mod.get("echo_different_question"))
+
     answer_likeness = similarity(answer, previous_answer)
-    if answer_likeness < SAME_ANSWER:
+    if answer_likeness < same_answer:
         return None
 
     question_likeness = similarity(task, previous_question)
-    if question_likeness >= DIFFERENT_QUESTION:
+    if question_likeness >= different_question:
         # Same question, same answer. That is consistency, not an echo.
         return None
 

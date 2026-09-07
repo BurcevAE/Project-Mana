@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 #: Component version -- see mana/version.py for the bump conventions.
 __version__ = "1.0"
@@ -47,6 +47,21 @@ __version__ = "1.0"
 #: Imperatives that mean "do it", at the start of the message. A verb in
 #: the middle ("расскажи, как запустить") is describing, not asking.
 _LAUNCH = r"(?:запусти|запустить|открой|открыть|стартуй|включи)"
+
+#: Forms addressed to MANA rather than commands: "чтобы ты открыла",
+#: "запустишь". Wider and riskier -- "ты уже открыла отчёт?" is a
+#: question -- so it is reached only through `policy.intent_verb_forms`.
+_LAUNCH_ADDRESSED = (
+    r"(?:запусти|запустить|запустишь|запустила|"
+    r"открой|открыть|откроешь|открыла|"
+    r"стартуй|включи|включишь|включила)")
+
+
+def _launch_pattern() -> str:
+    from .. import policy as policy_mod
+    return (_LAUNCH_ADDRESSED
+            if policy_mod.get("intent_verb_forms") == "addressed"
+            else _LAUNCH)
 
 #: Written the way people write them, including the Latin/Cyrillic mix
 #: that "1С" invites -- the С is Cyrillic in the product name and Latin
@@ -100,15 +115,50 @@ def _fold(text: str) -> str:
     return (text or "").lower().translate(_HOMOGLYPHS)
 
 
+#: An interrogative opening the message. Only consulted when the verb is
+#: allowed to sit anywhere -- without it, widening the match would start
+#: launching programs at people who asked how to launch them.
+_ASKS_ABOUT = re.compile(
+    r"^\s*(?:как|каким образом|почему|зачем|что такое|что за|"
+    r"где|когда|можно ли|стоит ли|возможно ли|в чём|в чем)\b",
+    re.IGNORECASE)
+
+
+def _stem_match(text: str, name: str) -> bool:
+    """Does the message name this base, allowing for inflection?
+
+    Every word stem of the name must appear. Requiring all of them keeps
+    "база данных" from matching "Информационная база": the generic word
+    is shared, the distinctive one is not.
+    """
+    folded = _fold(text)
+    words = [w for w in re.split(r"[\s\-_]+", _fold(name)) if len(w) > 2]
+    if not words:
+        return False
+    return all(w[:max(3, len(w) - 2)] in folded for w in words)
+
+
 def _match_known_base(text: str) -> str:
     """A base from this machine's own list that the message mentions.
 
     Longest first: a base called "УТ" must not win over "УТ11-ER" in a
     message that names the longer one.
+
+    Substring by default. Measured cost: "Информационная база" is found
+    only in the nominative, so "конфигуратор информационной базы" -- how
+    anybody actually writes it -- matches nothing. Matching by word stem
+    is `policy.intent_stem_match`, off until the gates accept it.
     """
+    from .. import policy as policy_mod
+    by_stem = bool(policy_mod.get("intent_stem_match"))
+
     folded = _fold(text)
     for name in sorted(_known_bases(), key=len, reverse=True):
-        if name and _fold(name) in folded:
+        if not name:
+            continue
+        if _fold(name) in folded:
+            return name
+        if by_stem and _stem_match(text, name):
             return name
     return ""
 
@@ -155,7 +205,21 @@ def match(task: str) -> Optional[Intent]:
         return None
     head = text.lower()
 
-    launcher = re.match(rf"^\s*{_LAUNCH}\b", head)
+    # Where the imperative may sit. The default requires the start of the
+    # message -- "Как открыть Notepad++?" is a question about an
+    # application, not an instruction to launch one. Measured cost of that
+    # narrowness: "я хочу поработать с 1С запусти пожалуйста конфигуратор"
+    # was not recognised at all, and MANA explained to the user how to do
+    # it themselves. Widening it is `policy.intent_verb_anywhere`, off
+    # until the gates accept it.
+    from .. import policy as policy_mod
+    verbs = _launch_pattern()
+    if policy_mod.get("intent_verb_anywhere"):
+        launcher = re.search(rf"\b{verbs}\b", head)
+        if launcher and _ASKS_ABOUT.match(head):
+            launcher = None            # asking how, not asking for
+    else:
+        launcher = re.match(rf"^\s*{verbs}\b", head)
     if not launcher:
         return None
 
@@ -195,6 +259,64 @@ def match(task: str) -> Optional[Intent]:
                       launcher.group(0))
 
     return None
+
+
+def would_act(intent: "Intent") -> Tuple[bool, str]:
+    """Could this intent be carried out here, and what would it target?
+
+    A dry check, so a candidate policy can be scored on recorded turns
+    without launching 1C once per evaluated situation. Everything it
+    consults is read-only: the base list, and whether an executable
+    exists.
+
+    It answers "is this feasible", never "did this succeed". A base can
+    exist and 1C can still fail to start, so a score built on this is an
+    upper bound and `cognition/candidates.py` labels it as one.
+    """
+    try:
+        if intent.action == "launch_onec":
+            from . import onec_launch
+            named = str(intent.params.get("base") or "")
+            names = [str(b.get("name") or "") for b in onec_launch.bases()]
+            if not named:
+                if not names:
+                    return False, "список баз 1С пуст"
+                return True, f"окно выбора базы; предложены: {', '.join(names)}"
+            for name in names:
+                if name.lower() == named.lower():
+                    mode = ("конфигуратор" if intent.params.get("designer")
+                            else "предприятие")
+                    return True, f"база «{name}», режим «{mode}»"
+            return False, (f"базы '{named}' нет в списке 1С. "
+                           f"Есть: {', '.join(names) or 'ничего'}")
+
+        if intent.action in ("launch_editor", "open_file"):
+            from . import find_executable
+            found = find_executable("notepad++.exe")
+            if not found:
+                return False, "не найден Notepad++"
+            path = str(intent.params.get("path") or "")
+            return True, (f"Notepad++ откроет {path}" if path
+                          else "Notepad++ будет запущен")
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+    return False, f"нечем выполнить действие '{intent.action}'"
+
+
+def describe_dry(intent: "Intent", note: str) -> str:
+    """What the reply would say if the action went through.
+
+    Built from the feasibility note, which came from the machine's own
+    state -- not from the request. Same rule as `describe`: the whole
+    defect was an answer written from what was asked.
+    """
+    if intent.action == "launch_onec":
+        return f"Запущено: {note}."
+    if intent.action == "launch_editor":
+        return "Notepad++ запущен."
+    if intent.action == "open_file":
+        return f"Открыто в Notepad++: {note}."
+    return f"Сделано: {note}."
 
 
 def describe(intent: Intent, outcome: Dict[str, Any]) -> str:

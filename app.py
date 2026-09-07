@@ -274,6 +274,17 @@ def main() -> int:
         from mana.net.cli import command_line as peer_command
         return peer_command(argv[1:])
 
+    if argv and argv[0] == "--propose":
+        from mana.cli import _show_proposals
+        count = 200
+        if len(argv) > 1:
+            try:
+                count = int(argv[1])
+            except ValueError:
+                print("Использование: MANA.exe --propose [сколько ходов]")
+                return 2
+        return _show_proposals(count)
+
     if argv and argv[0] == "--findings":
         from mana.cli import _show_findings
         count = 200
