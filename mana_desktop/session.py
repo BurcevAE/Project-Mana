@@ -91,10 +91,26 @@ class AgentSession:
         return self._agent
 
     def state(self) -> Dict[str, Any]:
+        # `language_models` separately from the brain count, because they
+        # answer different questions and only one of them decides whether
+        # MANA can hold a conversation. A machine with five algorithmic
+        # brains and no model reported "5/19 мозгов" -- true, and it left
+        # the user to work out for themselves why every question came
+        # back as a refusal.
+        models: list = []
+        pool = self._pool()
+        if pool is not None:
+            try:
+                models = [b for b in pool.language_models()
+                          if b in pool.brains and pool.usable(pool.brains[b])]
+            except Exception:
+                models = []
         return {
             "ready": self._ready.is_set() and self._agent is not None,
             "error": self._agent_error,
             "busy": self._busy.is_set(),
+            "language_models": models,
+            "has_language_model": bool(models),
         }
 
     def close(self) -> None:

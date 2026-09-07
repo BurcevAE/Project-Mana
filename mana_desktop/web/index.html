@@ -109,6 +109,17 @@
   .prop .diff b { color: var(--ok); font-weight: 500; }
   .prop .acts { display: flex; gap: .5rem; margin-top: .55rem; }
   .prop button { font-size: .75rem; padding: .3rem .7rem; }
+  /* Shown when no language model is reachable. Red rather than grey:
+     without one almost every question comes back as a refusal, and a
+     user reads that as a broken program unless something says otherwise.
+     The window used to show "5/19 мозгов" -- true, and it left them to
+     work out why nothing answered. */
+  .no-llm { border: 1px solid var(--crit); border-radius: 7px;
+            background: var(--panel-2); padding: .6rem .75rem;
+            margin: 0 0 .8rem; font-size: .8rem; line-height: 1.45; }
+  .no-llm b { color: var(--crit); font-weight: 600; }
+  .no-llm ul { margin: .4rem 0 0; padding-left: 1.1rem; }
+  .no-llm li { margin: .15rem 0; }
   .switch { display: flex; align-items: center; gap: .45rem; font-size: .78rem;
             margin: .9rem 0 .3rem; cursor: pointer; }
   .switch input { accent-color: var(--ok); }
@@ -193,6 +204,7 @@
     <h1 id="state">Запуск...</h1>
     <span class="sub" id="brainsline"></span>
   </header>
+  <div id="no-llm" hidden></div>
 
   <div class="log" id="log">
     <div class="msg">
@@ -429,6 +441,10 @@ async function refreshBrains() {
     }
     host.appendChild(el);
   });
+}
+
+async function refreshNoLLM() {
+  try { renderNoLLM(await api("/api/state")); } catch (e) {}
 }
 
 async function refreshSystem() {
@@ -749,6 +765,46 @@ document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click
 setInterval(() => {
   if (document.querySelector('[data-pane="apps"]').classList.contains("on")) refreshApps();
 }, 3000);
+
+/* ---------- no language model ---------- */
+
+function renderNoLLM(state) {
+  const box = document.getElementById("no-llm");
+  if (!box) return;
+  if (state.has_language_model !== false) { box.hidden = true; return; }
+  if (box.dataset.done) { box.hidden = false; return; }
+  box.dataset.done = "1";
+  box.className = "no-llm";
+  box.hidden = false;
+
+  const head = document.createElement("div");
+  const strong = document.createElement("b");
+  strong.textContent = "Языковой модели нет.";
+  head.append(strong, document.createTextNode(
+    " Отвечать можно только на то, что решается точно: арифметика, код, " +
+    "последовательности, порядок, операции над текстом. На всё остальное " +
+    "будет отказ — не потому что сломано, а потому что отвечать нечем."));
+  box.appendChild(head);
+
+  const list = document.createElement("ul");
+  [["Поставить ollama и модель — работает без ключей и без интернета:",
+    "ollama pull qwen2.5:7b-instruct"],
+   ["Либо ввести ключ любого провайдера справа, во вкладке «Мозги» — " +
+    "у cerebras и groq есть бесплатные.", ""]].forEach(([text, code]) => {
+    const item = document.createElement("li");
+    item.appendChild(document.createTextNode(text));
+    if (code) {
+      const pre = document.createElement("code");
+      pre.textContent = " " + code;
+      item.appendChild(pre);
+    }
+    list.appendChild(item);
+  });
+  box.appendChild(list);
+}
+
+refreshNoLLM();
+setInterval(refreshNoLLM, 10000);
 </script>
 </body>
 </html>

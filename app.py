@@ -124,7 +124,12 @@ def self_check() -> int:
         "web_search": optional_deps.HAS_WEB,
         "pdf_reading": optional_deps.HAS_FITZ,
         "hardware_detection": optional_deps.HAS_PSUTIL,
-        "llm_providers": optional_deps.HAS_REQUESTS,
+        # HAS_REQUESTS says the library is importable, which is not the
+        # same claim as "a model can be reached" -- on a machine with no
+        # ollama and no keys this reported True while nothing could
+        # answer a question. Both are reported now, under names that mean
+        # what they say.
+        "llm_library": optional_deps.HAS_REQUESTS,
     }
     # The desktop-application layer has its own capabilities, and the
     # risky one is pywin32: it spreads itself over win32com, pythoncom and
@@ -161,6 +166,19 @@ def self_check() -> int:
     capabilities["onec_com"] = apps.available()["onec"]["available"]
     capabilities["office_files"] = (apps.available()["docx"]["available"]
                                     and apps.available()["xlsx"]["available"])
+    try:
+        from mana.brains import BrainPool
+        from mana.config import Config as _Config
+        pool = BrainPool(_Config())
+        # usable() takes a spec, not an id: language_models() returns ids.
+        reachable = [b for b in pool.language_models()
+                     if b in pool.brains and pool.usable(pool.brains[b])]
+        report["language_models"] = reachable
+        capabilities["language_model_reachable"] = bool(reachable)
+    except Exception as exc:
+        report["language_models_error"] = f"{type(exc).__name__}: {exc}"
+        capabilities["language_model_reachable"] = False
+
     report["capabilities"] = capabilities
 
     if getattr(sys, "frozen", False):
