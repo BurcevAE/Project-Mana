@@ -130,6 +130,21 @@ def self_check() -> int:
     # risky one is pywin32: it spreads itself over win32com, pythoncom and
     # pywintypes with generated modules PyInstaller's analyser does not
     # follow, so "1C works from source" says nothing about the package.
+    # The identity really signs, not merely imports. cryptography carries
+    # native code, and "the package is present" and "Ed25519 works inside
+    # the freeze" are different claims -- which is the same distinction
+    # phase 22 was about, one library further down.
+    try:
+        from mana.core import identity
+        probe = {"self-check": True}
+        key, signature = identity.signed(probe)
+        signs = identity.signature_holds(probe, key, signature)
+        report["instance"] = identity.fingerprint()
+    except Exception as exc:
+        signs = False
+        report["instance_error"] = f"{type(exc).__name__}: {exc}"
+    capabilities["identity_signs"] = signs
+
     from mana import apps
     report["applications"] = apps.available()
     capabilities["onec_com"] = apps.available()["onec"]["available"]
