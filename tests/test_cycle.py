@@ -171,3 +171,65 @@ def test_the_verdict_comes_from_the_gates_and_not_from_here():
     assert "judge_change" in source
     for smuggled in ("MIN_ABSOLUTE_MARGIN", "mcnemar", "ALPHA"):
         assert smuggled not in source
+
+
+# --------------------------------------------------------------------------
+# two facts, never one
+# --------------------------------------------------------------------------
+
+def test_the_holdout_is_actually_read(tmp_path, monkeypatch):
+    """`build` split it out on every pass and nothing read it, so every
+    run reported "hidden: not measured" -- the failure this project keeps
+    having, inside the module written to close it."""
+    from mana.apps import intent
+
+    monkeypatch.setattr(intent, "_known_bases", lambda: TARGETS)
+    narrow = Policy.of(intent_verb_anywhere=False, intent_stem_match=False,
+                       intent_verb_forms="imperative")
+    ran = cycle.run(_episodes(), current=narrow,
+                    ledger=Ledger(tmp_path / "f.jsonl"), targets=TARGETS)
+
+    replay = ran.stage(cycle.REPLAY).detail
+    assert replay["hidden"] >= 1
+    assert replay["hidden_baseline"] is not None
+    assert ran.hidden_size == replay["hidden"]
+    measurements = ran.stage(cycle.RESULT).detail["verdict"]["measurements"]
+    assert measurements.get("hidden") != "not measured"
+
+
+def test_a_closed_loop_is_not_a_proven_improvement(tmp_path, monkeypatch):
+    """The distinction that matters. The first is about machinery and can
+    be true on four turns; the second is about the world and needs a half
+    the change was never chosen on."""
+    from mana.apps import intent
+
+    monkeypatch.setattr(intent, "_known_bases", lambda: TARGETS)
+    narrow = Policy.of(intent_verb_anywhere=False, intent_stem_match=False,
+                       intent_verb_forms="imperative")
+    ran = cycle.run(_episodes(), current=narrow,
+                    ledger=Ledger(tmp_path / "f.jsonl"), targets=TARGETS)
+
+    assert ran.loop_closed is True
+    assert ran.improvement_proven is False
+    assert "контур замкнут:      да" in ran.describe()
+    assert "улучшение доказано:  нет" in ran.describe()
+
+
+def test_improvement_needs_the_hidden_half_whatever_the_verdict():
+    """No number of gates passed on the half a candidate was chosen on
+    can establish it: that half is where the choosing happened."""
+    closed = cycle.Cycle(
+        stages=tuple(cycle.Stage(name, True, "") for name in cycle.STAGES),
+        verdict=ACCEPTED, hidden_margin=None, hidden_size=0)
+    assert closed.loop_closed is True
+    assert closed.improvement_proven is False
+
+    with_holdout = cycle.Cycle(
+        stages=closed.stages, verdict=ACCEPTED,
+        hidden_margin=0.1, hidden_size=6)
+    assert with_holdout.improvement_proven is True
+
+    lost_on_holdout = cycle.Cycle(
+        stages=closed.stages, verdict=ACCEPTED,
+        hidden_margin=-0.1, hidden_size=6)
+    assert lost_on_holdout.improvement_proven is False

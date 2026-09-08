@@ -77,6 +77,21 @@ MIN_SITUATIONS_FOR_CANNOT = 8
 #: watching everything fail, and record that as the way the world is.
 EPISODE_STEPS = 25
 
+#: Reset after this many attempts in a row have failed, instead of on the
+#: clock. Zero keeps the clock.
+#:
+#: The idea is read out of the record rather than picked off a grid: the
+#: schedule decides most of the model's quality -- 0.57 at episode length
+#: 10 against 0.91 at 25 on the discovery seeds -- and a clock wastes
+#: steps at both ends. It cuts a productive episode short, and it leaves a
+#: dead one running: after the power is cut nothing digital works, and
+#: every attempt until the next tick is a failure that removes nothing
+#: from any intersection.
+#:
+#: Off by default, and it stays off until a holdout says otherwise. The
+#: information policy was argued for just as plausibly and measured worse.
+RESET_AFTER_FAILURES = 0
+
 #: What an attempt would be worth, before it is made. The same three
 #: numbers `cognition/probes.py` puts on an experimental axis, for the
 #: same reason -- this is one fact about evidence, not two.
@@ -179,7 +194,8 @@ class Explorer:
 
     def explore(self, world: Any, steps: int = 400, seed: int = 0,
                 episode_steps: int = EPISODE_STEPS,
-                policy: str = DEFAULT_POLICY) -> "Explorer":
+                policy: str = DEFAULT_POLICY,
+                reset_after_failures: int = RESET_AFTER_FAILURES) -> "Explorer":
         """Act in the world, spreading attempts evenly over the actions.
 
         Even coverage: with a handful of actions the cheap thing to get
@@ -195,9 +211,18 @@ class Explorer:
         rng = random.Random(seed)
         actions = list(world.actions)
         tried: Dict[str, int] = {name: 0 for name in actions}
+        failures_in_a_row = 0
         self.note(world.observe())
         for step in range(steps):
-            if episode_steps and step and step % episode_steps == 0:
+            if reset_after_failures:
+                # The world has stopped answering. Resetting on that
+                # rather than on a clock keeps a productive episode
+                # running and cuts a dead one short.
+                if failures_in_a_row >= reset_after_failures:
+                    world.reset()
+                    failures_in_a_row = 0
+                    self.note(world.observe())
+            elif episode_steps and step and step % episode_steps == 0:
                 world.reset()
                 self.note(world.observe())
             if policy == BY_COVERAGE:
@@ -206,7 +231,9 @@ class Explorer:
             else:
                 action, _, _ = self.choose(actions, world.situation(), rng)
             tried[action] += 1
-            self.record(world.act(action))
+            outcome = world.act(action)
+            failures_in_a_row = 0 if outcome.succeeded else failures_in_a_row + 1
+            self.record(outcome)
         self.note(world.observe())
         return self
 

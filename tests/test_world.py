@@ -315,3 +315,30 @@ def test_neither_policy_drops_the_unfalsifiable_belief():
                                    policy=policy).model()
         assert ("link", "up", True) in model.rules["request"].preconditions
         assert model.rules["request"].status == BELIEVED
+
+
+# --------------------------------------------------------------------------
+# the schedule that watches the world, and what a holdout said about it
+# --------------------------------------------------------------------------
+
+def test_resetting_on_failures_replaces_the_clock():
+    """Both schedules explore; the question is only which is better, and
+    that is not settled here."""
+    on_the_clock = Explorer().explore(SmallWorld(seed=6), steps=300, seed=6)
+    on_failures = Explorer().explore(SmallWorld(seed=6), steps=300, seed=6,
+                                     reset_after_failures=2)
+    assert len(on_the_clock.attempts) == len(on_failures.attempts) == 300
+    # A different schedule visits different situations; if it did not,
+    # there would be nothing to measure.
+    assert ({a.before for a in on_the_clock.attempts}
+            != {a.before for a in on_failures.attempts})
+
+
+def test_the_default_schedule_is_the_one_the_holdout_did_not_refute():
+    """Chosen on seeds 1..40 it looked better by +0.0035; on forty seeds
+    nothing had read it came to -0.0057 [-0.0133, 0.0000], better in no
+    pair out of forty. The discovery win was fitted to its own seeds, and
+    the default did not move."""
+    assert explore_mod.RESET_AFTER_FAILURES == 0
+    signature = inspect.signature(Explorer.explore)
+    assert signature.parameters["reset_after_failures"].default == 0
