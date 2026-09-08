@@ -8,9 +8,15 @@ number in it stayed true.
 """
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 import pytest
 
 from mana.cognition import trials
+
+#: The checkout, so a spawned process imports the same code.
+ROOT = Path(__file__).resolve().parent.parent
 
 
 NAME = "test_experiment"
@@ -297,3 +303,117 @@ def test_turning_the_knobs_off_brings_the_old_failures_back():
                 got, _ = classify(task.prompt, difficulty=task.difficulty)
                 wrong += int(got != DOMAIN_KIND[domain])
     assert wrong > 20, "the old behaviour stopped being wrong on its own"
+
+
+# --------------------------------------------------------------------------
+# the control check: two processes, one holdout
+# --------------------------------------------------------------------------
+
+_READ_FRESH = """
+import json, os, sys
+from mana.cognition import trials
+name, marker = sys.argv[1], sys.argv[2]
+trials.register(name)
+strategy = {"strategy": marker}
+trials.seal(name, strategy)
+try:
+    result = trials.score(name, trials.FRESH, lambda seed: 0.5,
+                          strategy=strategy)
+    print(json.dumps({"ok": True, "read_number": result["read_number"]}))
+except trials.BudgetExceeded as refused:
+    print(json.dumps({"ok": False, "refused": str(refused)}))
+"""
+
+
+def _in_new_process(tmp_path, name, marker):
+    """A real second process, not a reset of the first one's memory.
+
+    The bug this exists for was invisible to an in-memory reset: the
+    counter was rebuilt from nothing on every start, so the only way to
+    see it was to actually start again.
+    """
+    import json
+    import subprocess
+    import sys
+
+    env = dict(os.environ)
+    env["MANA_DATA_DIR"] = str(tmp_path)
+    env["PYTHONPATH"] = str(ROOT)
+    env["PYTHONIOENCODING"] = "utf-8"
+    done = subprocess.run([sys.executable, "-c", _READ_FRESH, name, marker],
+                          capture_output=True, text=True, env=env,
+                          cwd=str(ROOT), timeout=300)
+    assert done.returncode == 0, done.stderr[-2000:]
+    return json.loads(done.stdout.strip().splitlines()[-1])
+
+
+def test_a_second_process_knows_the_fresh_split_was_already_read(tmp_path):
+    """The invariant the user asked for: same experiment, same fresh
+    split, different process -> the read number goes up and the second
+    read is detectable.
+
+    Before the counts were written down, process one read it, exited,
+    and process two started from zero and read it again believing it was
+    the first."""
+    first = _in_new_process(tmp_path, "control_check", "one")
+    assert first["ok"] is True and first["read_number"] == 1
+
+    second = _in_new_process(tmp_path, "control_check", "two")
+    assert second["ok"] is True, second
+    assert second["read_number"] == 2, "a restart handed the holdout back"
+
+    third = _in_new_process(tmp_path, "control_check", "three")
+    assert third["read_number"] == 3
+
+    fourth = _in_new_process(tmp_path, "control_check", "four")
+    assert fourth["ok"] is False and "квоте" in fourth["refused"]
+
+
+def test_the_same_strategy_is_refused_across_processes(tmp_path):
+    """Not only counted -- refused. Asking the same question twice until
+    the noise falls the right way is the leak the per-strategy limit
+    closes, and it has to survive a restart too."""
+    assert _in_new_process(tmp_path, "same_strategy", "identical")["ok"] is True
+    again = _in_new_process(tmp_path, "same_strategy", "identical")
+    assert again["ok"] is False
+    assert "уже отвечала" in again["refused"]
+
+
+def test_a_new_experiment_starts_its_own_count(tmp_path):
+    """New experiment, new declared split, independent counter -- even
+    when another experiment in the same store has spent everything."""
+    for marker in ("one", "two", "three"):
+        _in_new_process(tmp_path, "spent", marker)
+    assert _in_new_process(tmp_path, "spent", "four")["ok"] is False
+
+    started = _in_new_process(tmp_path, "quite_separate", "one")
+    assert started["ok"] is True and started["read_number"] == 1
+
+
+def test_no_domain_is_worse_under_the_adopted_naming_rule():
+    """The check the first experiment did not make and the aggregate hid:
+    `code` once fell from 100% to 37% while the mean rose by 0.22.
+
+    Verified on `task_naming_domains` (discovery 301..340, validation
+    401..440, fresh 501..540): every domain +0.0000 or better on both
+    hidden splits. This pins it so the rule cannot be widened later at
+    one domain's expense without something failing.
+    """
+    from mana.cognition.compiler import classify
+    from mana.cognition.synthesis import DOMAIN_KIND
+    from mana.core import tasks as task_gen
+    from mana.policy import Policy, use
+
+    old = Policy.of(classify_text_first=False, classify_premise_marker=False)
+    new = Policy.of(classify_text_first=True, classify_premise_marker=True)
+
+    def hits(policy, domain, seed):
+        with use(policy):
+            return sum(
+                classify(t.prompt, difficulty=t.difficulty)[0] == DOMAIN_KIND[domain]
+                for t in task_gen.generate(domain, 20, seed))
+
+    for domain in DOMAIN_KIND:
+        for seed in (601, 602, 603):
+            assert hits(new, domain, seed) >= hits(old, domain, seed), (
+                f"{domain} стал хуже на посеве {seed}")
