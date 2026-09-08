@@ -344,7 +344,13 @@ def test_ranking_is_a_suggestion_of_what_to_measure(monkeypatch):
                 Episode("b", "s", 2.0, "расскажи про налоги",
                         "Развёрнутый содержательный ответ про налоги.")]
     found = scan(episodes, TARGETS)
-    rows = candidates.rank(found, fd.situations_from(episodes, TARGETS))
+    # From the pre-adoption policy, so a candidate has somewhere to
+    # improve to. Against the policy in force there is nothing to gain
+    # here, which is the correct answer and not a useful test.
+    narrow = Policy.of(intent_verb_anywhere=False, intent_stem_match=False,
+                       intent_verb_forms="imperative")
+    rows = candidates.rank(found, fd.situations_from(episodes, TARGETS),
+                           current=narrow)
     assert rows
     evaluable = [r for r in rows if r["dry"].get("dry_evaluable")]
     assert evaluable
@@ -353,3 +359,28 @@ def test_ranking_is_a_suggestion_of_what_to_measure(monkeypatch):
     assert best["counterexamples"]["found"] == 0
     for row in rows:
         assert "accepted" not in row and "verdict" not in row
+
+
+def test_the_dry_baseline_is_the_policy_a_candidate_departs_from():
+    """Scoring against the recorded answers means comparing every
+    candidate with a version of MANA that no longer exists -- so after an
+    adoption they all look good for free. Found by reading the panel:
+    turning the adopted 1C fix back off scored as an improvement."""
+    monkey = Episode("a", "s", 1.0,
+                     "я хочу поработать с 1С запусти конфигуратор "
+                     "информационной базы",
+                     "Чтобы запустить, найдите ярлык 1С.")
+    situations = fd.situations_from([monkey], TARGETS)
+    narrow = Policy.of(intent_verb_anywhere=False, intent_stem_match=False,
+                       intent_verb_forms="imperative")
+
+    against_now = candidates.dry_report(narrow, situations)
+    against_narrow = candidates.dry_report(narrow, situations, current=narrow)
+
+    # Against the policy in force, reverting is a loss or a wash; against
+    # itself it is exactly a wash.
+    assert against_narrow["candidate_pass_rate"] ==            against_narrow["baseline_pass_rate"]
+    assert against_now["baseline_pass_rate"] >=            against_now["candidate_pass_rate"]
+    # The recorded number is kept: losing it would hide how far behaviour
+    # has moved from the record the findings came from.
+    assert "recorded_pass_rate" in against_now

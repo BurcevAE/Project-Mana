@@ -128,6 +128,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send(200, autostart.status())
             if route == "/api/build":
                 return self._send(200, build_manifest())
+            if route == "/api/self":
+                return self._send(200, self.session.self_knowledge())
             if route == "/api/ollama":
                 return self._send(200, self.session.ollama_status())
             if route == "/api/apps":

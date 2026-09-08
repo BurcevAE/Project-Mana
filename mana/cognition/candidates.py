@@ -80,7 +80,7 @@ from .failure_domain import Situation
 from .invariants import Violation
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 #: Invariants whose fix is exactly computable, stated rather than guessed.
 #: `choose_mechanism` takes this as a fact about the domain -- a factory
@@ -229,8 +229,21 @@ def dry_responder(policy: Policy) -> Callable[[Situation], Tuple[str, List[ToolC
     return respond
 
 
-def dry_report(policy: Policy, situations: Sequence[Situation]) -> Dict[str, Any]:
-    """Score a candidate on recorded situations, stating what it is worth.
+def dry_report(policy: Policy, situations: Sequence[Situation],
+               current: Optional[Policy] = None) -> Dict[str, Any]:
+    """Score a candidate against what MANA does now.
+
+    The baseline is the **policy in force**, not the recorded answers.
+    Found by looking at the panel after the 1C fix was adopted: turning
+    the adopted setting back off scored 0.625 -> 0.75 and read as an
+    improvement, because the recorded answers were produced under the
+    older, worse policy. Scoring against the record means every candidate
+    is compared with a version of MANA that no longer exists, and they
+    all look good for free -- a bias that grows with every adoption.
+
+    The recorded score is kept beside it: "what was actually said" is a
+    real number, and losing it would hide how far behaviour has moved
+    from the record the findings were drawn from.
 
     The `upper_bound` flag is not decoration. A feasible action can still
     fail, so this number is the best the candidate could do, never the
@@ -242,16 +255,23 @@ def dry_report(policy: Policy, situations: Sequence[Situation]) -> Dict[str, Any
     if not allowed:
         return {"dry_evaluable": False, "reason": why}
 
-    baseline = fd.replay(situations)
+    # The baseline is whatever the candidate is an alternative TO. That
+    # is `current` when a caller supplied one -- `rank` generates
+    # candidates from it, and comparing them against something else would
+    # score them against a policy nobody proposed departing from.
+    baseline = fd.evaluate(situations,
+                           dry_responder(current or policy_mod.BASELINE))
     candidate = fd.evaluate(situations, dry_responder(policy))
     return {
         "dry_evaluable": True,
         "upper_bound": True,
-        "note": ("предполагается, что выполнимое действие удаётся; "
-                 "реальный запуск может не удаться"),
+        "note": ("сравнение с сегодняшним поведением; предполагается, что "
+                 "выполнимое действие удаётся, а реальный запуск может "
+                 "не удаться"),
         "policy": policy.changes(),
         "baseline_pass_rate": round(fd.pass_rate(baseline), 4),
         "candidate_pass_rate": round(fd.pass_rate(candidate), 4),
+        "recorded_pass_rate": round(fd.pass_rate(fd.replay(situations)), 4),
         "counterexamples": fd.counterexamples(baseline, candidate),
         "changed": [j.situation_id for b, j in zip(baseline, candidate)
                     if b.passed != j.passed],
@@ -303,10 +323,11 @@ def rank(violations: Sequence[Violation], situations: Sequence[Situation],
     point of recording conditions is that a finding is a prior rather
     than a prohibition.
     """
+    current = current or policy_mod.BASELINE
     out: List[Dict[str, Any]] = []
     for candidate in propose(violations, current):
         row = candidate.as_dict()
-        row["dry"] = dry_report(candidate.policy, situations)
+        row["dry"] = dry_report(candidate.policy, situations, current)
         prior = prior_for(candidate, ledger)
         if prior is not None:
             row["already_tried"] = {
