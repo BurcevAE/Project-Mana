@@ -92,6 +92,39 @@ class Candidate:
                 "estimated_calls": self.estimated_calls, "reasons": list(self.reasons)}
 
 
+#: What a task is about rather than what it asks. Only consulted when
+#: `classify_text_first` is on; off by default, so declaring it changes
+#: nothing until a measurement says otherwise.
+_ABOUT_TEXT = ("текст:", "в тексте", "буква", "букв ", "слово", "слов ",
+               "строке", "предложени")
+
+#: A deduction from stated premises. The reasoning list holds the words of
+#: an explanation -- "почему", "объясни" -- and a logic task states its
+#: premises and asks who stands where, using none of them.
+_FROM_PREMISES = ("известно:", "известно,", "если ", "следует ли",
+                  "кто стоит", "на позиции", "верно ли, что")
+
+
+def _about_text(lowered: str) -> bool:
+    from ..policy import get
+    try:
+        if not get("classify_text_first"):
+            return False
+    except Exception:
+        return False
+    return any(marker in lowered for marker in _ABOUT_TEXT)
+
+
+def _from_premises(lowered: str) -> bool:
+    from ..policy import get
+    try:
+        if not get("classify_premise_marker"):
+            return False
+    except Exception:
+        return False
+    return any(marker in lowered for marker in _FROM_PREMISES)
+
+
 def classify(task: str, difficulty: Optional[float] = None) -> Tuple[str, float]:
     """A cheap (kind, difficulty) read of the task, with no model involved.
 
@@ -112,10 +145,23 @@ def classify(task: str, difficulty: Optional[float] = None) -> Tuple[str, float]
         from ..brains import BrainPool
         difficulty = BrainPool.estimate_difficulty(task)
     t = (task or "").lower()
-    if any(m in t for m in ("вычисли", "посчитай", "сколько", "calculate")):
-        kind = "math"
-    elif any(m in t for m in ("функци", "код", "python", "напиши функцию")):
+    if any(m in t for m in ("функци", "код", "python", "напиши функцию")):
+        # What the task asks to PRODUCE comes first. Found by measuring
+        # per domain instead of in aggregate: putting the text check
+        # above this took code from 100% to 37%, because "напиши функцию,
+        # которая считает слова в строке" is about a string and is not a
+        # question about a text.
         kind = "programming"
+    elif _about_text(t):
+        # What a task is about, before what it asks. Measured: a question
+        # that counts letters in a paragraph was called arithmetic 143
+        # times out of 200, because "сколько" is a maths word and nothing
+        # was looking at the paragraph.
+        kind = "general"
+    elif _from_premises(t):
+        kind = "reasoning"
+    elif any(m in t for m in ("вычисли", "посчитай", "сколько", "calculate")):
+        kind = "math"
     elif any(m in t for m in ("продолжи", "последовательность", "sequence")):
         kind = "sequence"
     elif any(m in t for m in ("почему", "объясни", "сравни", "обоснуй")):

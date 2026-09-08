@@ -106,14 +106,23 @@ def test_the_policy_is_restored_even_when_the_body_raises():
     assert policy_mod.get("intent_verb_anywhere") is True
 
 
-def test_every_knob_names_an_invariant_it_can_affect():
+def test_every_knob_names_something_that_can_measure_it():
     """This is how a proposal is connected to a measurement by
-    construction rather than by the proposer's belief."""
+    construction rather than by the proposer's belief.
+
+    Two kinds of measurable failure exist now, and a knob may name
+    either. An invariant reads a recorded episode and says a turn
+    contradicted itself; a trial experiment holds a domain with an oracle
+    and three splits. What is not allowed is a knob that names neither --
+    a setting nothing can score is a preference with a docstring.
+    """
+    from mana.cognition import trials
     from mana.cognition.invariants import INVARIANTS
 
-    names = {f.__name__ for f in INVARIANTS}
+    invariants = {f.__name__ for f in INVARIANTS}
+    experiments = {trials.WORLD_MODEL, trials.TASK_NAMING}
     for knob in KNOBS:
-        assert knob.addresses in names, knob.name
+        assert knob.addresses in (invariants | experiments), knob.name
 
 
 # --------------------------------------------------------------------------
