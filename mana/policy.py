@@ -40,10 +40,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 import threading
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
-from typing import Any, Dict, Iterator, Sequence, Tuple
+from pathlib import Path
+from typing import (Any, Dict, Iterator, Optional, Sequence,
+                    Tuple)
 
 #: Component version -- see mana/version.py for the bump conventions.
 __version__ = "1.2"
@@ -99,7 +102,7 @@ KNOBS: Tuple[Knob, ...] = (
          "конфигуратор» без них не распознавалось. Риск назван в замере — "
          "«ты уже открыла 1С?» вопрос, а не команда, — и снят требованием "
          "маркера просьбы («хочу», «прошу», «можешь») перед такой формой."),
-    Knob("classify_text_first", True, (True, False), "task_naming",
+    Knob("classify_text_first", False, (False, True), "task_naming",
          "Смотреть ли сначала, О ЧЁМ задача, и лишь потом, что она просит. "
          "«Сколько раз буква «и» встречается в тексте» считалось "
          "арифметикой, потому что в списке math есть «сколько»: слово "
@@ -108,7 +111,7 @@ KNOBS: Tuple[Knob, ...] = (
          "по трём выборкам: открытие 0.654 → 1.000, валидация +0.3535 "
          "[+0.3473, +0.3592], свежая +0.3465 [+0.3400, +0.3532], лучше "
          "40 из 40 на обеих скрытых, ни одного домена не сломано."),
-    Knob("classify_premise_marker", True, (True, False), "task_naming",
+    Knob("classify_premise_marker", False, (False, True), "task_naming",
          "Считать ли перечень посылок признаком рассуждения. Задача вида "
          "«Известно: … Кто стоит на позиции 2?» не содержит ни одного "
          "маркера из списка — там слова объяснения («почему», «объясни»), "
@@ -182,11 +185,114 @@ class Policy:
 BASELINE = Policy()
 
 _local = threading.local()
+_adopted_lock = threading.RLock()
+_adopted_cache: Optional[Dict[str, Any]] = None
+
+
+def _overlay_path() -> Path:
+    """Beside the journal and the ledger, not inside the package.
+
+    An adoption is a fact about this installation. Kept in the package it
+    would be lost on reinstall and shared by a repository, and a change
+    one machine earned would arrive on another with no evidence.
+    """
+    from .paths import resolve_data_path
+    return Path(resolve_data_path("policy/adopted.json"))
+
+
+class AdoptionRefused(RuntimeError):
+    """An adoption without evidence behind it."""
+
+
+#: What an adoption must name before it may be written. Not politeness:
+#: an overlay that can be written on an argument is the same thing as a
+#: default that can be edited on one.
+REQUIRED_EVIDENCE = ("experiment", "fresh", "verdict")
+
+
+def _load_adopted() -> Dict[str, Any]:
+    global _adopted_cache
+    with _adopted_lock:
+        if _adopted_cache is not None:
+            return _adopted_cache
+        try:
+            _adopted_cache = json.loads(
+                _overlay_path().read_text(encoding="utf-8"))
+        except Exception:
+            _adopted_cache = {}
+        return _adopted_cache
+
+
+def adopted() -> Policy:
+    """What evidence has earned, as a policy. BASELINE when nothing has."""
+    settings = (_load_adopted().get("settings") or {})
+    usable = {name: value for name, value in settings.items()
+              if name in _BY_NAME}
+    if not usable:
+        return BASELINE
+    try:
+        overlay = Policy.of(**usable)
+        # An overlay that changes nothing is the baseline. Returning the
+        # same object keeps "nothing is adopted" a single identity rather
+        # than a fresh equal-looking one every call.
+        return overlay if overlay.changes() else BASELINE
+    except Exception:
+        # A stored setting the knobs no longer allow. Ignored rather than
+        # raised: an old overlay must not stop the program starting, and
+        # falling back to the conservative behaviour is the safe way to
+        # be wrong.
+        return BASELINE
+
+
+def adoption_evidence() -> Dict[str, Any]:
+    """What was measured, and where. Empty when nothing is adopted."""
+    return dict(_load_adopted().get("evidence") or {})
+
+
+def adopt(policy: Policy, evidence: Dict[str, Any]) -> Policy:
+    """Put this policy in force, with the measurement that earned it.
+
+    Refuses without evidence naming the experiment, the fresh-split
+    result and the verdict. What is stored is the settings and the
+    numbers, so a person can read why their program behaves as it does
+    and take it off again.
+    """
+    missing = [key for key in REQUIRED_EVIDENCE if not (evidence or {}).get(key)]
+    if missing:
+        raise AdoptionRefused(
+            "принятие без свидетельства: не названо " + ", ".join(missing))
+    global _adopted_cache
+    payload = {"settings": policy.as_dict(), "changes": policy.changes(),
+               "evidence": dict(evidence), "at": time.time()}
+    with _adopted_lock:
+        path = _overlay_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=1),
+                        encoding="utf-8")
+        _adopted_cache = payload
+    return policy
+
+
+def revert() -> bool:
+    """Take the adoption off. The record of it stays in the ledger."""
+    global _adopted_cache
+    with _adopted_lock:
+        _adopted_cache = {}
+        try:
+            _overlay_path().unlink()
+            return True
+        except Exception:
+            return False
 
 
 def active() -> Policy:
-    """The policy this thread must answer under."""
-    return getattr(_local, "policy", None) or BASELINE
+    """The policy this thread must answer under.
+
+    Most specific first: an experiment's `use()` beats an adoption, which
+    beats the conservative default. That order is what lets a candidate be
+    measured against current behaviour whatever current behaviour is.
+    """
+    return getattr(_local, "policy", None) or adopted()
 
 
 @contextmanager

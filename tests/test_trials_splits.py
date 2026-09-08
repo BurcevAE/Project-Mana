@@ -273,18 +273,28 @@ def test_a_store_that_cannot_be_written_says_so(tmp_path, monkeypatch):
 # the decision this was built for
 # --------------------------------------------------------------------------
 
-def test_naming_a_task_is_right_on_every_domain_now():
+def test_naming_a_task_is_right_on_every_domain_under_the_adopted_policy():
     """The live decision `compiler.classify` makes, against the oracle
-    `synthesis.DOMAIN_KIND`. It was 65.7% overall with logic at 0% and
-    text_ops at 28.5%; both knobs are now on by default."""
+    `synthesis.DOMAIN_KIND`. It is 65.7% overall at the conservative
+    default -- logic 0%, text_ops 28.5% -- and 100% under the policy the
+    holdouts earned.
+
+    Stated explicitly rather than read from the ambient adoption: an
+    adoption is data on this installation now, and a test that depended
+    on it would pass or fail according to what the machine happened to
+    have adopted.
+    """
     from mana.cognition.compiler import classify
     from mana.cognition.synthesis import DOMAIN_KIND
     from mana.core import tasks as task_gen
+    from mana.policy import Policy, use
 
-    for domain, want in DOMAIN_KIND.items():
-        for task in task_gen.generate(domain, 20, seed=777):
-            got, _ = classify(task.prompt, difficulty=task.difficulty)
-            assert got == want, (domain, task.prompt[:70], got)
+    earned = Policy.of(classify_text_first=True, classify_premise_marker=True)
+    with use(earned):
+        for domain, want in DOMAIN_KIND.items():
+            for task in task_gen.generate(domain, 20, seed=777):
+                got, _ = classify(task.prompt, difficulty=task.difficulty)
+                assert got == want, (domain, task.prompt[:70], got)
 
 
 def test_turning_the_knobs_off_brings_the_old_failures_back():

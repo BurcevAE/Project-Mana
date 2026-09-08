@@ -61,6 +61,26 @@ def _no_ambient_api_keys(monkeypatch, request):
 
 
 @pytest.fixture(autouse=True)
+def _no_ambient_adoption(tmp_path_factory, monkeypatch):
+    """No test reads or writes the machine's adopted policy.
+
+    An adoption is now data on disk rather than an edit to a default, so
+    a suite that read it would pass or fail depending on what this
+    installation had adopted -- and one that wrote it would change the
+    user's program from a test run. The same lesson as the findings
+    ledger, which once had 46 real episodes written into the repository
+    root before its path answered to Config.
+    """
+    from mana import policy as policy_mod
+
+    store = tmp_path_factory.mktemp("adopted") / "adopted.json"
+    monkeypatch.setattr(policy_mod, "_overlay_path", lambda: store)
+    monkeypatch.setattr(policy_mod, "_adopted_cache", None, raising=False)
+    yield
+    monkeypatch.setattr(policy_mod, "_adopted_cache", None, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _restore_search_weights():
     """Undo any change a test makes to the tuneable search weights.
 
