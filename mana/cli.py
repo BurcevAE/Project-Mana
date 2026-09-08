@@ -576,6 +576,31 @@ def _show_next() -> int:
     return 0
 
 
+def _run_world(steps: int) -> int:
+    """Explore the small world and score the model that comes out.
+
+    An experiment, not a feature: nothing in the running agent consults a
+    world model, and this reports how much of one can be recovered from
+    acting in a world whose rules are known. The two failure kinds are
+    printed apart -- what was never established and what was invented --
+    because a missing condition promises too much and an invented one
+    refuses work that would have worked.
+    """
+    from .world.explore import Explorer
+    from .world.universe import SmallWorld, grade
+
+    world = SmallWorld(seed=7)
+    model = Explorer().explore(world, steps=steps, seed=7).model()
+    print(model.describe())
+    print()
+    print(f"=== сверка с настоящими правилами мира ({steps} шагов) ===")
+    print(grade(model).describe())
+    print()
+    print("Это опыт над самой идеей модели мира, а не возможность агента: "
+          "живой путь ответа никакую модель мира не спрашивает.")
+    return 0
+
+
 def _show_laws() -> int:
     """The law book: conditional claims and the status the evidence earns.
 
@@ -728,6 +753,10 @@ def build_parser() -> argparse.ArgumentParser:
                              "им дало накопленное свидетельство")
     parser.add_argument("--next", action="store_true", dest="next_probe",
                         help="Какое условие стоит поварьировать дальше и почему")
+    parser.add_argument("--world", nargs="?", const=1000, type=int, metavar="N",
+                        help="Опыт с моделью мира: исследовать маленькую "
+                             "вселенную N шагами и сверить восстановленную "
+                             "модель с её настоящими правилами")
     parser.add_argument("--series", action="store_true",
                         help="Как менялся результат по каждому вопросу при "
                              "изменении условий")
@@ -817,6 +846,9 @@ def main() -> int:
 
     if args.next_probe:
         return _show_next()
+
+    if args.world is not None:
+        return _run_world(int(args.world))
 
     if args.series:
         return _show_series()
