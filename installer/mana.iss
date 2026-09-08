@@ -103,5 +103,50 @@ Type: filesandordirs; Name: "{app}\mana\__pycache__"
 Type: filesandordirs; Name: "{app}\mana_desktop\__pycache__"
 Type: dirifempty; Name: "{app}"
 
+[Code]
+// WebView2 draws MANA's window. Windows 11 ships it; Windows 10 does not
+// guarantee it. Saying so during setup is worth a great deal more than
+// letting the first double-click do nothing at all -- and setup is the
+// moment the person is already prepared to install something.
+//
+// A warning, not a refusal: MANA runs from the command line without a
+// window, and the runtime can be installed afterwards.
+function WebView2Installed(): Boolean;
+var
+  Guid, Version: String;
+begin
+  // The braces are built with Chr rather than written literally, and that
+  // is not fussiness. Written as '{{...}}' the path came out with doubled
+  // braces, the registry lookup missed, and the warning would have fired
+  // on every machine INCLUDING ones that have WebView2 -- verified by
+  // logging the result on a machine with 152.0.4191.66 installed, which
+  // reported WebView2Installed=0. The compiler accepts both spellings, so
+  // only running it catches this.
+  Guid := Chr(123) + 'F3017226-FE2A-4295-8BDF-00C3A9A7E4C5' + Chr(125);
+  Result :=
+    RegQueryStringValue(HKLM, 'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\' + Guid, 'pv', Version) or
+    RegQueryStringValue(HKLM, 'SOFTWARE\Microsoft\EdgeUpdate\Clients\' + Guid, 'pv', Version) or
+    RegQueryStringValue(HKCU, 'SOFTWARE\Microsoft\EdgeUpdate\Clients\' + Guid, 'pv', Version);
+  if Result then
+    Result := (Version <> '') and (Version <> '0.0.0.0');
+  Log('MANA: WebView2Installed=' + IntToStr(Integer(Result)) + ' pv=' + Version);
+end;
+
+function InitializeSetup(): Boolean;
+begin
+  Result := True;
+  if not WebView2Installed() then
+  begin
+    MsgBox('На этом компьютере не найден WebView2 Runtime.'#13#10#13#10 +
+           'Им рисуется окно MANA. В Windows 11 он встроен, в Windows 10 —' +
+           ' нет.'#13#10#13#10 +
+           'Установка продолжится: MANA работает и из командной строки' +
+           ' (MANA.exe --cli). Чтобы открывалось окно, поставьте' +
+           ' «Evergreen Standalone Installer» отсюда:'#13#10 +
+           'https://developer.microsoft.com/microsoft-edge/webview2/',
+           mbInformation, MB_OK);
+  end;
+end;
+
 [Messages]
 russian.WelcomeLabel2=Будет установлена [name/ver].%n%nMANA устанавливается в папку пользователя и не требует прав администратора: приложение изменяет собственный код, а для этого каталог установки должен быть доступен ему на запись.%n%nПамять агента при удалении сохраняется — она лежит отдельно от программы.

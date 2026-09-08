@@ -91,10 +91,26 @@ class AgentSession:
         return self._agent
 
     def state(self) -> Dict[str, Any]:
+        # `language_models` separately from the brain count, because they
+        # answer different questions and only one of them decides whether
+        # MANA can hold a conversation. A machine with five algorithmic
+        # brains and no model reported "5/19 мозгов" -- true, and it left
+        # the user to work out for themselves why every question came
+        # back as a refusal.
+        models: list = []
+        pool = self._pool()
+        if pool is not None:
+            try:
+                models = [b for b in pool.language_models()
+                          if b in pool.brains and pool.usable(pool.brains[b])]
+            except Exception:
+                models = []
         return {
             "ready": self._ready.is_set() and self._agent is not None,
             "error": self._agent_error,
             "busy": self._busy.is_set(),
+            "language_models": models,
+            "has_language_model": bool(models),
         }
 
     def close(self) -> None:
@@ -235,6 +251,169 @@ class AgentSession:
             "fallback": bool(result.get("fallback")),
             "confidence": result.get("confidence"),
         }
+
+    # ---------- what MANA knows about itself ----------
+
+    def self_knowledge(self, limit: int = 200) -> Dict[str, Any]:
+        """The cognitive record, in one payload for the window.
+
+        Every section is wrapped on its own: a failure in the law book
+        must not cost the reader the journal, and a part that could not
+        be built comes back as an error beside the rest rather than as a
+        blank panel.
+
+        Bounded by `limit` because this is called when a tab opens. The
+        scan and the dry evaluation are cheap per episode and the record
+        is not, once somebody has been using MANA for months.
+        """
+        from mana.journal import Journal
+        from mana.cognition import (candidates, failure_domain, findings,
+                                    invariants, lawgiver, probes, series)
+
+        out: Dict[str, Any] = {}
+
+        def part(name: str, build):
+            try:
+                out[name] = build()
+            except Exception as exc:
+                out[name] = {"error": f"{type(exc).__name__}: {exc}"}
+
+        journal = Journal()
+        episodes = []
+        try:
+            episodes = journal.episodes(limit=limit)
+        except Exception as exc:
+            out["journal"] = {"error": f"{type(exc).__name__}: {exc}"}
+
+        if "journal" not in out:
+            part("journal", lambda: journal.stats(limit=limit))
+
+        violations = []
+        if episodes:
+            try:
+                violations = invariants.scan(episodes)
+            except Exception:
+                violations = []
+
+        by_id = {e.episode_id: e for e in episodes}
+
+        def found():
+            rows = []
+            for violation in violations:
+                episode = by_id.get(violation.episode_id)
+                rows.append({
+                    "invariant": violation.invariant, "kind": violation.kind,
+                    "reason": violation.reason,
+                    "request": (episode.request if episode else "")[:220],
+                    "answer": (episode.answer if episode else "")[:220],
+                    "when": episode.started if episode else 0.0})
+            # The summary is nested rather than merged: `summarise`
+            # returns its own "violations" as a count, and merging it
+            # silently replaced the list with an integer.
+            return {"violations": rows,
+                    "summary": invariants.summarise(episodes, violations)}
+
+        part("findings", found)
+
+        def proposed():
+            situations = failure_domain.situations_from(episodes)
+            book = lawgiver.load_book()
+            return candidates.rank(violations, situations, ledger=None)
+
+        part("proposals", proposed if violations else (lambda: []))
+
+        part("tried", lambda: [f.as_dict() | {"describe": f.describe()}
+                               for f in findings.Ledger().latest()])
+
+        def runs():
+            book = lawgiver.load_book()
+            rows = []
+            for run in series.all_series():
+                summary = run.summary()
+                summary["describe"] = run.describe()
+                summary["probes"] = [p.as_dict() for p in
+                                     probes.probes(run, book=book)][:6]
+                rows.append(summary)
+            return rows
+
+        part("series", runs)
+
+        part("laws", lambda: {
+            "laws": [{"describe": law.describe(), "status": law.status,
+                      "exceptions": list(law.exceptions),
+                      "trials": law.evidence.trials}
+                     for law in lawgiver.load_book().all()],
+            **lawgiver.report(lawgiver.load_book())})
+        return out
+
+    # ---------- getting a local model ----------
+
+    def ollama_status(self) -> Dict[str, Any]:
+        """What is installed, what is running, and what would suit here."""
+        from mana.apps import ollama_setup
+        state = ollama_setup.status()
+        if not state["has_model"]:
+            suggestion = ollama_setup.recommend()
+            state["recommended"] = suggestion.as_dict() if suggestion else None
+        return state
+
+    def ollama_setup_start(self, model: str = "") -> Dict[str, Any]:
+        """Install Ollama and pull a model, in the background.
+
+        Never on its own initiative. Several gigabytes of download and a
+        software installation are the user's decision, and this is only
+        reached from a button they pressed.
+        """
+        with self._cycle_lock:
+            if getattr(self, "_ollama_busy", False):
+                return {"ok": False, "error": "установка уже идёт"}
+            self._ollama_busy = True
+        threading.Thread(target=self._ollama_setup, name="MANA-Ollama",
+                         daemon=True, args=(model,)).start()
+        return {"ok": True}
+
+    def _ollama_setup(self, model: str) -> None:
+        from mana.apps import ollama_setup
+        try:
+            if not ollama_setup.executable():
+                events.emit(events.STATUS, "Устанавливаю Ollama...")
+                ollama_setup.install_runtime(
+                    on_line=lambda line: events.emit(events.PROGRESS, line[:160]))
+                events.emit(events.STATUS, "Ollama установлена")
+
+            if not model:
+                suggestion = ollama_setup.recommend()
+                if suggestion is None:
+                    events.emit(events.ERROR,
+                                "Не нашлось модели, которая пойдёт на этой машине")
+                    return
+                model = suggestion.model
+
+            events.emit(events.STATUS, f"Скачиваю {model}. Это гигабайты.")
+            ollama_setup.pull_model(
+                model, on_line=lambda line: events.emit(events.PROGRESS, line[:160]))
+
+            # Hot connect: the pool probed once at startup and has been
+            # calling this brain unusable ever since. Asking somebody to
+            # restart after a download they just waited through would be
+            # a poor way to end this.
+            pool = self._pool()
+            if pool is not None:
+                changed = pool.reprobe_local()
+                if changed.get("connected"):
+                    events.emit(events.STATUS,
+                                f"Модель подключена: {model}. Перезапуск не нужен.")
+                else:
+                    events.emit(events.STATUS,
+                                f"{model} скачана, но пул её не принял — "
+                                f"проверьте, запущена ли служба Ollama")
+            else:
+                events.emit(events.STATUS, f"{model} скачана")
+        except Exception as exc:
+            events.emit(events.ERROR, f"Не вышло: {type(exc).__name__}: {exc}")
+        finally:
+            with self._cycle_lock:
+                self._ollama_busy = False
 
     # ---------- the cognitive layer ----------
 

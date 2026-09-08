@@ -33,8 +33,9 @@ __version__ = "1.0"
 EXECUTABLE = "notepad++.exe"
 
 
-def open_file(path: str, line: int = 0, column: int = 0,
-              new_instance: bool = False) -> Dict[str, Any]:
+def open_file(path: str = "", line: int = 0, column: int = 0,
+              new_instance: bool = False, launch_only: bool = False
+              ) -> Dict[str, Any]:
     """Open a file in Notepad++, optionally at a position.
 
     Returns as soon as the editor has been launched, and says so: the
@@ -43,11 +44,22 @@ def open_file(path: str, line: int = 0, column: int = 0,
     "the user has read it" -- nothing here can know the second.
     """
     require("editor")
+    executable = find_executable(EXECUTABLE)
+
+    if launch_only or not path:
+        # "Открой Notepad++" is a request to start the program, and the
+        # first version of this function could only open a file in it --
+        # so the plainest possible instruction had no way to be carried
+        # out. Refusing for a missing file somebody never named would
+        # have been the wrong reading of the request.
+        process = subprocess.Popen([executable])
+        return {"shown": True, "path": "", "line": None,
+                "editor": executable, "pid": process.pid,
+                "note": "редактор запущен без открытого файла"}
+
     target = Path(path)
     if not target.exists():
         raise FileNotFoundError(f"нет файла {target}")
-
-    executable = find_executable(EXECUTABLE)
     command = [executable]
     if new_instance:
         # -multiInst opens a separate process; without it the file goes

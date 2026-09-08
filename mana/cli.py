@@ -133,6 +133,449 @@ def format_brains(status: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _show_journal(limit: int) -> int:
+    """Print what the last turns actually did.
+
+    The tool list per turn is the column worth reading. An answer that
+    says "открываю" beside an empty tool list is the failure this record
+    was created for -- and this only shows it, deliberately: judging is a
+    separate step with its own decisions, and a viewer that graded turns
+    would be asserting a verdict nobody has yet defined.
+    """
+    from .journal import Journal
+
+    journal = Journal()
+    stats = journal.stats()
+    if not stats["exists"]:
+        print(f"Журнала ещё нет: {stats['path']}")
+        print("Он пишется при обычной работе — задайте пару вопросов и вернитесь.")
+        return 0
+
+    print(f"{stats['path']}")
+    print(f"эпизодов: {stats['episodes']}   сессий: {stats['sessions']}   "
+          f"без единого вызова инструмента: {stats['with_no_calls']}")
+    print(f"по маршрутам: {stats['by_route']}")
+    if stats["by_tool"]:
+        top = list(stats["by_tool"].items())[:8]
+        print("инструменты: " + ", ".join(f"{n}×{c}" for n, c in top))
+    print()
+
+    for ep in journal.episodes(limit=limit):
+        when = time.strftime("%d.%m %H:%M", time.localtime(ep.started))
+        tools = ", ".join(f"{c.tool}{'' if c.ok else '!'}" for c in ep.calls)
+        print(f"[{when}] {ep.route:<13} {ep.latency:5.1f}s")
+        print(f"  запрос:       {ep.request[:150]}")
+        print(f"  ответ:        {ep.answer[:150]}")
+        print(f"  инструменты:  {tools or '(ни одного)'}")
+        print()
+    return 0
+
+
+def _show_findings(limit: int) -> int:
+    """Report the invariant violations in the recorded episodes.
+
+    Shadow: this reads a record already written and changes nothing. The
+    two kinds are printed apart on purpose -- `mechanical` is decided by
+    comparing recorded fields, `pattern` is a word list making a guess,
+    and presenting a guess as a fact is the failure this project keeps
+    having to fix.
+    """
+    from .journal import Journal
+    from .cognition.invariants import scan, summarise, MECHANICAL
+
+    journal = Journal()
+    episodes = journal.episodes(limit=limit)
+    if not episodes:
+        print(f"Журнала ещё нет или он пуст: {journal.path}")
+        return 0
+
+    violations = scan(episodes)
+    summary = summarise(episodes, violations)
+    print(f"Просмотрено ходов: {summary['episodes']}   "
+          f"с нарушением: {summary['episodes_with_a_violation']}   "
+          f"всего нарушений: {summary['violations']}")
+    print(f"по инвариантам: {summary['by_invariant'] or '(ничего)'}")
+    if summary["episodes"] < 30:
+        print("Выборка мала: как оценка доли это число ничего не значит.")
+    print()
+
+    known = {ep.episode_id: ep for ep in episodes}
+    for kind, title in ((MECHANICAL, "ИЗМЕРЕНО (сравнение записанных полей)"),
+                        ("pattern", "ПО ШАБЛОНУ (догадка, проверьте глазами)")):
+        chosen = [v for v in violations if v.kind == kind]
+        if not chosen:
+            continue
+        print(f"── {title} ── {len(chosen)}")
+        for violation in chosen:
+            episode = known.get(violation.episode_id)
+            when = (time.strftime("%d.%m %H:%M", time.localtime(episode.started))
+                    if episode else "?")
+            print(f"  [{when}] {violation.invariant}")
+            if episode is not None:
+                print(f"    запрос: {episode.request[:120]}")
+                print(f"    ответ:  {episode.answer[:120]}")
+            print(f"    почему: {violation.reason}")
+            print()
+    if not violations:
+        print("Ни один инвариант не нарушен.")
+    return 0
+
+
+def _show_proposals(limit: int) -> int:
+    """Print the changes MANA proposes for itself, ranked by a dry run.
+
+    Nothing here adopts anything. The ordering says what is worth
+    measuring properly, not what to ship -- acceptance belongs to
+    core/gates.py, on evidence.
+    """
+    from .journal import Journal
+    from .cognition import invariants, candidates, failure_domain
+
+    journal = Journal()
+    episodes = journal.episodes(limit=limit)
+    if not episodes:
+        print(f"Журнала ещё нет или он пуст: {journal.path}")
+        return 0
+
+    violations = invariants.scan(episodes)
+    if not violations:
+        print(f"Просмотрено ходов: {len(episodes)}. Нарушений нет — "
+              f"предлагать нечего.")
+        return 0
+
+    situations = failure_domain.situations_from(episodes)
+    rows = candidates.rank(violations, situations)
+    print(f"Ходов: {len(episodes)}   нарушений: {len(violations)}   "
+          f"кандидатов: {len(rows)}")
+    print("Оценка всухую — верхняя граница: считается, что выполнимое "
+          "действие удаётся.")
+    print()
+
+    for row in rows:
+        dry = row.get("dry") or {}
+        if dry.get("dry_evaluable"):
+            gain = dry["candidate_pass_rate"] - dry["baseline_pass_rate"]
+            head = (f"{dry['baseline_pass_rate']:.2f} -> "
+                    f"{dry['candidate_pass_rate']:.2f}  "
+                    f"({gain:+.2f}, сломано: "
+                    f"{dry['counterexamples']['found']})")
+        else:
+            head = "всухую не оценивается"
+        print(f"  {head}")
+        print(f"    менять:  {row['changes']}")
+        print(f"    целит в: {row['addresses']}  ({row['observed_failures']} наруш.)")
+        print(f"    почему:  {row['rationale'][:150]}")
+        if not dry.get("dry_evaluable") and dry.get("reason"):
+            print(f"    оценка:  {dry['reason'][:150]}")
+        print()
+
+    print("Ни одно из этих изменений не применено. Вердикт выносят ворота "
+          "по свидетельствам, а их пока недостаточно.")
+    return 0
+
+
+def _show_capabilities() -> int:
+    """What MANA can do beyond what it shipped with, and whether it is
+    proved. A capability that is installed but failed its checks is
+    reported as REFUSED and must not be used: a rules engine that is
+    quietly wrong is a lying oracle, and every measurement built on it is
+    poisoned invisibly."""
+    from .acquire import status_all
+
+    for reported in status_all():
+        verification = reported["verification"]
+        print(f"{reported['name']}: {reported['what']}")
+        print(f"  {reported['describe']}")
+        print(f"  истина из: {reported['truth_source']}")
+        for check in verification.get("checks", []):
+            mark = "OK  " if check["ok"] else "СБОЙ"
+            print(f"    {mark} {check['name']}: "
+                  f"ждали {check['expected']}, получили {check['got']}")
+        if verification["status"] == "ABSENT":
+            print(f"  установить: MANA.exe --acquire {reported['name']} --yes")
+        print()
+    return 0
+
+
+def _acquire_capability(name: str, consented: bool) -> int:
+    """Install a declared provider, only when a person said so.
+
+    `pip install` executes code from the package, so consent is the line
+    between self-improving and self-compromising. It is a separate word
+    on the command line rather than a prompt, so it also cannot be
+    implied by a script or a hook.
+    """
+    from .acquire import capability, install, packages_dir, ConsentRequired
+
+    known = capability(name)
+    if known is None:
+        print(f"Способность «{name}» не объявлена. Доступные: "
+              f"MANA.exe --capabilities")
+        return 2
+
+    if not consented:
+        provider = known.providers[0]
+        print(f"Способность:  {known.name} — {known.what}")
+        print(f"Поставщик:    пакет «{provider.package}» ({provider.why})")
+        print(f"Проверка:     {known.truth_source}")
+        print(f"Куда:         {packages_dir()}")
+        print()
+        print("pip install исполняет код из пакета. Ничего не установлено.")
+        print(f"Если согласны:  MANA.exe --acquire {name} --yes")
+        return 0
+
+    print(f"Устанавливаю {known.providers[0].package}...")
+    try:
+        result = install(name, consented=True,
+                         on_line=lambda line: print(f"  {line[:120]}"))
+    except ConsentRequired as exc:
+        print(str(exc))
+        return 2
+    print()
+    if not result.get("ok"):
+        print("Не вышло: " + str(result.get("error") or result.get("describe")))
+        for check in (result.get("verification") or {}).get("checks", []):
+            if not check["ok"]:
+                print(f"  СБОЙ {check['name']}: ждали {check['expected']}, "
+                      f"получили {check['got']}")
+        return 1
+    print(result["describe"])
+    return 0
+
+
+def _practice(games: int) -> int:
+    """Play games against itself and add them to the corpus.
+
+    Refuses outright when the rules engine is not verified. A corpus
+    generated on a subtly wrong engine is wrong in a way nothing
+    downstream can detect, so this is a refusal rather than a warning.
+    """
+    from .cognition import chess_arena as arena
+
+    corpus = arena.Corpus()
+    if games <= 0:
+        stats = corpus.stats()
+        if not stats["exists"]:
+            print(f"Корпуса ещё нет: {stats['path']}")
+            print("Сыграть партии:  MANA.exe --practice 50")
+            return 0
+        print(f"{stats['path']}")
+        print(f"партий: {stats['games']}   позиций: {stats['positions']}")
+        print("Независимых наблюдений здесь столько же, сколько партий: "
+              "позиции одной партии делят дебют и исход.")
+        print(f"по результату: {stats['by_result']}")
+        print(f"по причине:    {stats['by_reason']}")
+        print(f"суммарно:      {stats['plies_total']} полуходов, "
+              f"{stats['seconds_total']:.0f}с игры")
+        return 0
+
+    try:
+        chess = arena.oracle()
+    except arena.Unverified as exc:
+        print(f"Играть нельзя: {exc}")
+        print("Приобрести правила:  MANA.exe --acquire chess_rules --yes")
+        return 1
+
+    player = arena.SearchPlayer(depth=2, name="material-d2")
+    before = len(corpus.games())
+    print(f"Играю {games} партий ({player.name} против себя)...")
+
+    played = []
+    def note(game):
+        played.append(game)
+        if len(played) % 10 == 0:
+            print(f"  {len(played)}/{games}", flush=True)
+
+    batch = arena.self_play(player, games, seed=before * 1000, chess=chess,
+                            on_game=note)
+    corpus.append(batch)
+    stats = corpus.stats()
+    print()
+    print(f"Сыграно {len(batch)}. В корпусе: {stats['games']} партий, "
+          f"{stats['positions']} позиций.")
+    print(f"по результату: {stats['by_result']}")
+    return 0
+
+
+def _show_tried() -> int:
+    """Print the findings ledger: what was tried and what came of it.
+
+    A negative result is the valuable one. "We tried this and it did not
+    work" saves more time than the positive case, which is usually
+    already visible in the behaviour, and it is invisible by construction
+    unless somebody writes it down.
+    """
+    from .cognition.findings import Ledger
+
+    ledger = Ledger()
+    stats = ledger.stats()
+    if not stats["exists"]:
+        print(f"Реестра находок ещё нет: {stats['path']}")
+        print("Он заполняется, когда эксперимент доходит до вердикта.")
+        return 0
+
+    print(f"{stats['path']}")
+    print(f"экспериментов: {stats['experiments']}   записей: {stats['records']}")
+    print(f"по вердиктам:  {stats['by_verdict']}")
+    print()
+    for finding in ledger.latest():
+        print(finding.describe())
+        moved = ", ".join(f"{k}={v}" for k, v in sorted(finding.conditions.items()))
+        if moved:
+            print(f"  условия: {moved}")
+        if finding.note:
+            print(f"  замечание: {finding.note[:400]}")
+        print()
+    print("Находка — это основание ожидать исхода, а не запрет проверять "
+          "снова: если условия сдвинулись, эксперимент имеет смысл повторить.")
+    return 0
+
+
+def _show_series() -> int:
+    """Print each question's run of findings and where the class changed.
+
+    It reports differences between recorded rows and explains nothing. A
+    reader that said "increasing the corpus improves the result" would be
+    making a causal claim from two points and putting it into the record
+    with the authority of an observation.
+    """
+    from .cognition import series
+
+    runs = series.all_series()
+    if not runs:
+        print("Реестр находок пуст — серий нет.")
+        print("Он заполняется, когда эксперимент доходит до вердикта.")
+        return 0
+
+    for run in runs:
+        print(run.describe())
+        summary = run.summary()
+        if summary["confounded_flips"]:
+            print(f"  переворотов с несколькими изменёнными условиями: "
+                  f"{summary['confounded_flips']} — приписать перемену "
+                  f"одному условию нельзя")
+        if summary["unusable"]:
+            print(f"  пар, которые нельзя сравнить: {summary['unusable']}")
+        print()
+    print("Серия показывает, ГДЕ класс изменился и ЧТО при этом отличалось. "
+          "Почему — она не говорит.")
+    return 0
+
+
+def _show_next() -> int:
+    """Which condition is worth varying next, per question.
+
+    It ranks axes and delegates the choice to `experiments.select`, the
+    same selector and the same floor everything else is held to. Cost is
+    the caller's fact, so nothing is priced here and every axis comes back
+    unpriced -- visible rather than assumed cheap.
+    """
+    from .cognition import lawgiver, probes, series
+
+    runs = series.all_series()
+    if not runs:
+        print("Реестр находок пуст — предлагать нечего.")
+        return 0
+
+    # A standing law with an untested limit lifts the axis it claims
+    # about. That is what PROPOSED is licensed to do -- point at the next
+    # experiment -- and it may not change how anything answers.
+    book = lawgiver.load_book()
+    for run in runs:
+        print(f"вопрос: {run.question}")
+        print(f"наблюдений: {len(run.observations)}   домен: {run.domain or '—'}")
+        if len(run.observations) < 2:
+            print("  серия из одного наблюдения — оси ещё не сравнивались")
+        for probe in probes.probes(run, book=book):
+            print("  " + probe.describe())
+        print()
+
+    print("Цена не задана: чем обходится опыт — факт предметной области, "
+          "и придумывать его здесь значило бы придумывать измерение.")
+    print("Управляемые оси не объявлены, поэтому список включает и "
+          "контекстные условия (версии компонентов). Это ранжирование, "
+          "а не выбор: отсеять их — задача того, кто ставит опыт.")
+    return 0
+
+
+def _show_laws() -> int:
+    """The law book: conditional claims and the status the evidence earns.
+
+    Statuses are derived, never set. PROPOSED means one supported
+    experiment and nothing beyond it -- a summary of counts alone would
+    let that read as "almost a law".
+    """
+    from .cognition import lawgiver, series
+    from .cognition.laws import LawBook
+
+    book = lawgiver.load_book()
+    made = []
+    for run in series.all_series():
+        made.extend(lawgiver.propose(run, book))
+    if made:
+        lawgiver.save_book(book)
+
+    if not book.all():
+        print("Законов пока нет.")
+        print("Закон рождается из ИЗОЛИРОВАННОГО переворота в серии: одно "
+              "условие изменилось, класс изменился, метод тот же.")
+        print("Смотреть серии:  MANA.exe --series")
+        return 0
+
+    for law in book.all():
+        print(law.describe())
+        for note in law.exceptions:
+            print(f"    исключение: {note}")
+        if law.history:
+            for step in law.history:
+                print(f"    статус {step['from']} -> {step['to']} "
+                      f"на {step['trials']} испытаниях")
+        print()
+
+    reported = lawgiver.report(book)
+    print(f"по статусам: {reported['by_status']}")
+    print(reported["note"])
+    return 0
+
+
+def _forget_junk(consented: bool) -> int:
+    """Remove stored items the guards would refuse to write today.
+
+    Reports first and removes only when told to. Deleting somebody's
+    memory is not something to do quietly, and a cleanup that reports a
+    count without the rows is one nobody can check.
+    """
+    from .config import Config
+    from . import ManaAgent
+
+    cfg = Config(enable_llm=False, enable_web=False)
+    cfg.ensure_dirs()
+    graph = ManaAgent(cfg).graph_memory
+    report = graph.forget_junk(consented=consented)
+
+    nodes, entities = report["nodes"], report["entities"]
+    if not nodes and not entities:
+        print("Мусора в памяти не найдено.")
+        return 0
+
+    print(f"Записи, которые сегодняшние ограждения не пропустили бы: "
+          f"{len(nodes)} узлов, {len(entities)} осиротевших сущностей")
+    print()
+    for row in nodes:
+        print(f"  узел      {row['text']}")
+    for row in entities:
+        print(f"  сущность  {row['text']}")
+    print()
+    if report.get("error"):
+        print("Не удалось удалить: " + report["error"])
+        return 1
+    if report["removed"]:
+        print("Удалено.")
+        return 0
+    print("Ничего не удалено. Если согласны:  MANA.exe --forget-junk --yes")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Argument parser, split out of main() so tests can construct it
     without running the agent."""
@@ -181,6 +624,39 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--paths-status", action="store_true",
                         help="Где MANA ищет состояние, песочницу и собственный код "
                              "(первое, что нужно смотреть, если память 'потерялась')")
+    parser.add_argument("--journal", nargs="?", const=20, type=int, metavar="N",
+                        help="Что MANA реально делала на последних N ходах: "
+                             "запрос, вызванные инструменты, ответ")
+    parser.add_argument("--findings", nargs="?", const=200, type=int, metavar="N",
+                        help="Прогнать инварианты по последним N ходам журнала "
+                             "и показать найденные отказы (ничего не меняет)")
+    parser.add_argument("--propose", nargs="?", const=200, type=int, metavar="N",
+                        help="Какие изменения MANA предлагает себе по последним "
+                             "N ходам журнала (ничего не применяет)")
+    parser.add_argument("--laws", action="store_true",
+                        help="Законы: условные утверждения и статус, который "
+                             "им дало накопленное свидетельство")
+    parser.add_argument("--next", action="store_true", dest="next_probe",
+                        help="Какое условие стоит поварьировать дальше и почему")
+    parser.add_argument("--series", action="store_true",
+                        help="Как менялся результат по каждому вопросу при "
+                             "изменении условий")
+    parser.add_argument("--tried", action="store_true",
+                        help="Что уже проверяли и чем это кончилось "
+                             "(чтобы не повторять эксперимент заново)")
+    parser.add_argument("--practice", nargs="?", const=0, type=int, metavar="N",
+                        help="Сыграть N партий на проверенном движке и добавить "
+                             "их в корпус; без числа — показать накопленное")
+    parser.add_argument("--forget-junk", action="store_true", dest="forget_junk",
+                        help="Показать записи памяти, которые сегодняшние "
+                             "ограждения не пропустили бы; удаляет только с --yes")
+    parser.add_argument("--capabilities", action="store_true",
+                        help="Что MANA умеет сверх поставки и доказано ли это")
+    parser.add_argument("--acquire", metavar="ИМЯ",
+                        help="Приобрести способность: показывает план; "
+                             "устанавливает только вместе с --yes")
+    parser.add_argument("--yes", action="store_true",
+                        help="Согласие на установку для --acquire")
     parser.add_argument("--list-brains", action="store_true",
                         help="Показать все мозги: какие настроены, готовы, в кулдауне или исчерпали free-tier")
     parser.add_argument("--brains-status", action="store_true",
@@ -233,6 +709,42 @@ def main() -> int:
     if args.paths_status:
         print(json.dumps(paths.status(), ensure_ascii=False, indent=2))
         return 0
+
+    # Before any agent is constructed: reading the record must not require
+    # loading embedding models, and a journal that cannot be read without
+    # starting the thing it observes is not evidence anybody will look at.
+    if args.journal is not None:
+        return _show_journal(int(args.journal))
+
+    if args.findings is not None:
+        return _show_findings(int(args.findings))
+
+    if args.propose is not None:
+        return _show_proposals(int(args.propose))
+
+    if args.laws:
+        return _show_laws()
+
+    if args.next_probe:
+        return _show_next()
+
+    if args.series:
+        return _show_series()
+
+    if args.tried:
+        return _show_tried()
+
+    if args.practice is not None:
+        return _practice(int(args.practice))
+
+    if args.forget_junk:
+        return _forget_junk(bool(args.yes))
+
+    if args.capabilities:
+        return _show_capabilities()
+
+    if args.acquire:
+        return _acquire_capability(str(args.acquire), bool(args.yes))
 
     # Handled before any agent is constructed: reporting the version must
     # not require loading embedding models or opening databases.

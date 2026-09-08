@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+from .. import echo_guard
 from ..config import Config, RandomManager
 from ..knowledge import KnowledgeBase
 from ..web import WebSearcher
@@ -36,6 +37,7 @@ from ..llm import LLMClient, LLMCallMeta
 from ..pipeline import PipelineSpec, PipelineFactory, BenchmarkTask, BenchmarkSuite
 from ..experience import ExperienceDB
 from ..verifier import LocalVerifier
+from ..journal import Journal
 from ..memory import MemoryManager
 from ..version import PRODUCT_VERSION, format_version_report
 from ..hardware import detect_hardware, apply_hardware_profile
@@ -114,6 +116,13 @@ class CoreMixin:
         self.stop_policy_stats: Dict[str, Dict[str, Any]] = {}
         self.verifier = LocalVerifier(self.config, self._vlog)
         self.tools = build_default_registry(self)
+        # What a turn actually did, written down. Nothing before this
+        # recorded it: the answer went to memory and the trace of tool
+        # calls went nowhere, which is why a reply that narrated an
+        # action it never performed left no evidence behind. The journal
+        # only records -- it judges nothing and blocks nothing.
+        self.journal = Journal(self.config.journal_path, version=self.VERSION)
+        self.tools.observe(self.journal.note_call)
         self.learned_route_examples: List[Dict[str, Any]] = []
         self.learned_router_model = None
         self.learned_router_trained_n = 0
@@ -457,7 +466,185 @@ class CoreMixin:
             from ..intent import AmbiguousReference
             return AmbiguousReference(False, reason=f"check failed: {exc}")
 
+    def _perform_app_intent(self, task: str) -> Optional[Dict[str, Any]]:
+        """Carry out "запусти X", or return None and let the model answer.
+
+        None is the usual answer. This must stay out of the way of every
+        message that is not an instruction to launch something.
+
+        The reply is built from the tool's OUTCOME, never from the
+        request. That is the whole point: the defect was an answer
+        written from what was asked rather than from what happened, and a
+        refusal passed through honestly ("не найден Notepad++") is worth
+        more than a confident "открываю".
+        """
+        try:
+            from ..apps import intent as app_intent
+            found = app_intent.match(task)
+            if found is None:
+                return None
+            outcome = app_intent.perform(found, self.tools)
+            answer = app_intent.describe(found, outcome)
+        except Exception as exc:
+            self._vlog(f"app intent failed: {exc}")
+            return None
+
+        self._remember_exchange(task, answer)
+        return {
+            "task": task, "answer": answer, "latency": 0.0,
+            "trace": {"app_intent": found.as_dict(),
+                      "performed": outcome["ok"],
+                      "tool_error": outcome["error"]},
+            "pipeline": asdict(self.pipeline), "critic_score": 0.0,
+            "critic_trace": {}, "llm_ok": False, "passes_used": 0,
+            "timeout_count": 0, "fallback": False, "llm_latency": 0.0,
+            "verification_trust": "INDEPENDENTLY_VERIFIED" if outcome["ok"]
+                                  else "UNVERIFIED",
+        }
+
+    def _remember_exchange(self, task: str, answer: str) -> None:
+        """Record a turn the normal answer path did not write."""
+        try:
+            self.persistent_memory.remember_user(self.session_id, task)
+            self.persistent_memory.remember_assistant(self.session_id, answer)
+        except Exception as exc:
+            self._vlog(f"could not record the exchange: {exc}")
+
+    def _previous_exchange(self) -> List[Tuple[str, str]]:
+        """The exchanges before this turn, newest first.
+
+        How many is `policy.echo_lookback`, whose default is 1 -- the
+        behaviour this had before. Measured on a real session: an answer
+        repeated word for word four turns later, and at a depth of one
+        that repeat is invisible. The knob existed and nothing called it.
+        """
+        from .. import policy as policy_mod
+
+        try:
+            return echo_guard.previous_exchanges(
+                self.persistent_memory, self.session_id,
+                limit=int(policy_mod.get("echo_lookback")))
+        except Exception as exc:
+            self._vlog(f"echo check could not read history: {exc}")
+            return []
+
+    def _reject_echo(self, task: str, result: Dict[str, Any],
+                     before: Sequence[Tuple[str, str]]) -> Dict[str, Any]:
+        """Answer again, without the conversation, if this one repeats it.
+
+        Reproduced on a clean state directory: "Какая погода в Воронеже?"
+        answered correctly, and "Привет, Мана" came back with the same
+        weather report word for word. `[RECENT CONVERSATION]` puts prior
+        turns into the prompt as `MANA: <answer>`, and a small model
+        reading six thousand characters of preamble finds that the most
+        answer-shaped text available is its own last answer. A greeting
+        gives it nothing better to do.
+
+        The retry suppresses the recalled conversation rather than
+        rewording an instruction about it: the block is what the model is
+        copying, and removing the thing being copied is a fix, while
+        asking it not to is a hope.
+
+        If the second attempt repeats too, the first answer is returned
+        with the finding attached. Refusing outright would trade a wrong
+        answer for no answer on the cases where the repetition was
+        actually correct and the check was wrong.
+        """
+        answer = str(result.get("answer") or "")
+        try:
+            # Against every exchange the policy asked for, not only the
+            # last: the repeat measured on a real session was four turns
+            # back, and comparing with one turn could not see it.
+            echo = echo_guard.repeats_any_previous(task, answer, before)
+        except Exception as exc:
+            self._vlog(f"echo check skipped: {exc}")
+            return result
+        if echo is None:
+            return result
+
+        self._vlog(f"answer repeated the previous one ({echo['answer_similarity']}); "
+                   f"asking again without the conversation")
+        # Both knobs, not just the conversation. Suppressing
+        # `[RECENT CONVERSATION]` alone left the same stale material
+        # reaching the model through the evidence blocks, and the retry
+        # came back reciting it again. For a question that needs no
+        # history -- a greeting is the clearest case -- the right amount
+        # of recalled context is none.
+        remembered = (getattr(self.config, "memory_recent_messages", 0),
+                      getattr(self.config, "memory_retrieval_limit", 0))
+        try:
+            self.config.memory_recent_messages = 0
+            self.config.memory_retrieval_limit = 0
+            retried = self.answer(task, self.pipeline, save_memory=False,
+                                  context_tag="USER")
+        except Exception as exc:
+            self._vlog(f"retry without conversation failed: {exc}")
+            result.setdefault("trace", {})["echo_of_previous"] = dict(
+                echo, retried=False)
+            return result
+        finally:
+            (self.config.memory_recent_messages,
+             self.config.memory_retrieval_limit) = remembered
+
+        # Against the same set the first check used, not just the last
+        # exchange: a retry that lands on a different old answer is still
+        # a repeat, and checking a narrower window would call it fixed.
+        again = echo_guard.repeats_any_previous(
+            task, str(retried.get("answer") or ""), before)
+        if again is not None:
+            # Still repeating. Keep the original and say so, rather than
+            # returning nothing: the check may be the thing that is wrong.
+            result.setdefault("trace", {})["echo_of_previous"] = dict(
+                echo, retried=True, retry_helped=False)
+            return result
+
+        retried.setdefault("trace", {})["echo_of_previous"] = dict(
+            echo, retried=True, retry_helped=True)
+        return retried
+
+    @staticmethod
+    def _route_of(result: Dict[str, Any]) -> str:
+        """Which path answered, read off the result rather than guessed.
+
+        The routes fail differently -- `app_intent` builds its reply from
+        a tool outcome, `pipeline` builds it from a model -- so anything
+        reading the journal later has to be able to tell them apart, and
+        deriving it from what came back keeps the four exits of
+        `solve_task` from each having to remember to say.
+        """
+        trace = result.get("trace") or {}
+        if trace.get("clarification_requested"):
+            return "clarification"
+        if result.get("memory_action"):
+            return "memory_write"
+        if trace.get("app_intent"):
+            return "app_intent"
+        return "pipeline"
+
     def solve_task(self, task: str) -> Dict[str, Any]:
+        """One user turn, recorded as it happens.
+
+        The journal wraps rather than being threaded through the four
+        exits below: an episode left open by an early return would
+        collect the next turn's tool calls and attribute them to this
+        one, and a raised exception would do the same. Wrapping is the
+        only version where every way out of this method closes the record.
+
+        Nothing here can fail the turn. `finish` and `abandon` swallow
+        their own errors, because evidence-keeping that can break the
+        thing it observes is not worth keeping.
+        """
+        self.journal.open(task, session=self.session_id)
+        try:
+            result = self._solve_task(task)
+        except Exception:
+            self.journal.abandon()
+            raise
+        self.journal.finish(str(result.get("answer") or ""),
+                            self._route_of(result))
+        return result
+
+    def _solve_task(self, task: str) -> Dict[str, Any]:
         if self.config.clarify_ambiguous_followups:
             ambiguous = self._ambiguous_followup(task)
             if ambiguous:
@@ -485,7 +672,27 @@ class CoreMixin:
             self.history.append({"type":"memory_action","task":task,"cycle":self.cycle,"latency":0.0,"reliability":1.0,"quality":None,"timestamp":time.time(),**result})
             self._save_state()
             return result
+        # Read before answering. `answer(save_memory=True)` writes this
+        # exchange as it goes, so asking afterwards returns the CURRENT
+        # question and answer as "previous" -- the guard then compares the
+        # answer with itself, sees identical questions, calls it
+        # consistency and passes everything. Which is what it did.
+        # An instruction to launch something is carried out, not
+        # narrated. Measured before this existed: "Открой Notepad++"
+        # answered "Открываю Notepad++." and called no tool at all --
+        # ten application tools were registered and none was reachable,
+        # because the answer pipeline calls a fixed list and never
+        # consults the registry for one that matches the request.
+        #
+        # Checked before the model, so it also works on an installation
+        # with no model -- which is the state a fresh one is in.
+        acted = self._perform_app_intent(task)
+        if acted is not None:
+            return acted
+
+        before = self._previous_exchange()
         result = self.answer(task, self.pipeline, save_memory=True, context_tag="USER")
+        result = self._reject_echo(task, result, before)
         self.history.append({
             "type": "user_task", "task": task, "cycle": self.cycle,
             "latency": result["latency"], "reliability": 1.0 if result.get("llm_ok") else 0.0,

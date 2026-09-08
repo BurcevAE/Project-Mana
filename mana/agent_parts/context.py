@@ -62,6 +62,37 @@ class ContextMixin:
         t=(task or "").strip().lower()
         return bool(re.match(r"^(python|py)\s+mana_[^\s]+(?:\.py)?\s+--[a-z0-9_-]+", t))
 
+    #: Which stored records are turns in the conversation, and who said
+    #: them. An allowlist: a kind added later is not speech until somebody
+    #: says so here, so it goes missing rather than appearing as MANA
+    #: talking to itself.
+    #:
+    #: `DECISION` is the one this exists for. It is an internal routing
+    #: log, and both render sites showed it to the model -- one as
+    #: "MANA: task= | route= | verified=none", the other as
+    #: "DECISION: ...". A quarter of the recalled window was MANA
+    #: apparently speaking in a log format.
+    SPOKEN = {"USER_MESSAGE": "USER", "MANA_RESPONSE": "MANA"}
+
+    def _spoken_turns(self, records: Any, limit: int) -> List[str]:
+        """The last `limit` conversation turns, labelled by speaker.
+
+        Filtered before the limit is applied, not after: with the log
+        interleaved one-for-one, slicing first spent a quarter of the
+        window on records that are not speech.
+        """
+        turns: List[str] = []
+        for record in records or ():
+            speaker = self.SPOKEN.get(str(record.get("kind") or ""))
+            if speaker is None:
+                continue
+            content = str(record.get("content") or "").strip()
+            if not content:
+                # An empty turn says nothing and still costs a line.
+                continue
+            turns.append(f"{speaker}: {content}")
+        return turns[-max(0, int(limit)):] if limit else []
+
     def _conversation_recall_context(self, query: str) -> Tuple[str, Dict[str, Any]]:
         pdata=self.persistent_memory.get_session(self.session_id) or {}
         recent=self.persistent_memory.recent_events(self.session_id, limit=self.config.memory_recent_messages) if hasattr(self.persistent_memory, "recent_events") else []
@@ -74,8 +105,7 @@ class ContextMixin:
         except Exception:
             facts=[]
         parts=["[RECENT CONVERSATION]"]
-        for e in recent[-self.config.memory_recent_messages:]:
-            parts.append(f"{e.get('kind','')}: {e.get('content','')}")
+        parts.extend(self._spoken_turns(recent, self.config.memory_recent_messages))
         if pdata.get("summary"):
             parts += ["[SESSION SUMMARY]", str(pdata.get("summary"))]
         if pdata.get("working_context"):
@@ -156,9 +186,10 @@ class ContextMixin:
         parts=[]
         if data.get("summary"): parts.append("[SESSION SUMMARY]\n"+str(data["summary"]))
         if data.get("active_task"): parts.append("[ACTIVE TASK]\n"+str(data["active_task"]))
-        recent=data.get("recent",[])[-self.config.memory_recent_messages:]
-        if recent:
-            parts.append("[RECENT CONVERSATION]\n"+"\n".join(("USER" if r.get("kind")=="USER_MESSAGE" else "MANA")+": "+str(r.get("content","")) for r in recent))
+        turns=self._spoken_turns(data.get("recent",[]),
+                                 self.config.memory_recent_messages)
+        if turns:
+            parts.append("[RECENT CONVERSATION]\n"+"\n".join(turns))
         grouped={"VERIFIED":[],"SOURCE":[],"EXPERIENCE":[],"USER_CLAIM":[],"INFERENCE":[]}
         for item in ranked: grouped.setdefault(item["evidence_kind"],[]).append(item)
         labels={"VERIFIED":"[VERIFIED EVIDENCE]","SOURCE":"[SOURCE EVIDENCE]","EXPERIENCE":"[EXPERIENCE]","USER_CLAIM":"[USER CLAIM]","INFERENCE":"[INFERENCE]"}

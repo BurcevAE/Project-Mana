@@ -121,6 +121,48 @@ def extractive_distill(text: str, max_chars: int = 240) -> str:
     return result[:max_chars]
 
 
+#: A reply that declines rather than concludes. Stored as a conclusion,
+#: it is recalled forever and teaches nothing except how to refuse --
+#: measured on a real memory where seven of seven turn nodes were the
+#: model's own non-answers.
+#:
+#: A sibling of `cognition/findings.is_stock_refusal`, deliberately
+#: duplicated rather than imported: this is the storage layer and must not
+#: depend on the cognitive one.
+_REFUSAL = re.compile(
+    r"^\s*(?:не\s+нашл|не\s+найд|не\s+удал|не\s+знаю|не\s+могу|"
+    r"нет\s+данных|нет\s+информации|к\s+сожалению|извини|"
+    r"未找到|没有找到|"
+    r"i\s+(?:don.t\s+know|cannot|can.t)|no\s+(?:results?|information))",
+    re.IGNORECASE)
+
+#: Distinctive words from the summarising instruction. A model that
+#: returns the instruction instead of a summary must not have it stored:
+#: that is where the entities "одно" and "сожми" came from.
+_INSTRUCTION_ECHO = re.compile(
+    r"сожми\s+это|одно\s+предложение|без\s+вводных\s+слов|"
+    r"максимум\s+\d+\s+символов", re.IGNORECASE)
+
+
+def is_refusal(text: str) -> bool:
+    """Does this decline rather than conclude anything?"""
+    return bool(_REFUSAL.match((text or "").strip()))
+
+
+def usable_summary(summary: str) -> bool:
+    """Is this a conclusion worth keeping?
+
+    Refuses two shapes measured in real stored data: a refusal, and the
+    summarising instruction handed back instead of a summary.
+    """
+    text = (summary or "").strip()
+    if len(text) < 8:
+        return False
+    if is_refusal(text):
+        return False
+    return not _INSTRUCTION_ECHO.search(text)
+
+
 def distill_turn(user_text: str, assistant_text: str, llm_ask: Optional[Callable[[str], str]] = None,
                   max_chars: int = 240) -> str:
     """Turn one (user, assistant) exchange into a compact "conclusion"
@@ -136,7 +178,11 @@ def distill_turn(user_text: str, assistant_text: str, llm_ask: Optional[Callable
                 f"Вопрос: {user_text}\nОтвет: {assistant_text}"
             )
             summary = (llm_ask(prompt) or "").strip()
-            if summary:
+            # Not "if summary" -- the model returning something is not the
+            # same as it returning a conclusion. Measured: it returned the
+            # instruction, and "Сожми это в ОДНО предложение" was stored
+            # and mined for entities.
+            if usable_summary(summary):
                 return summary[:max_chars]
         except Exception:
             pass
@@ -303,8 +349,14 @@ class GraphMemoryStore:
         """Distill one exchange and add it to the graph: a new layer-1
         node, a FOLLOWS edge from the previous turn in this session, and
         MENTIONS edges to whatever entities it references."""
+        # A turn whose answer declined has no conclusion to record. The
+        # journal already holds every exchange; this graph is for what was
+        # concluded, and "Не нашлось" is a fact about an attempt rather
+        # than about the world.
+        if is_refusal(assistant_text):
+            return 0
         distilled = distill_turn(user_text, assistant_text, llm_ask=llm_ask)
-        if not distilled:
+        if not usable_summary(distilled):
             return 0
         prev_id = self._last_turn_node(session_id)
         node_id = self.mm.upsert_memory_item(
@@ -317,6 +369,72 @@ class GraphMemoryStore:
             entity_id = self._get_or_create_entity(entity, session_id)
             self._add_edge(node_id, entity_id, EDGE_MENTIONS, weight=0.6)
         return node_id
+
+    def junk_nodes(self) -> List[Dict[str, Any]]:
+        """Stored nodes that the guards would refuse to write today.
+
+        A refusal, or the summarising instruction handed back instead of
+        a summary. Reported rather than removed: deleting somebody's
+        memory is not something to do quietly.
+        """
+        with self.mm.lock:
+            rows = [dict(r) for r in self.mm.con.execute(
+                "SELECT * FROM memory_items WHERE item_type IN (?,?)",
+                (NODE_TURN, NODE_EPISODE)).fetchall()]
+        return [r for r in rows if not usable_summary(str(r.get("text") or ""))]
+
+    def orphan_entities(self) -> List[Dict[str, Any]]:
+        """Entities no surviving node mentions.
+
+        Mined out of text that should never have been stored -- "одно"
+        and "сожми" came from "Сожми это в ОДНО предложение". Once the
+        node holding them is gone they refer to nothing.
+        """
+        junk_ids = {int(r["id"]) for r in self.junk_nodes()}
+        with self.mm.lock:
+            entities = [dict(r) for r in self.mm.con.execute(
+                "SELECT * FROM memory_items WHERE item_type=?",
+                (NODE_ENTITY,)).fetchall()]
+            edges = [dict(r) for r in self.mm.con.execute(
+                "SELECT * FROM memory_edges WHERE edge_type=?",
+                (EDGE_MENTIONS,)).fetchall()]
+        mentioned_by_survivor = {
+            int(e["dst_id"]) for e in edges
+            if int(e["src_id"]) not in junk_ids}
+        return [e for e in entities
+                if int(e["id"]) not in mentioned_by_survivor]
+
+    def forget_junk(self, consented: bool = False) -> Dict[str, Any]:
+        """Remove those nodes and their orphaned entities.
+
+        Never without being told to. What comes back names every row, not
+        just a count: a cleanup nobody can check is one nobody should
+        trust.
+        """
+        nodes = self.junk_nodes()
+        orphans = self.orphan_entities()
+        report = {"nodes": [{"id": r["id"], "text": str(r["text"])[:120]}
+                            for r in nodes],
+                  "entities": [{"id": r["id"], "text": str(r["text"])[:60]}
+                               for r in orphans],
+                  "removed": False}
+        if not consented or not (nodes or orphans):
+            return report
+
+        ids = [int(r["id"]) for r in nodes] + [int(r["id"]) for r in orphans]
+        marks = ",".join("?" for _ in ids)
+        try:
+            with self.mm.lock:
+                self.mm.con.execute(
+                    f"DELETE FROM memory_edges WHERE src_id IN ({marks}) "
+                    f"OR dst_id IN ({marks})", ids + ids)
+                self.mm.con.execute(
+                    f"DELETE FROM memory_items WHERE id IN ({marks})", ids)
+                self.mm.con.commit()
+            report["removed"] = True
+        except Exception as exc:
+            report["error"] = f"{type(exc).__name__}: {exc}"
+        return report
 
     def maybe_rollup_episode(self, session_id: str, every_n_turns: int = 12,
                               llm_ask: Optional[Callable[[str], str]] = None) -> Optional[int]:

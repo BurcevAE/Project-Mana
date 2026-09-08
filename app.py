@@ -119,12 +119,30 @@ def self_check() -> int:
     # collected the top-level package and none of its submodules would
     # pass a package check and still have no semantic search.
     from mana import optional_deps
+    # The MODE, not just a library check. `HAS_SKLEARN` was reported as
+    # "semantic_search: true" while `memory.semantic_search` had no way
+    # to use it: embeddings are absent by design in a packaged build and
+    # the fallback was word overlap, which scores 0 between "погода" and
+    # "погоде". The flag said the capability was there while the search
+    # returned the newest rows for every question.
+    from mana.optional_deps import HAS_SENTENCE_TRANSFORMERS
+    semantic_mode = ("embeddings" if HAS_SENTENCE_TRANSFORMERS
+                     else "tfidf" if optional_deps.HAS_SKLEARN
+                     else "word_overlap")
     capabilities = {
-        "semantic_search": optional_deps.HAS_SKLEARN,
+        # True only when the search can actually tell one question from
+        # another. Word overlap cannot, on an inflected language.
+        "semantic_search": semantic_mode != "word_overlap",
+        "semantic_search_mode": semantic_mode,
         "web_search": optional_deps.HAS_WEB,
         "pdf_reading": optional_deps.HAS_FITZ,
         "hardware_detection": optional_deps.HAS_PSUTIL,
-        "llm_providers": optional_deps.HAS_REQUESTS,
+        # HAS_REQUESTS says the library is importable, which is not the
+        # same claim as "a model can be reached" -- on a machine with no
+        # ollama and no keys this reported True while nothing could
+        # answer a question. Both are reported now, under names that mean
+        # what they say.
+        "llm_library": optional_deps.HAS_REQUESTS,
     }
     # The desktop-application layer has its own capabilities, and the
     # risky one is pywin32: it spreads itself over win32com, pythoncom and
@@ -145,11 +163,35 @@ def self_check() -> int:
         report["instance_error"] = f"{type(exc).__name__}: {exc}"
     capabilities["identity_signs"] = signs
 
+    # What the window needs, which is not what the agent needs: a
+    # machine can pass every check above and still be unable to draw a
+    # window, and on Windows 10 that is the likely case.
+    try:
+        from mana_desktop import preflight
+        window = preflight.status()
+        report["window"] = window
+        capabilities["window_can_open"] = bool(window["can_open_window"])
+    except Exception as exc:
+        report["window"] = {"error": f"{type(exc).__name__}: {exc}"}
+
     from mana import apps
     report["applications"] = apps.available()
     capabilities["onec_com"] = apps.available()["onec"]["available"]
     capabilities["office_files"] = (apps.available()["docx"]["available"]
                                     and apps.available()["xlsx"]["available"])
+    try:
+        from mana.brains import BrainPool
+        from mana.config import Config as _Config
+        pool = BrainPool(_Config())
+        # usable() takes a spec, not an id: language_models() returns ids.
+        reachable = [b for b in pool.language_models()
+                     if b in pool.brains and pool.usable(pool.brains[b])]
+        report["language_models"] = reachable
+        capabilities["language_model_reachable"] = bool(reachable)
+    except Exception as exc:
+        report["language_models_error"] = f"{type(exc).__name__}: {exc}"
+        capabilities["language_model_reachable"] = False
+
     report["capabilities"] = capabilities
 
     if getattr(sys, "frozen", False):
@@ -223,10 +265,107 @@ def _deliver_self_check(report: dict, ok: bool) -> None:
 
 
 def main() -> int:
+    # Before anything prints. A frozen build wrote Russian as
+    # cp1251 into a UTF-8 console, so --peer show came out as
+    # question marks and the key it printed was unreadable.
+    from mana.console import speak_utf8
+    speak_utf8()
     argv = sys.argv[1:]
 
     if argv and argv[0] == "--self-check":
         return self_check()
+
+    if argv and argv[0] == "--exchange":
+        # An installed MANA could not export or import at all, so every
+        # installation that was not also a source checkout was unable to
+        # join the federation -- the machinery existed and nothing on a
+        # user's machine could reach it.
+        from mana.cognition.exchange import command_line
+        return command_line(argv[1:])
+
+    if argv and argv[0] == "--peer":
+        from mana.net.cli import command_line as peer_command
+        return peer_command(argv[1:])
+
+    if argv and argv[0] == "--laws":
+        from mana.cli import _show_laws
+        return _show_laws()
+
+    if argv and argv[0] == "--next":
+        from mana.cli import _show_next
+        return _show_next()
+
+    if argv and argv[0] == "--series":
+        from mana.cli import _show_series
+        return _show_series()
+
+    if argv and argv[0] == "--tried":
+        from mana.cli import _show_tried
+        return _show_tried()
+
+    if argv and argv[0] == "--practice":
+        from mana.cli import _practice
+        count = 0
+        if len(argv) > 1:
+            try:
+                count = int(argv[1])
+            except ValueError:
+                print("Использование: MANA.exe --practice [сколько партий]")
+                return 2
+        return _practice(count)
+
+    if argv and argv[0] == "--forget-junk":
+        from mana.cli import _forget_junk
+        return _forget_junk("--yes" in argv[1:])
+
+    if argv and argv[0] == "--capabilities":
+        from mana.cli import _show_capabilities
+        return _show_capabilities()
+
+    if argv and argv[0] == "--acquire":
+        from mana.cli import _acquire_capability
+        if len(argv) < 2:
+            print("Использование: MANA.exe --acquire ИМЯ [--yes]")
+            return 2
+        return _acquire_capability(argv[1], "--yes" in argv[2:])
+
+    if argv and argv[0] == "--propose":
+        from mana.cli import _show_proposals
+        count = 200
+        if len(argv) > 1:
+            try:
+                count = int(argv[1])
+            except ValueError:
+                print("Использование: MANA.exe --propose [сколько ходов]")
+                return 2
+        return _show_proposals(count)
+
+    if argv and argv[0] == "--findings":
+        from mana.cli import _show_findings
+        count = 200
+        if len(argv) > 1:
+            try:
+                count = int(argv[1])
+            except ValueError:
+                print("Использование: MANA.exe --findings [сколько ходов]")
+                return 2
+        return _show_findings(count)
+
+    if argv and argv[0] == "--journal":
+        # Reachable from the installed program, not only from a source
+        # checkout. The record of what MANA actually did is the first
+        # thing to look at when it says it opened something and nothing
+        # opened, and a diagnostic that requires the repository is one
+        # nobody on a user's machine can run.
+        from mana.cli import _show_journal
+        count = 20
+        if len(argv) > 1:
+            try:
+                count = int(argv[1])
+            except ValueError:
+                print("Использование: MANA.exe --journal [сколько ходов]")
+                return 2
+        return _show_journal(count)
 
     if argv and argv[0] == "--cli":
         sys.argv = [sys.argv[0]] + argv[1:]

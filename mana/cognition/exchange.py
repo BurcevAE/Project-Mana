@@ -636,3 +636,113 @@ class Queue:
             data["reports"].append(report.as_dict())
         self._save(data)
         return {"added": added, "reports": len(result.reports)}
+
+
+# ---------------------------------------------------------- the command line
+
+
+def default_queue_path() -> Path:
+    from ..paths import data_root
+    return Path(data_root()) / "exchange_queue.json"
+
+
+def command_line(argv: Sequence[str]) -> int:
+    """`export FILE`, `import FILE`, or nothing for a summary.
+
+    Lives here rather than in a script because the packaged application
+    needs it too: an installed MANA had no way to export or import at
+    all, so every installation that was not also a source checkout could
+    not join the federation. A second copy of this in a script is how the
+    two would come to disagree.
+    """
+    from ..core import identity
+
+    queue = Queue(default_queue_path())
+    action = (argv[0] if argv else "show").lower()
+    target = argv[1] if len(argv) > 1 else ""
+
+    if action == "export":
+        if not target:
+            print("нужно имя файла: --exchange export пакет.json")
+            return 2
+        # shareable_only: a hypothesis that could not be vetted stays
+        # here, and must not leave by accident.
+        written = export_bundle(target, queue.hypotheses(shareable_only=True),
+                                queue.reports())
+        print(f"записано: {written['path']}")
+        print(f"  гипотез: {written['hypotheses']}, отчётов: {written['reports']}")
+        print(f"  от экземпляра: {written['instance']}")
+        return 0
+
+    if action == "import":
+        if not target:
+            print("нужно имя файла: --exchange import пакет.json")
+            return 2
+        try:
+            result = import_bundle(target, known=queue.known_ids())
+        except ExchangeError as exc:
+            print(f"пакет не принят: {exc}")
+            return 1
+        queue.absorb(result)
+        print(f"от экземпляра {result.instance or '(не указан)'}:")
+        print(f"  новых гипотез: {len(result.hypotheses)}")
+        print(f"  отчётов:       {len(result.reports)}")
+        if result.refused:
+            print(f"  отклонено:     {len(result.refused)}")
+            for refusal in result.refused[:5]:
+                print(f"    [{refusal['kind']}] {refusal['reason'][:90]}")
+        print()
+        print("Вердикты из пакета НЕ приняты как истина — они лишь показывают,")
+        print("что у кого получилось. Принять гипотезу здесь может только")
+        print("локальный эксперимент на локальной скрытой выборке.")
+        return 0
+
+    if action not in ("show", ""):
+        print(f"неизвестная команда {action!r}; есть export, import, show")
+        return 2
+
+    stats = queue.stats()
+    from ..core import splits
+    print(f"экземпляр:       {identity.fingerprint()}")
+    print(f"скрытая выборка: {splits.HOLDOUT_V1.identity}")
+    print(f"очередь:         {queue.path}")
+    print()
+    print(f"гипотез: {stats['hypotheses']} "
+          f"(передаваемых {stats['shareable']}, "
+          f"непередаваемых {stats['not_shareable']}), "
+          f"отчётов: {stats['reports']}")
+
+    reports = queue.reports()
+    if not reports:
+        print()
+        print("воспроизведений нет: отчётов ни от кого не поступало")
+        return 0
+
+    verified = sum(1 for r in reports if r.verified)
+    print(f"из них с проверенной подписью: {verified}")
+    print()
+    print("что где воспроизвелось:")
+    print(f"  {'гипотеза':18s} {'сред':>5} {'судили':>7} {'принято':>8} "
+          f"{'откл':>6} {'без силы':>9} {'выборок':>8}")
+    for hypothesis_id, row in sorted(replication(reports).items()):
+        print(f"  {hypothesis_id:18s} {row['instances']:5d} {row['ruled']:7d} "
+              f"{row['accepted']:8d} {row['rejected']:6d} "
+              f"{row['not_evaluated']:9d} {row['distinct_holdouts']:8d}")
+
+    groups = consensus(reports)
+    print()
+    print("что из этого следует:")
+    for label, key, note in (
+            ("РАСХОЖДЕНИЯ", "divergent",
+             "принято на одних, отклонено на других — изменение условно"),
+            ("подтверждено", "confirmed",
+             f"судили не меньше {MIN_FOR_CONSENSUS}, все приняли"),
+            ("опровергнуто", "refuted",
+             "все отклонили — результат, который обычно теряют"),
+            ("не решено", "undecided",
+             "рулений мало, чтобы говорить о чём-то")):
+        ids = [e["hypothesis_id"] for e in groups[key]]
+        print(f"  {label:14s} {len(ids):3d}  {note}")
+        for hypothesis_id in ids[:5]:
+            print(f"      {hypothesis_id}")
+    return 0

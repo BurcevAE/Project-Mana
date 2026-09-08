@@ -42,3 +42,17 @@ brains.local.json
 
 # Очередь обмена: локальное состояние экземпляра, не код.
 /exchange_queue.json
+
+# Список известных узлов: локальное состояние экземпляра.
+/peers.json
+
+# Acquired capability providers (mana/acquire.py) and the episode journal.
+# Both are per-machine state that lives beside the checkout in a dev run.
+packages/
+journal/
+/chess_corpus/
+/findings/
+/laws/
+
+# UI development: how to start the local server for the browser.
+!.claude/launch.json

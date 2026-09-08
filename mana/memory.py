@@ -237,23 +237,77 @@ class MemoryManager:
             cur=self.con.execute("INSERT INTO memory_items(item_type,ref_id,text,session_id,importance,confidence,provenance,embedding,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",(item_type,ref_id,text,session_id,float(importance),float(confidence),json.dumps(provenance or {},ensure_ascii=False),emb,now,now))
             return int(cur.lastrowid)
 
+    #: How alike an item must be to the question to count as memory ABOUT
+    #: it. Below this it is simply an old item, and returning it because
+    #: something must be returned is what produced "the same three rows
+    #: for every question".
+    #:
+    #: Set from a measurement rather than taste -- see
+    #: `tests/test_semantic_relevance.py`, which pins what clears it and
+    #: what does not on real stored text.
+    MIN_RELEVANCE = 0.08
+
+    def _similarities(self, query: str, rows: List[Any]) -> Tuple[List[float], str]:
+        """How alike each row is to the question, and how it was decided.
+
+        Three ways, best first. The mode travels back with the numbers
+        because "nothing was relevant" and "the search is degraded" are
+        different facts, and a caller that cannot tell them apart will
+        read one as the other.
+        """
+        texts=[str(dict(r).get("text") or "") for r in rows]
+        if not texts:
+            return [], "empty"
+
+        qv=self._embed(query)
+        vectors=[self._unpack_embedding(dict(r).get("embedding")) for r in rows]
+        if qv is not None and all(v is not None and len(v)==len(qv) for v in vectors):
+            return [float(np.dot(qv,v)) for v in vectors], "embeddings"
+
+        # scikit-learn is bundled; torch deliberately is not. Fitting over
+        # a hundred short documents costs milliseconds and is the only
+        # fallback here that can tell "погода" from "запусти 1С".
+        try:
+            from .optional_deps import TfidfVectorizer, cosine_similarity, HAS_SKLEARN
+            if HAS_SKLEARN and any(t.strip() for t in texts):
+                vectorizer=TfidfVectorizer(max_features=self.config.tfidf_max_features)
+                matrix=vectorizer.fit_transform(texts+[query])
+                sims=cosine_similarity(matrix[-1],matrix[:-1])[0]
+                return [float(x) for x in sims], "tfidf"
+        except Exception:
+            pass
+
+        qwords=set(re.findall(r"\w+",query.lower()))
+        out=[]
+        for text in texts:
+            words=set(re.findall(r"\w+",text.lower()))
+            out.append(len(qwords & words)/max(1,len(qwords|words)))
+        return out, "word_overlap"
+
     def semantic_search(self, query: str, limit: Optional[int] = None, session_id: str = "", cross_session: Optional[bool] = None) -> List[Dict[str, Any]]:
         limit=int(limit or self.config.memory_semantic_top_k)
         cross_session=self.config.memory_cross_session if cross_session is None else cross_session
-        qv=self._embed(query)
         with self.lock:
             if cross_session or not session_id:
                 rows=self.con.execute("SELECT * FROM memory_items ORDER BY importance DESC, updated_at DESC LIMIT ?",(max(limit*25,100),)).fetchall()
             else:
                 rows=self.con.execute("SELECT * FROM memory_items WHERE session_id=? OR session_id='' ORDER BY importance DESC, updated_at DESC LIMIT ?",(session_id,max(limit*25,100))).fetchall()
-        qwords=set(re.findall(r"\w+",query.lower())); scored=[]
-        for row in rows:
-            d=dict(row); v=self._unpack_embedding(d.get("embedding")); sim=0.0
-            if qv is not None and v is not None and len(qv)==len(v): sim=float(np.dot(qv,v))
-            else:
-                words=set(re.findall(r"\w+",d["text"].lower())); sim=len(qwords & words)/max(1,len(qwords|words))
-            score=0.72*sim+0.18*float(d.get("importance",0.5))+0.10*float(d.get("confidence",0.5))
-            d["retrieval_score"]=float(score); scored.append((score,d))
+
+        sims,mode=self._similarities(query,rows)
+        scored=[]
+        for row,sim in zip(rows,sims):
+            # The floor is on SIMILARITY, not on the blended score.
+            # Importance and confidence may order items that are already
+            # about the question; they may not make an item be about it.
+            if sim < self.MIN_RELEVANCE:
+                continue
+            d=dict(row)
+            d["retrieval_similarity"]=float(sim)
+            d["retrieval_mode"]=mode
+            d["retrieval_score"]=float(0.72*sim
+                                       +0.18*float(d.get("importance",0.5))
+                                       +0.10*float(d.get("confidence",0.5)))
+            scored.append((d["retrieval_score"],d))
         scored.sort(key=lambda x:x[0],reverse=True)
         return [d for _,d in scored[:limit]]
 
@@ -386,10 +440,17 @@ class MemoryManager:
     def remember_user(self, session_id: str, content: str, metadata: Optional[Dict[str, Any]] = None) -> int:
         if not self.config.memory_store_user_messages:
             return 0
+        # An empty turn says nothing and still costs a line of every
+        # recalled window afterwards. Measured: a blank "USER:" sat at the
+        # top of the transcript handed to the model on every turn.
+        if not (content or "").strip():
+            return 0
         return self._event(session_id, "USER_MESSAGE", content, metadata, "user")
 
     def remember_assistant(self, session_id: str, content: str, metadata: Optional[Dict[str, Any]] = None) -> int:
         if not self.config.memory_store_assistant_responses:
+            return 0
+        if not (content or "").strip():
             return 0
         return self._event(session_id, "MANA_RESPONSE", content, metadata, "mana")
 

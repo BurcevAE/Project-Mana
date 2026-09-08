@@ -128,6 +128,10 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send(200, autostart.status())
             if route == "/api/build":
                 return self._send(200, build_manifest())
+            if route == "/api/self":
+                return self._send(200, self.session.self_knowledge())
+            if route == "/api/ollama":
+                return self._send(200, self.session.ollama_status())
             if route == "/api/apps":
                 from mana import apps
                 return self._send(200, apps.available())
@@ -170,6 +174,9 @@ class _Handler(BaseHTTPRequestHandler):
                 wanted = bool(body.get("enabled"))
                 return self._send(200, autostart.enable() if wanted
                                   else autostart.disable())
+            if route == "/api/ollama/setup":
+                return self._send(200, self.session.ollama_setup_start(
+                    str(body.get("model", ""))))
             if route == "/api/onec/confirm":
                 # The only route that writes to the infobase, and it
                 # carries no description of the change: what gets written

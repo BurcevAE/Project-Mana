@@ -51,6 +51,16 @@ def _acquire_single_instance() -> Optional[Any]:
 
 
 def run_window() -> int:
+    # Before importing the backend, not after: without WebView2 the
+    # failure arrives from deep inside pywebview as "no suitable GUI
+    # toolkit", and a windowed build has no console to carry it. The user
+    # double-clicks and sees nothing -- the worst failure an application
+    # has, because there is nothing to search for and no reason to suspect
+    # a missing component rather than a broken program.
+    from mana_desktop.preflight import block_with_reason
+    if block_with_reason():
+        return 2
+
     import webview
 
     if _acquire_single_instance() is None:

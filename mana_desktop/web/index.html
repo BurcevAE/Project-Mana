@@ -109,6 +109,26 @@
   .prop .diff b { color: var(--ok); font-weight: 500; }
   .prop .acts { display: flex; gap: .5rem; margin-top: .55rem; }
   .prop button { font-size: .75rem; padding: .3rem .7rem; }
+  /* Shown when no language model is reachable. Red rather than grey:
+     without one almost every question comes back as a refusal, and a
+     user reads that as a broken program unless something says otherwise.
+     The window used to show "5/19 мозгов" -- true, and it left them to
+     work out why nothing answered. */
+  .no-llm { border: 1px solid var(--crit); border-radius: 7px;
+            background: var(--panel-2); padding: .6rem .75rem;
+            margin: 0 0 .8rem; font-size: .8rem; line-height: 1.45; }
+  .no-llm b { color: var(--crit); font-weight: 600; }
+  .no-llm ul { margin: .4rem 0 0; padding-left: 1.1rem; }
+  .no-llm .offer { margin-top: .7rem; padding-top: .6rem;
+                   border-top: 1px solid var(--line); }
+  .no-llm .pick { display: flex; gap: .5rem; align-items: center;
+                  flex-wrap: wrap; margin-top: .45rem; }
+  .no-llm select { background: var(--panel-2); color: var(--ink);
+                   border: 1px solid var(--line); border-radius: 5px;
+                   padding: .25rem .4rem; font-size: .78rem;
+                   font-family: var(--mono); }
+  .no-llm .why { color: var(--ink-faint); font-size: .74rem; margin-top: .35rem; }
+  .no-llm li { margin: .15rem 0; }
   .switch { display: flex; align-items: center; gap: .45rem; font-size: .78rem;
             margin: .9rem 0 .3rem; cursor: pointer; }
   .switch input { accent-color: var(--ok); }
@@ -183,6 +203,25 @@
   dl.kv dd.yes { color: var(--ok); }
   dl.kv dd.no { color: var(--crit); }
   .hint { color: var(--ink-faint); font-size: .75rem; }
+  .self h4 { margin: 1.1rem 0 .4rem; font-size: .78rem; letter-spacing: .04em;
+             text-transform: uppercase; color: var(--ink-faint); }
+  .self h4:first-child { margin-top: 0; }
+  .self .row { border: 1px solid var(--line); border-radius: 6px;
+               padding: .5rem .6rem; margin-bottom: .45rem;
+               background: var(--panel-2); }
+  .self .said { font-size: .78rem; margin-bottom: .2rem; }
+  .self .why { color: var(--ink-faint); font-size: .73rem; }
+  .self .tag { font-size: .66rem; padding: .05rem .3rem; border-radius: 3px;
+               border: 1px solid var(--line); margin-right: .35rem;
+               white-space: nowrap; }
+  .self .measured { color: var(--ok); border-color: var(--ok); }
+  /* Amber is for what is NOT settled -- a guess, NOT_EVALUATED,
+     PROPOSED. A REJECTED verdict is as settled as an accepted one and
+     must not wear it. */
+  .self .guess { color: var(--warn); border-color: var(--warn); }
+  .self .cond { color: var(--ink-faint); font-size: .7rem;
+                font-family: var(--mono); margin-top: .2rem; }
+  .self .num { font-family: var(--mono); font-size: .74rem; }
 </style>
 </head>
 <body>
@@ -193,6 +232,7 @@
     <h1 id="state">Запуск...</h1>
     <span class="sub" id="brainsline"></span>
   </header>
+  <div id="no-llm" hidden></div>
 
   <div class="log" id="log">
     <div class="msg">
@@ -213,6 +253,7 @@
     <button data-pane="cycle">Цикл</button>
     <button data-pane="genome">Геном</button>
     <button data-pane="apps">Программы</button>
+    <button data-pane="self">Опыт</button>
     <button data-pane="log">Журнал</button>
     <button data-pane="system">Система</button>
   </nav>
@@ -236,6 +277,9 @@
     <div id="apps-caps"></div>
     <h4 class="apps-h">Ожидают подтверждения</h4>
     <div id="apps-pending" class="hint">Нет заявок на запись.</div>
+  </section>
+  <section class="pane self" id="pane-self">
+    <div id="self-body" class="hint">Загрузка…</div>
   </section>
   <section class="pane" id="pane-log"><pre id="logstream"></pre></section>
   <section class="pane" id="pane-system">
@@ -429,6 +473,10 @@ async function refreshBrains() {
     }
     host.appendChild(el);
   });
+}
+
+async function refreshNoLLM() {
+  try { renderNoLLM(await api("/api/state")); } catch (e) {}
 }
 
 async function refreshSystem() {
@@ -641,6 +689,10 @@ setInterval(() => {
 document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", () => {
   if (b.dataset.pane === "cycle") refreshCycle();
   if (b.dataset.pane === "genome") refreshGenome();
+  /* Rebuilt on open rather than polled: the scan and the dry evaluation
+     cost real work per episode, and nothing here changes while nobody is
+     talking to MANA. */
+  if (b.dataset.pane === "self") refreshSelf();
 }));
 
 $("autostart").addEventListener("change", async (event) => {
@@ -654,6 +706,196 @@ $("autostart").addEventListener("change", async (event) => {
   }
   $("autostart-note").textContent = res.enabled ? res.registered : "";
 });
+
+/* How a verdict or a status is painted. Green means settled and it
+   held; amber means not settled; plain means settled and it did not.
+   Painting REJECTED as amber would read the ledger as uncertainty when
+   it is the opposite. */
+const SETTLED_GOOD = ["ACCEPTED", "SUPPORTED", "VALIDATED", "BETTER"];
+const UNSETTLED = ["NOT_EVALUATED", "PROPOSED", "NOT_MEASURED", "UNCLASSIFIED"];
+
+function verdictClass(name) {
+  if (SETTLED_GOOD.includes(name)) return "measured";
+  if (UNSETTLED.includes(name)) return "guess";
+  return "";
+}
+
+/* ---------- what MANA knows about itself ----------
+
+   Everything below already existed and was reachable only from a
+   console. Two things this panel has to get right or it misleads: a
+   `pattern` finding is a guess and must not look like a `mechanical`
+   one, and a proposal is a suggestion of what to measure -- which is why
+   nothing here has a button that applies one. */
+
+function selfSection(parent, title) {
+  const head = document.createElement("h4");
+  head.textContent = title;
+  parent.appendChild(head);
+}
+
+function selfRow(parent, said, why, tags) {
+  const row = document.createElement("div");
+  row.className = "row";
+  if (tags && tags.length) {
+    const line = document.createElement("div");
+    tags.forEach(([text, cls]) => {
+      const tag = document.createElement("span");
+      tag.className = "tag " + (cls || "");
+      tag.textContent = text;
+      line.appendChild(tag);
+    });
+    row.appendChild(line);
+  }
+  if (said) {
+    const top = document.createElement("div");
+    top.className = "said";
+    top.textContent = said;
+    row.appendChild(top);
+  }
+  if (why) {
+    const note = document.createElement("div");
+    note.className = "why";
+    note.textContent = why;
+    row.appendChild(note);
+  }
+  parent.appendChild(row);
+  return row;
+}
+
+function selfNote(parent, text) {
+  const note = document.createElement("div");
+  note.className = "hint";
+  note.textContent = text;
+  parent.appendChild(note);
+}
+
+async function refreshSelf() {
+  const box = $("self-body");
+  let data;
+  try { data = await api("/api/self"); }
+  catch (e) { box.textContent = "не удалось прочитать: " + e; return; }
+  box.textContent = "";
+  box.className = "";
+
+  /* ---- the record ---- */
+  selfSection(box, "Записано");
+  const journal = data.journal || {};
+  if (journal.error) {
+    selfNote(box, "журнал недоступен: " + journal.error);
+  } else if (!journal.episodes) {
+    selfNote(box, "Ходов пока не записано. Журнал пишется при обычной работе — "
+                + "поговорите с MANA и вернитесь.");
+  } else {
+    const found = (data.findings && data.findings.summary) || {};
+    selfNote(box, `ходов: ${journal.episodes}   сессий: ${journal.sessions}   `
+                + `с находкой: ${found.episodes_with_a_violation || 0}`);
+  }
+
+  /* ---- what it found about itself ---- */
+  const findings = data.findings || {};
+  const violations = findings.violations || [];
+  selfSection(box, "Нашла у себя");
+  if (findings.error) {
+    selfNote(box, "не удалось: " + findings.error);
+  } else if (!violations.length) {
+    selfNote(box, "Противоречий не найдено. Это может значить и что их нет, "
+                + "и что записано слишком мало.");
+  } else {
+    violations.forEach(v => {
+      const measured = v.kind === "mechanical";
+      selfRow(box, v.request,
+              v.reason,
+              [[v.invariant, ""],
+               [measured ? "измерено" : "догадка",
+                measured ? "measured" : "guess"]]);
+    });
+    selfNote(box, "«Измерено» решается сравнением записанных чисел. "
+                + "«Догадка» — совпадение со списком слов: полезно и не факт.");
+  }
+
+  /* ---- what it proposes ---- */
+  const proposals = data.proposals || [];
+  selfSection(box, "Предлагает попробовать");
+  if (proposals.error) {
+    selfNote(box, "не удалось: " + proposals.error);
+  } else if (!proposals.length) {
+    selfNote(box, "Нечего предлагать: без наблюдённого отказа кандидатов нет.");
+  } else {
+    proposals.slice(0, 6).forEach(row => {
+      const dry = row.dry || {};
+      /* Baseline is what MANA does NOW, not what the record says: after
+         an adoption, scoring against the record makes every candidate
+         look good for free. The recorded figure is shown beside it. */
+      const score = dry.dry_evaluable
+        ? `сейчас ${dry.baseline_pass_rate} → ${dry.candidate_pass_rate}`
+          + ` (сломано: ${(dry.counterexamples || {}).found})`
+        : "всухую не оценивается";
+      const tags = [[score, ""]];
+      if (row.already_tried) {
+        tags.push([`уже пробовали: ${row.already_tried.verdict}`, "guess"]);
+      }
+      selfRow(box, JSON.stringify(row.changes), row.rationale, tags);
+    });
+    const recorded = (proposals.find(r => r.dry && r.dry.dry_evaluable) || {}).dry;
+    if (recorded) {
+      selfNote(box, `Сравнение с сегодняшним поведением. В записи было `
+                  + `${recorded.recorded_pass_rate} — разница показывает, `
+                  + `насколько поведение уже ушло от той записи.`);
+    }
+    selfNote(box, "Это порядок того, что стоит измерить, а не что внедрять. "
+                + "Ничего из этого не применено.");
+  }
+
+  /* ---- what has been tried ---- */
+  const tried = data.tried || [];
+  selfSection(box, "Уже проверяли");
+  if (tried.error) {
+    selfNote(box, "не удалось: " + tried.error);
+  } else if (!tried.length) {
+    selfNote(box, "Реестр пуст: сюда попадает эксперимент, дошедший до вердикта.");
+  } else {
+    tried.slice(0, 12).forEach(f => {
+      const failure = f.failure || {};
+      const row = selfRow(box, f.question,
+                          `${failure.failure || ""} — ${failure.rule || ""}`,
+                          [[f.verdict, verdictClass(f.verdict)],
+                           [failure.failure || "", verdictClass(failure.failure)]]);
+      /* What distinguishes one finding from another about the same
+         question is its conditions. Without them a series renders as
+         several identical rows. */
+      const conditions = Object.entries(f.conditions || {})
+        .map(([k, v]) => `${k}=${v}`).join("  ");
+      if (conditions) {
+        const line = document.createElement("div");
+        line.className = "cond";
+        line.textContent = conditions;
+        row.appendChild(line);
+      }
+    });
+    if (tried.length > 12) {
+      selfNote(box, `и ещё ${tried.length - 12}; полностью — MANA.exe --tried`);
+    }
+  }
+
+  /* ---- laws ---- */
+  const laws = (data.laws && data.laws.laws) || [];
+  if (laws.length) {
+    selfSection(box, "Законы");
+    laws.forEach(law => {
+      const row = selfRow(box, law.describe, "",
+                          [[law.status, verdictClass(law.status)],
+                           [`испытаний ${law.trials}`, ""]]);
+      law.exceptions.forEach(note => {
+        const line = document.createElement("div");
+        line.className = "why";
+        line.textContent = "исключение: " + note;
+        row.appendChild(line);
+      });
+    });
+    if (data.laws.note) selfNote(box, data.laws.note);
+  }
+}
 
 /* ---------- desktop applications ---------- */
 
@@ -749,6 +991,98 @@ document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click
 setInterval(() => {
   if (document.querySelector('[data-pane="apps"]').classList.contains("on")) refreshApps();
 }, 3000);
+
+/* ---------- no language model ---------- */
+
+function renderNoLLM(state) {
+  const box = document.getElementById("no-llm");
+  if (!box) return;
+  if (state.has_language_model !== false) { box.hidden = true; return; }
+  if (box.dataset.done) { box.hidden = false; return; }
+  box.dataset.done = "1";
+  box.className = "no-llm";
+  box.hidden = false;
+
+  const head = document.createElement("div");
+  const strong = document.createElement("b");
+  strong.textContent = "Языковой модели нет.";
+  head.append(strong, document.createTextNode(
+    " Отвечать можно только на то, что решается точно: арифметика, код, " +
+    "последовательности, порядок, операции над текстом. На всё остальное " +
+    "будет отказ — не потому что сломано, а потому что отвечать нечем."));
+  box.appendChild(head);
+
+  const list = document.createElement("ul");
+  const item = document.createElement("li");
+  item.textContent = "Либо ввести ключ любого провайдера справа, во вкладке " +
+    "«Мозги» — у cerebras и groq есть бесплатные.";
+  list.appendChild(item);
+  box.appendChild(list);
+  offerLocalModel(box);
+}
+
+/* The offer is built from a measurement of THIS machine: memory
+   bandwidth is measured, and the expected speed is that divided by the
+   model size, because decoding reads the whole model per token. A
+   recommendation that cannot say "about 11 tokens a second" is one
+   nobody can judge, and "8 GB of RAM, take a 7B" ignores the term that
+   decides whether it is usable. */
+async function offerLocalModel(box) {
+  let state;
+  try { state = await api("/api/ollama"); } catch (e) { return; }
+  const pick = state.recommended;
+  if (!pick) return;
+
+  const offer = document.createElement("div");
+  offer.className = "offer";
+
+  const head = document.createElement("div");
+  head.textContent = state.installed
+    ? "Ollama уже установлена — не хватает модели."
+    : "Могу поставить Ollama и модель. Работает без ключей и без интернета.";
+  offer.appendChild(head);
+
+  const row = document.createElement("div");
+  row.className = "pick";
+  const select = document.createElement("select");
+  (pick.alternatives || []).filter(a => a.fits).forEach(a => {
+    const option = document.createElement("option");
+    option.value = a.model;
+    option.textContent = `${a.model} — ${a.size_gb} ГБ, ~${a.tokens_per_second} ток/с`;
+    if (a.model === pick.model) option.selected = true;
+    select.appendChild(option);
+  });
+  const go = document.createElement("button");
+  go.textContent = "Установить";
+  go.addEventListener("click", async () => {
+    go.disabled = true;
+    select.disabled = true;
+    go.textContent = "Ставлю…";
+    const res = await api("/api/ollama/setup", { model: select.value });
+    if (!res.ok) {
+      go.disabled = false;
+      select.disabled = false;
+      go.textContent = "Установить";
+      head.textContent = res.error || "не удалось начать";
+      return;
+    }
+    head.textContent = "Идёт установка. Ход виден в Журнале; " +
+      "по окончании модель подключится без перезапуска.";
+  });
+  row.append(select, go);
+  offer.appendChild(row);
+
+  const why = document.createElement("div");
+  why.className = "why";
+  why.textContent = `Выбрано по замеру этой машины: ${pick.reason}. ` +
+    `Оценка по полосе памяти, не замер самой модели. ${pick.gpu?.why || ""}`;
+  offer.appendChild(why);
+
+  box.appendChild(offer);
+}
+
+refreshNoLLM();
+setInterval(refreshNoLLM, 10000);
 </script>
 </body>
 </html>
