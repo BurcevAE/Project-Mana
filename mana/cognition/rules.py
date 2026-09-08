@@ -69,6 +69,15 @@ class Rule:
     #: still just a rule.
     lift: float = 0.0
     support: float = 0.0
+    #: How often it matches text with the same vocabulary and no phrases
+    #: -- the measured form of "specific". Length was the proxy for this
+    #: and stays in the record as one.
+    accidental: float = 0.0
+    #: The failure it came from, the claim, and how it was mined and
+    #: checked. Without this a generator can hand over a candidate the
+    #: stated hypothesis does not license and the only visible fact would
+    #: be that something won.
+    provenance: Dict[str, Any] = field(default_factory=dict)
 
     def matches(self, lowered: str) -> bool:
         return self.marker in lowered
@@ -77,7 +86,21 @@ class Rule:
         when = "перед встроенными" if self.before_builtin else "после встроенных"
         return (f"«{self.marker}» → {self.decides} ({when}; на половине "
                 f"открытия: покрытие {self.support:.0%}, вне класса "
-                f"{self.lift:.0%})")
+                f"{self.lift:.0%}, случайных совпадений "
+                f"{self.accidental:.0%})")
+
+    def trace(self) -> str:
+        """Conflict to rule, in the order it happened."""
+        p = self.provenance or {}
+        return "\n".join([
+            f"  провал:    {p.get('group', '?')} — {p.get('wrong', '?')} "
+            f"из {p.get('of', '?')}",
+            f"  диагноз:   {p.get('shape', '?')}"
+            + (f", мешал признак {p.get('competing')}" if p.get("competing")
+               else ""),
+            f"  гипотеза:  {p.get('claim', '?')}",
+            f"  правило:   {self.describe()}",
+            f"  проверено: {p.get('matcher', '?')}"])
 
     def as_dict(self) -> Dict[str, Any]:
         return asdict(self)

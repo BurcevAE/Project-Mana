@@ -297,11 +297,68 @@ def from_hypotheses(found: Oracle, seeds: Sequence[int]) -> List[Change]:
     out: List[Change] = []
     for claim in claims:
         for rule in hypothesis_mod.forms(claim, texts, found.groups):
+            checked, note = _executable(found, rule, seeds)
+            if checked is None:
+                # Not a weak candidate -- not the rule the miner claims.
+                # Discarded here rather than measured, because a
+                # candidate that cannot be applied should not cost a
+                # discovery pass.
+                continue
             out.append(Change(
-                label=rule.describe(), kind="rule",
-                settings={"marker": rule.marker, "decides": rule.decides},
-                rule=rule, hypothesis=claim.as_dict()))
+                label=checked.describe(), kind="rule",
+                settings={"marker": checked.marker, "decides": checked.decides},
+                rule=checked, hypothesis=claim.as_dict()))
     return out
+
+
+#: How many seeds the executability check looks at. Two is enough to see
+#: whether a marker fires at all, and the point is to spend nothing.
+EXECUTABILITY_SEEDS = 2
+
+
+def _executable(found: Oracle, rule: Any, seeds: Sequence[int]):
+    """Does this fire through the real matcher, and does it move a decision?
+
+    Returns the rule with its check recorded, or None and why. Two
+    different failures: a marker that never matches (the representation
+    the miner used is not the one the matcher uses) and a marker that
+    matches but changes no answer (it is seated where it cannot matter).
+    """
+    from dataclasses import replace
+
+    group = (rule.provenance or {}).get("group")
+    wanted = (rule.provenance or {}).get("wanted")
+    if not group or not wanted:
+        return None, "у кандидата нет происхождения — нечем проверить"
+
+    matched = moved = looked = 0
+    candidate = Change(label=rule.describe(), kind="rule",
+                       settings={"marker": rule.marker}, rule=rule)
+    for seed in list(seeds)[:EXECUTABILITY_SEEDS]:
+        for item in found.samples(seed, group):
+            looked += 1
+            text = getattr(item, "prompt", item)
+            if rule.matches(str(text).lower()):
+                matched += 1
+            before = found.decide(item)
+            with candidate.apply():
+                after = found.decide(item)
+            if before != after and after == wanted:
+                moved += 1
+    if not looked:
+        return None, "не на чем проверить"
+    if not matched:
+        return None, (f"сопоставитель не срабатывает ни разу из {looked}: "
+                      f"представление, которым добывали, — не то, которым "
+                      f"сопоставляют")
+    if not moved:
+        return None, (f"совпадает {matched} раз из {looked} и не меняет ни "
+                      f"одного ответа — стоит там, где не решает")
+    return replace(rule, provenance=dict(
+        rule.provenance,
+        matcher="Rule.matches + Oracle.decide",
+        checked_on=f"{looked} задач с {EXECUTABILITY_SEEDS} посевов открытия",
+        matched=matched, moved=moved)), ""
 
 
 class _Textish(str):
@@ -410,7 +467,20 @@ def investigate(name: str, ledger: Optional[Ledger] = None,
         report.why = ("в объявленной области нет настройки, которая "
                       "улучшает и никого не ломает")
         return report
-    viable.sort(key=lambda row: (row[0], row[1]), reverse=True)
+    # Measured first: overall, then the worst group. Among candidates the
+    # protocol cannot tell apart, prefer the one that depends least on a
+    # bare token -- `accidental` is the share of matches that survive
+    # shuffling the words, and a phrase is strictly harder to hit by
+    # accident than a single word in any text, not only in this corpus.
+    # A tiebreak among measured equals, on a measured number; not a proxy
+    # standing in for specificity, which this corpus cannot measure.
+    def _order(row):
+        overall, worst, change = row
+        rule = getattr(change, "rule", None)
+        accidental = getattr(rule, "accidental", 0.0) if rule else 0.0
+        return (overall, worst, -accidental)
+
+    viable.sort(key=_order, reverse=True)
     best_overall, best_worst, chosen = viable[0]
     report.chosen = dict(chosen.settings)
     report.hypothesis = dict(chosen.hypothesis)

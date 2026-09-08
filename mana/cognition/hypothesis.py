@@ -83,6 +83,19 @@ MAX_CANDIDATES = 3
 #: break is rejected for the same reason.
 MAX_MARKER = 40
 
+#: How many shuffled copies of a class's own text to build. What is
+#: measured against them is word-order dependence: a single word survives
+#: a shuffle and a phrase does not.
+#:
+#: Reported, never used as a filter. It is not specificity. Specificity
+#: would be "how often does this fire on text nobody measured it
+#: against", and no split of this corpus contains such text -- every one
+#: of them comes from the same generator. Word-order dependence separates
+#: "чем" from "раньше, чем" for the right reason and condemns "текст:",
+#: which is a single token and the correct marker for its class, so a
+#: filter on it would be a number answering a question nobody asked.
+CONTROL_COPIES = 3
+
 #: Words too common to be anybody's discriminator, and punctuation that
 #: would make a marker match everything.
 _TOKEN = re.compile(r"[\w«»:]+", re.UNICODE)
@@ -139,6 +152,26 @@ def _phrases(text: str) -> set:
             # The span between them included, so what is mined is a
             # substring of the text and not a reconstruction of one.
             out.add(lowered[start:words[index + 1][2]])
+    return out
+
+
+def _control(texts: Sequence[str], seed: int = 20260908) -> List[str]:
+    """The same words, no longer in the same order.
+
+    A marker that still matches this is matching vocabulary rather than
+    phrasing. Reported so a reader can see which candidate is a bare
+    function word; not a filter, because word-order dependence is not the
+    same thing as being specific and the two disagree on real markers.
+    """
+    import random
+
+    rng = random.Random(seed)
+    out: List[str] = []
+    for _ in range(CONTROL_COPIES):
+        for text in texts:
+            words = text.split()
+            rng.shuffle(words)
+            out.append(" ".join(words))
     return out
 
 
@@ -212,6 +245,12 @@ def forms(hypothesis: Hypothesis,
     if not inside_texts or not outside_texts:
         return []
 
+    # The class's own text, shuffled: a single word survives it and a
+    # phrase does not. Built from the inside rather than the outside,
+    # because a control made of other classes' vocabulary says nothing
+    # about a word those classes never use -- which was the first version
+    # of this, reporting 0% for "чем" and meaning nothing by it.
+    control = _control(inside_texts)
     seen: Counter = Counter()
     for lowered in inside_texts:
         seen.update(_phrases(lowered))
@@ -232,15 +271,32 @@ def forms(hypothesis: Hypothesis,
         leak = sum(1 for t in outside_texts if phrase in t) / len(outside_texts)
         if leak > MAX_LEAK:
             continue
-        scored.append((support, -leak, phrase))
-    # Support first, then how little it leaks, then LENGTH -- longer wins.
-    # A short marker can pass on a narrow corpus and mean nothing outside
-    # it: "чем" covers every logic task here and every second sentence a
-    # person writes. Among markers that score the same, the more specific
-    # one is the one that will still be a discriminator somewhere else.
-    scored.sort(key=lambda row: (row[0], row[1], len(row[2])), reverse=True)
+        # How much of this match is vocabulary rather than phrasing.
+        # Recorded, not filtered -- see CONTROL_COPIES for why a filter
+        # here would be a number answering the wrong question.
+        accidental = (sum(1 for t in control if phrase in t) / len(control)
+                      if control else 0.0)
+        scored.append((support, -leak, -accidental, phrase))
+    # Support, then how little it leaks. Nothing else: length was a
+    # proxy for a property this corpus cannot measure, and a tiebreak
+    # invented to look principled is worse than no tiebreak. Candidates
+    # that tie here all go to the discovery pass, and the protocol picks
+    # by what it measures. The order among equals is fixed only so a run
+    # is repeatable.
+    scored.sort(key=lambda row: (row[0], row[1], row[3]), reverse=True)
 
     return [Rule(where=hypothesis.where, marker=phrase,
                  decides=hypothesis.wanted, before_builtin=True,
-                 lift=-negative_leak, support=support)
-            for support, negative_leak, phrase in scored[:MAX_CANDIDATES]]
+                 lift=-negative_leak, support=support,
+                 accidental=-negative_accidental,
+                 provenance=dict(hypothesis.evidence,
+                                 group=hypothesis.group,
+                                 shape=hypothesis.shape,
+                                 claim=hypothesis.claim,
+                                 wanted=hypothesis.wanted,
+                                 mined_with={"min_support": MIN_SUPPORT,
+                                             "max_leak": MAX_LEAK,
+                                             "max_marker": MAX_MARKER},
+                                 length=len(phrase)))
+            for support, negative_leak, negative_accidental, phrase
+            in scored[:MAX_CANDIDATES]]

@@ -236,3 +236,119 @@ def test_an_empty_rule_store_leaves_the_classifier_as_it_was():
                 if classify(task.prompt, difficulty=task.difficulty)[0]
                 != DOMAIN_KIND["logic"])
     assert wrong == 20
+
+
+# --------------------------------------------------------------------------
+# executable by the matcher that will measure it
+# --------------------------------------------------------------------------
+
+def test_a_candidate_that_cannot_fire_never_leaves_the_generator():
+    """Not a weak rule -- not the rule the miner claims. The first version
+    mined "позиции считая" out of "позиции 2, считая с начала": perfect
+    measured support for a phrase that is not a substring of anything."""
+    from mana.cognition.rules import Rule
+
+    o = _oracle()
+    dead = Rule(where="task_naming", marker="этого нет ни в одной задаче",
+                decides="reasoning",
+                provenance={"group": "logic", "wanted": "reasoning"})
+    checked, why = investigator._executable(o, dead, (1, 2))
+    assert checked is None
+    assert "сопоставитель не срабатывает" in why
+
+
+def test_a_candidate_that_matches_but_moves_nothing_is_refused():
+    """Seated where it cannot decide. A marker that matches and changes no
+    answer describes an intention rather than a mechanism."""
+    from mana.cognition.rules import Rule
+
+    o = _oracle()
+    # Right answer already: applying it changes nothing anywhere.
+    inert = Rule(where="task_naming", marker="вычисли", decides="math",
+                 provenance={"group": "arithmetic", "wanted": "math"})
+    checked, why = investigator._executable(o, inert, (1, 2))
+    assert checked is None
+    assert "не меняет ни одного ответа" in why
+
+
+def test_the_check_happens_before_any_quota_is_spent(tmp_path):
+    investigator.declare(_oracle())
+    made = investigator.from_hypotheses(_oracle(), (1, 2))
+    assert made, "nothing survived the check, so nothing can be said"
+    assert trials.reads.__name__          # the registry was never asked
+    for change in made:
+        assert change.rule.provenance["matcher"] == "Rule.matches + Oracle.decide"
+        assert change.rule.provenance["matched"] > 0
+        assert change.rule.provenance["moved"] > 0
+
+
+# --------------------------------------------------------------------------
+# a trace from the conflict to the rule
+# --------------------------------------------------------------------------
+
+def test_every_built_rule_carries_where_it_came_from():
+    """Otherwise `hypothesis.py` can declare one thing while the generator
+    hands over another, and the only visible fact is that something won."""
+    for change in investigator.from_hypotheses(_oracle(), (1, 2)):
+        trace = change.rule.provenance
+        assert trace["group"] in DOMAIN_KIND
+        assert trace["shape"] in (ABSENT, AMBIGUOUS)
+        assert trace["claim"]
+        assert trace["wanted"] == DOMAIN_KIND[trace["group"]]
+        # and the rule decides what the claim said it should
+        assert change.rule.decides == trace["wanted"]
+        assert trace["wrong"] > 0 and trace["of"] >= trace["wrong"]
+        assert set(trace["mined_with"]) == {"min_support", "max_leak",
+                                            "max_marker"}
+
+
+def test_the_trace_reads_from_conflict_to_rule():
+    change = investigator.from_hypotheses(_oracle(), (1, 2))[0]
+    trace = change.rule.trace()
+    for part in ("провал:", "диагноз:", "гипотеза:", "правило:", "проверено:"):
+        assert part in trace
+
+
+def test_an_ambiguous_claim_names_the_feature_that_competed():
+    made = investigator.from_hypotheses(_oracle(), (1, 2))
+    ambiguous = [c for c in made
+                 if c.rule.provenance["shape"] == AMBIGUOUS]
+    assert ambiguous
+    assert any("сколько" in str(c.rule.provenance.get("competing"))
+               for c in ambiguous)
+
+
+# --------------------------------------------------------------------------
+# what is measured, and what is only reported
+# --------------------------------------------------------------------------
+
+def test_word_order_dependence_is_reported_and_not_filtered():
+    """It is not specificity. Specificity would be "how often does this
+    fire on text nobody measured it against", and every split here comes
+    from one generator. Filtering on this would condemn "текст:", which is
+    a single token and the right marker for its class."""
+    made = investigator.from_hypotheses(_oracle(), (1, 2))
+    reported = {c.rule.marker: c.rule.accidental for c in made}
+    assert reported, "nothing to report on"
+    # Both kinds survive mining: bare tokens and phrases.
+    assert any(value >= 0.9 for value in reported.values())
+    assert any(value <= 0.5 for value in reported.values())
+
+
+def test_among_measured_equals_the_phrase_wins():
+    """A tiebreak on a measured number, applied after the protocol has
+    failed to tell two candidates apart -- not a proxy standing in for
+    something this corpus cannot measure."""
+    from mana.cognition.rules import Rule
+
+    def change(marker, accidental):
+        return investigator.Change(
+            label=marker, kind="rule", settings={"marker": marker},
+            rule=Rule(where="task_naming", marker=marker, decides="reasoning",
+                      accidental=accidental))
+
+    rows = [(1.0, 0.0, change("чем", 1.0)),
+            (1.0, 0.0, change("считая с", 0.16))]
+    rows.sort(key=lambda row: (row[0], row[1],
+                               -row[2].rule.accidental), reverse=True)
+    assert rows[0][2].rule.marker == "считая с"
