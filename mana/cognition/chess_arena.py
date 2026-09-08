@@ -157,6 +157,56 @@ class RandomPlayer(Player):
         return rng.choice(list(board.legal_moves))
 
 
+@dataclass
+class Thought:
+    """Why one move was chosen, in the search's own terms.
+
+    `margin` is the number that says whether the decision was close. A
+    move ahead by two centipawns is a tie the evaluation happened to
+    win; one ahead by four hundred is a position where the search saw
+    something. Diagnosing a class of errors needs that difference: the
+    first kind is noise to fix by evaluating better, the second is a
+    judgement to fix by searching differently.
+    """
+    ply: int
+    fen: str
+    chosen: str
+    score: float
+    #: Every root move with its score, best first. The search computed
+    #: these anyway; the trace is what it used to throw away.
+    considered: List[Tuple[str, float]] = field(default_factory=list)
+    depth: int = 0
+    nodes: int = 0
+
+    @property
+    def margin(self) -> float:
+        """How far ahead the chosen move was of the next one."""
+        if len(self.considered) < 2:
+            return 0.0
+        return float(self.considered[0][1] - self.considered[1][1])
+
+    @property
+    def close_call(self) -> bool:
+        return self.margin < 25.0
+
+    def describe(self, top: int = 4) -> str:
+        rivals = ", ".join(f"{san} {score:+.0f}"
+                           for san, score in self.considered[1:top + 1])
+        head = (f"{self.chosen} {self.score:+.0f} "
+                f"(глубина {self.depth}, узлов {self.nodes}, "
+                f"отрыв {self.margin:+.0f})")
+        return head + (f"; рассматривала: {rivals}" if rivals else "")
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {"ply": self.ply, "fen": self.fen, "chosen": self.chosen,
+                "score": round(self.score, 1),
+                "considered": [[san, round(score, 1)]
+                               for san, score in self.considered],
+                "depth": self.depth, "nodes": self.nodes,
+                "margin": round(self.margin, 1),
+                "close_call": self.close_call}
+
+
 class SearchPlayer(Player):
     """Alpha-beta negamax over a pluggable evaluation.
 
@@ -167,8 +217,14 @@ class SearchPlayer(Player):
     """
 
     def __init__(self, evaluate: Evaluate = material, depth: int = 2,
-                 name: str = "material", max_nodes: int = 0) -> None:
+                 name: str = "material", max_nodes: int = 0,
+                 trace: bool = False) -> None:
         self.evaluate = evaluate
+        #: Keep the reasoning behind every move. Off by default: the
+        #: scores are computed either way, but a five-hundred-game run
+        #: would hold several million rows for nobody.
+        self.trace = bool(trace)
+        self.thoughts: List["Thought"] = []
         self.depth = max(1, int(depth))
         self.name = name
         #: When set, depth is decided by a node budget instead: iterative
@@ -182,24 +238,53 @@ class SearchPlayer(Player):
         self.max_nodes = max(0, int(max_nodes))
         self.nodes = 0
         self.reached_depth = 0
+        #: Root moves and their scores from the last completed search.
+        #: Filled only when tracing; the search computes them regardless.
+        self._root_scores: List[Tuple[str, float]] = []
 
     def choose(self, board: Any, rng: random.Random) -> Any:
+        before = self.nodes
         if self.max_nodes:
-            return self._choose_within_budget(board, rng)
-        return self._choose_at_depth(board, rng, self.depth)
+            move = self._choose_within_budget(board, rng)
+        else:
+            move = self._choose_at_depth(board, rng, self.depth)
+        if self.trace:
+            self._remember(board, move, before)
+        return move
+
+    def _remember(self, board: Any, move: Any, nodes_before: int) -> None:
+        """Write down what the search just decided, and how closely.
+
+        Read off `self._root_scores`, which `_choose_at_depth` fills as
+        it goes -- so this records what the search actually did rather
+        than a second search that might disagree with it.
+        """
+        scored = sorted(self._root_scores, key=lambda row: -row[1])
+        self.thoughts.append(Thought(
+            ply=board.ply() + 1, fen=board.fen(),
+            chosen=board.san(move),
+            score=float(dict(self._root_scores).get(board.san(move), 0.0)),
+            considered=scored,
+            depth=self.reached_depth or self.depth,
+            nodes=self.nodes - nodes_before))
 
     def _choose_at_depth(self, board: Any, rng: random.Random,
                          depth: int) -> Any:
         moves = list(board.legal_moves)
         rng.shuffle(moves)              # break ties without a preference
         best_move, best_score = moves[0], float("-inf")
+        scores: List[Tuple[str, float]] = []
         for move in moves:
+            san = board.san(move) if self.trace else ""
             board.push(move)
             score = -self._search(board, depth - 1,
                                   float("-inf"), float("inf"))
             board.pop()
+            if self.trace:
+                scores.append((san, score))
             if score > best_score:
                 best_move, best_score = move, score
+        self._root_scores = scores
         return best_move
 
     def _choose_within_budget(self, board: Any, rng: random.Random) -> Any:

@@ -1,0 +1,172 @@
+"""An outside judge, and a player that says why.
+
+The judge decides nothing. Every test here is about that line: Stockfish
+is asked what a move cost after it was made, and is never asked what to
+play. The moment an engine picks the move, the experiment stops being
+about MANA and becomes a measurement of the engine.
+
+The trace tests are the other half. A decision nobody can look inside is
+one nobody can diagnose -- said twice already in this project, about
+`onec_launch` reporting a launch it never watched and about `classify`
+returning a kind with no way to ask which feature decided.
+"""
+from __future__ import annotations
+
+import random
+
+import pytest
+
+chess = pytest.importorskip("chess", reason="оракул не приобретён")
+
+from mana.cognition import chess_arena as arena
+from mana.cognition import chess_judge as judge
+
+engine = pytest.mark.skipif(not judge.available(),
+                            reason="Stockfish не установлен")
+
+
+# --------------------------------------------------------------------------
+# the judge is never the brain
+# --------------------------------------------------------------------------
+
+def test_the_judge_module_never_picks_a_move():
+    """The whole point. An engine that chooses would make every result a
+    fact about the engine."""
+    import inspect
+
+    source = inspect.getsource(judge)
+    for choosing in ("engine.play(", ".play(board", "def choose"):
+        assert choosing not in source
+
+
+def test_the_player_is_manas_own_search():
+    player = arena.SearchPlayer(depth=2)
+    move = player.choose(chess.Board(), random.Random(1))
+    assert move in chess.Board().legal_moves
+    assert player.nodes > 0          # it searched; nothing was asked
+
+
+@engine
+def test_a_blunder_costs_more_than_a_reasonable_move():
+    """Scholar's mate: 6...Nf6 walks into mate and 6...g6 does not."""
+    with judge.Judge(depth=8) as judging:
+        board = chess.Board()
+        for san in ("e4", "e5", "Qh5", "Nc6", "Bc4"):
+            board.push_san(san)
+        walked_in = judging.judge_move(board, board.parse_san("Nf6"))
+        defended = judging.judge_move(board, board.parse_san("g6"))
+
+    assert walked_in.blunder is True
+    assert defended.loss < judge.MISTAKE
+    assert walked_in.loss > defended.loss
+
+
+@engine
+def test_a_mate_cannot_set_the_average_by_itself():
+    """A forced mate converts to ten thousand centipawns. One of those in
+    a hundred moves would make the mean a report about whether the game
+    ended in mate."""
+    with judge.Judge(depth=8) as judging:
+        board = chess.Board()
+        for san in ("e4", "e5", "Qh5", "Nc6", "Bc4"):
+            board.push_san(san)
+        walked_in = judging.judge_move(board, board.parse_san("Nf6"))
+    assert walked_in.loss == judge.MAX_LOSS
+
+
+@engine
+def test_every_judgement_says_who_made_it():
+    with judge.Judge(depth=6) as judging:
+        row = judging.judge_move(chess.Board(), chess.Board().parse_san("e4"))
+    assert row.judged_by == judge.BY_ENGINE
+    assert row.as_dict()["judged_by"] == judge.BY_ENGINE
+
+
+def test_without_an_engine_it_falls_back_and_says_so():
+    """An absent engine is a normal state with a working fallback, and a
+    number whose source cannot be told apart is one nobody can compare."""
+    judging = judge.Judge(path=None)
+    judging.path = None
+    assert judging.kind == judge.BY_MATERIAL
+
+    board = chess.Board("rnbqkbnr/pppp1ppp/8/4p3/6P1/5P2/PPPPP2P/RNBQKBNR b KQkq - 0 2")
+    row = judging.judge_move(board, board.parse_san("Qh4"))
+    assert row.judged_by == judge.BY_MATERIAL
+    assert row.as_dict()["judged_by"] == judge.BY_MATERIAL
+
+
+def test_the_material_judge_sees_a_pawn_given_away():
+    """One reply deep is all it sees, and that is stated rather than
+    stretched: after 1.e4 e5, playing d4 hands a pawn to exd4 and Nf3
+    hands over nothing.
+
+    My first attempt at this test used 1.Nf3 e5 2.Nxe5 as the blunder,
+    which is not one -- it wins a pawn. The judge was right and the test
+    was wrong.
+    """
+    judging = judge.Judge(path=None)
+    judging.path = None
+    board = chess.Board()
+    board.push_san("e4")
+    board.push_san("e5")
+    gives_a_pawn = judging.judge_move(board, board.parse_san("d4"))
+    keeps_it = judging.judge_move(board, board.parse_san("Nf3"))
+    assert gives_a_pawn.loss >= 100
+    assert keeps_it.loss == 0.0
+
+
+# --------------------------------------------------------------------------
+# the player says why
+# --------------------------------------------------------------------------
+
+def test_a_traced_move_carries_what_was_considered():
+    player = arena.SearchPlayer(depth=2, trace=True)
+    board = chess.Board()
+    move = player.choose(board, random.Random(3))
+
+    thought = player.thoughts[-1]
+    assert thought.chosen == board.san(move)
+    assert len(thought.considered) == board.legal_moves.count()
+    assert thought.nodes > 0
+    assert thought.considered == sorted(thought.considered,
+                                        key=lambda row: -row[1])
+
+
+def test_the_margin_says_whether_it_was_a_decision():
+    """A move ahead by two centipawns is a tie the evaluation happened to
+    win. Measured on the baseline: 77% of moves had no margin at all, and
+    those cost 195 against 151 for the rest."""
+    player = arena.SearchPlayer(depth=2, trace=True)
+    player.choose(chess.Board(), random.Random(5))
+    thought = player.thoughts[-1]
+    # Material counting at depth two in the opening: everything ties.
+    assert thought.margin == 0.0
+    assert thought.close_call is True
+
+
+def test_tracing_is_off_unless_asked_for():
+    """The scores are computed either way; keeping them for five hundred
+    games would hold several million rows for nobody."""
+    player = arena.SearchPlayer(depth=2)
+    player.choose(chess.Board(), random.Random(1))
+    assert player.thoughts == []
+
+
+def test_a_trace_survives_being_written_down():
+    player = arena.SearchPlayer(depth=2, trace=True)
+    player.choose(chess.Board(), random.Random(2))
+    row = player.thoughts[-1].as_dict()
+    assert set(row) >= {"ply", "fen", "chosen", "considered", "margin",
+                        "close_call", "depth", "nodes"}
+    assert row["fen"] == chess.Board().fen()
+
+
+def test_the_summary_reports_its_denominator():
+    """"нашли 23 ошибки" means nothing without how many moves were looked
+    at -- the same rule `invariants.summarise` states for turns."""
+    rows = [judge.Judged(ply=1, fen="", move="e4", loss=0.0),
+            judge.Judged(ply=2, fen="", move="Qh5", loss=400.0)]
+    summary = judge.summarise(rows)
+    assert summary["moves"] == 2
+    assert summary["blunders"] == 1 and summary["mistakes"] == 1
+    assert summary["mean_loss"] == 200.0

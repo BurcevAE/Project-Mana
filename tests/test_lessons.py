@@ -411,6 +411,12 @@ def test_next_answers_without_a_journal(tmp_path, monkeypatch, capsys):
     trying to get out of."""
     from mana.cli import _next_policy_experiment
 
+    # Both, because either one alone can be defeated: a working directory
+    # is ignored when MANA_DATA_DIR is set, and the variable is ignored
+    # by anything that resolves against the CWD. Found by running the
+    # suite with the variable set for a chess experiment, where this test
+    # then read the real journal.
+    monkeypatch.setenv("MANA_DATA_DIR", str(tmp_path))
     monkeypatch.chdir(tmp_path)
     assert _next_policy_experiment() == 0
     assert capsys.readouterr().out == ""    # nothing to say, said quietly
