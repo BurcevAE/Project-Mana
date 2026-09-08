@@ -26,9 +26,15 @@ def ledger(tmp_path):
     return Ledger(tmp_path / "findings.jsonl")
 
 
-def add(ledger, *, interval, created, verdict=REJECTED, **conditions):
+#: The domain has to be here: a law is scoped by it, and a finding without
+#: one produces a series with no domain, which by design takes no lift.
+APPROACH = {"domain": "chess", "model": "ridge"}
+
+
+def add(ledger, *, interval, created, verdict=REJECTED, approach=None,
+        **conditions):
     ledger.record(Finding(
-        question=QUESTION, approach={"model": "ridge"}, verdict=verdict,
+        question=QUESTION, approach=approach or APPROACH, verdict=verdict,
         measurement=measurement_of(240, interval, 0.5),
         conditions=conditions, created=created))
 
@@ -274,3 +280,135 @@ def test_the_real_series_chooses_a_real_axis():
                            cost=lambda c: 450, controllable=controllable)
     assert chosen is not None
     assert chosen.condition in controllable
+
+
+# --------------------------------------------------------------------------
+# a standing law with untested limits
+#
+# What a PROPOSED law is licensed to do: point at the next experiment.
+# `laws.py` calls it "suggestive, nothing more", and that is exactly this.
+# --------------------------------------------------------------------------
+
+def _book_with_law(*, domain="chess", axis="feature_set", exceptions=("не проверено",),
+                   refuted=False):
+    from mana.cognition.laws import Condition, LawBook
+    from mana.cognition.lawgiver import INTERVENTION_FORMAT
+
+    book = LawBook()
+    law = book.propose(Condition(domain=domain),
+                       (INTERVENTION_FORMAT.format(axis=axis, was="a", now="b"),),
+                       "утверждение", discovered_in=domain)
+    for note in exceptions:
+        law.add_exception(note)
+    if refuted:
+        law.record_evidence(effect=-0.4, trials=100, experiment_id="a")
+        law.record_evidence(effect=-0.3, trials=100, experiment_id="b")
+    return book
+
+
+def with_a_flip(ledger):
+    """corpus varied flat; feature_set flipped, so it scores FLIP_FOUND."""
+    add(ledger, corpus_games=5000, feature_set="base12", depth=2,
+        interval=[0.4495, 0.6144], created=1.0)
+    add(ledger, corpus_games=5000, feature_set="extended", depth=2,
+        interval=[0.6155, 0.7615], created=2.0, verdict=ACCEPTED)
+    return read(ledger)
+
+
+def test_a_standing_law_lifts_the_axis_it_claims_about(ledger):
+    """Overturning a claim already made is worth more than refining a
+    boundary -- and less than the first look at unclaimed space."""
+    read_series = with_a_flip(ledger)
+    plain = {p.condition: p for p in probes.probes(read_series)}
+    lifted = {p.condition: p for p in
+              probes.probes(read_series, book=_book_with_law())}
+
+    assert plain["feature_set"].information == probes.FLIP_FOUND
+    assert lifted["feature_set"].information == probes.LAW_AT_RISK
+    assert probes.FLIP_FOUND < probes.LAW_AT_RISK < probes.NEVER_VARIED
+
+
+def test_only_the_claimed_axis_moves(ledger):
+    read_series = with_a_flip(ledger)
+    plain = {p.condition: p.information for p in probes.probes(read_series)}
+    lifted = {p.condition: p.information for p in
+              probes.probes(read_series, book=_book_with_law())}
+    moved = [k for k in plain if plain[k] != lifted[k]]
+    assert moved == ["feature_set"]
+
+
+def test_a_refuted_law_lifts_nothing(ledger):
+    """A claim the evidence has already contradicted has no limits left
+    worth testing."""
+    read_series = with_a_flip(ledger)
+    lifted = {p.condition: p for p in
+              probes.probes(read_series, book=_book_with_law(refuted=True))}
+    assert lifted["feature_set"].information == probes.FLIP_FOUND
+
+
+def test_a_law_without_exceptions_lifts_nothing(ledger):
+    """The lift is for an untested limit, not for existing."""
+    read_series = with_a_flip(ledger)
+    lifted = {p.condition: p for p in
+              probes.probes(read_series, book=_book_with_law(exceptions=()))}
+    assert lifted["feature_set"].information == probes.FLIP_FOUND
+
+
+def test_a_law_from_another_domain_says_nothing_here(ledger):
+    """Letting it speak is how a law gets applied where it was never
+    measured."""
+    read_series = with_a_flip(ledger)
+    lifted = {p.condition: p for p in
+              probes.probes(read_series, book=_book_with_law(domain="1c"))}
+    assert lifted["feature_set"].information == probes.FLIP_FOUND
+
+
+def test_a_series_with_no_single_domain_takes_no_lift(ledger):
+    """Empty matches nothing rather than everything, for the same reason."""
+    add(ledger, corpus_games=5000, feature_set="base12", depth=2,
+        interval=[0.4495, 0.6144], created=1.0, approach={"domain": "chess"})
+    add(ledger, corpus_games=5000, feature_set="extended", depth=2,
+        interval=[0.6155, 0.7615], created=2.0, verdict=ACCEPTED,
+        approach={"domain": "1c"})
+
+    read_series = read(ledger)
+    assert read_series.domain == ""
+    lifted = {p.condition: p for p in
+              probes.probes(read_series, book=_book_with_law())}
+    assert lifted["feature_set"].information != probes.LAW_AT_RISK
+
+
+def test_a_law_cannot_justify_a_behaviour_change():
+    """PROPOSED points at an experiment. It may not change how anything
+    answers, and nothing here lets it."""
+    import inspect
+
+    source = inspect.getsource(probes)
+    for acting in ("policy.use", "Policy.of", "apply(", "adopt"):
+        assert acting not in source
+
+
+def test_the_lift_rescues_an_axis_from_below_the_floor(ledger):
+    """The measured effect on the real ledger: feature_set moves from
+    -0.150 -- below MIN_EXPERIMENT_VALUE, "not worth running at all" --
+    to +0.350, a legitimate candidate ranked below the unexplored axes."""
+    read_series = with_a_flip(ledger)
+    cost = lambda condition: 450
+
+    plain = {p.condition: p for p in probes.probes(read_series, cost)}
+    lifted = {p.condition: p for p in
+              probes.probes(read_series, cost, book=_book_with_law())}
+
+    assert plain["feature_set"].worth_running is False
+    assert lifted["feature_set"].worth_running is True
+
+
+def test_the_lift_does_not_overrule_an_unexplored_axis(ledger):
+    """A standing claim outranks a refined boundary and not blank space.
+    Tuning the constant until the claimed axis won would be fitting the
+    policy to a wanted answer."""
+    read_series = with_a_flip(ledger)
+    lifted = probes.probes(read_series, lambda c: 0,
+                           book=_book_with_law())
+    assert lifted[0].information == probes.NEVER_VARIED
+    assert lifted[0].condition != "feature_set"

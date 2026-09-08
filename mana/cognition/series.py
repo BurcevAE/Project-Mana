@@ -64,7 +64,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from .findings import Finding, Ledger, UNCLASSIFIED
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.2"
+__version__ = "1.3"
 
 
 @dataclass(frozen=True)
@@ -79,10 +79,15 @@ class Observation:
     #: that looks only at conditions would call two different methods
     #: "isolated on corpus_games" and hide the larger difference.
     approach_id: str = ""
+    #: The domain the approach names. Carried so a reader can tell which
+    #: laws are about this question at all -- a law scoped to chess says
+    #: nothing about a series that is not.
+    domain: str = ""
 
     @classmethod
     def of(cls, finding: Finding) -> "Observation":
         return cls(approach_id=finding.approach_id,
+                   domain=str((finding.approach or {}).get("domain") or ""),
                    finding_id=finding.finding_id,
                    conditions=dict(finding.conditions),
                    failure=finding.failure.failure,
@@ -232,6 +237,17 @@ class Series:
         return tuple(sorted(k for k, n in counts.items() if n != total))
 
     @property
+    def domain(self) -> str:
+        """The domain every observation agrees on, or "" if they differ.
+
+        Empty on disagreement rather than picking the commonest: a series
+        spanning two domains has no single scope, and answering as though
+        it did is how a law gets applied where it was never measured.
+        """
+        found = {o.domain for o in self.observations if o.domain}
+        return found.pop() if len(found) == 1 else ""
+
+    @property
     def approaches(self) -> Tuple[str, ...]:
         """How many distinct methods this question has been attacked with."""
         return tuple(sorted({o.approach_id for o in self.observations}))
@@ -259,7 +275,7 @@ class Series:
         return tuple(c for c in self.flips if not c.isolated)
 
     def summary(self) -> Dict[str, Any]:
-        return {"question": self.question,
+        return {"question": self.question, "domain": self.domain,
                 "observations": len(self.observations),
                 "classes": list(self.classes),
                 "varied": list(self.varied),

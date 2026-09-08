@@ -470,19 +470,23 @@ def _show_next() -> int:
     the caller's fact, so nothing is priced here and every axis comes back
     unpriced -- visible rather than assumed cheap.
     """
-    from .cognition import probes, series
+    from .cognition import lawgiver, probes, series
 
     runs = series.all_series()
     if not runs:
         print("Реестр находок пуст — предлагать нечего.")
         return 0
 
+    # A standing law with an untested limit lifts the axis it claims
+    # about. That is what PROPOSED is licensed to do -- point at the next
+    # experiment -- and it may not change how anything answers.
+    book = lawgiver.load_book()
     for run in runs:
         print(f"вопрос: {run.question}")
-        print(f"наблюдений: {len(run.observations)}")
+        print(f"наблюдений: {len(run.observations)}   домен: {run.domain or '—'}")
         if len(run.observations) < 2:
             print("  серия из одного наблюдения — оси ещё не сравнивались")
-        for probe in probes.probes(run):
+        for probe in probes.probes(run, book=book):
             print("  " + probe.describe())
         print()
 

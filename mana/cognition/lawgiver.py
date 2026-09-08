@@ -65,7 +65,7 @@ from .laws import Condition, CognitiveLaw, LawBook, PROPOSED
 from .series import Comparison, Series
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 #: Where the book lives. Beside the rest of the user's state, like the
 #: journal and the ledger: it is evidence about the code, and evidence
@@ -76,6 +76,34 @@ BOOK_DIRNAME = "laws"
 def book_path() -> Path:
     from ..paths import data_root
     return Path(data_root()) / BOOK_DIRNAME / "laws.json"
+
+
+#: How an intervention names the axis it varies. A contract between this
+#: module and `probes.py`, owned here because this module writes it: the
+#: alternative is `probes` parsing prose, which is guessing about a format
+#: nobody agreed to. `axis_of` is the only reader.
+INTERVENTION_FORMAT = "{axis}: {was} -> {now}"
+
+_AXIS_SEPARATOR = ": "
+
+
+def axis_of(intervention: str) -> str:
+    """The condition an intervention varies, or "" if it is not one of ours.
+
+    Returns "" rather than guessing when the string was not written in
+    the format above -- a law imported from elsewhere, or one written by
+    hand, names its intervention however it likes.
+    """
+    head, separator, rest = str(intervention or "").partition(_AXIS_SEPARATOR)
+    if not separator or " -> " not in rest:
+        return ""
+    return head.strip()
+
+
+def axes_of(law: Any) -> List[str]:
+    """Every condition a law's interventions vary."""
+    found = [axis_of(entry) for entry in getattr(law, "intervention", ())]
+    return [axis for axis in found if axis]
 
 
 #: How a class change reads as a direction. Used to phrase the claim, not
@@ -171,7 +199,8 @@ def candidates(series: Series, ledger: Optional[Ledger] = None) -> List[Candidat
         held = {k: v for k, v in (right.conditions or {}).items() if k != axis}
         out.append(Candidate(
             condition=Condition(domain=domain),
-            intervention=(f"{axis}: {values['was']} -> {values['now']}",),
+            intervention=(INTERVENTION_FORMAT.format(
+                axis=axis, was=values["was"], now=values["now"]),),
             claimed_effect=(
                 f"{axis} со значения {values['was']!r} на {values['now']!r} "
                 f"{direction} исход с {flip.from_class} на {flip.to_class}"),

@@ -287,3 +287,27 @@ def test_the_real_series_yields_a_proposed_law():
     for law in laws:
         assert law.status == PROPOSED
         assert law.exceptions
+
+
+# --------------------------------------------------------------------------
+# the intervention format is a contract, owned here
+# --------------------------------------------------------------------------
+
+def test_an_intervention_names_its_axis_readably(ledger):
+    """`probes.py` reads this. The format lives here because this module
+    writes it -- the alternative is the reader guessing at prose."""
+    law = lawgiver.propose(flipped(ledger), LawBook(), ledger)[0]
+    assert lawgiver.axes_of(law) == ["feature_set"]
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("feature_set: base12 -> extended", "feature_set"),
+    ("corpus_games: 1000 -> 5000", "corpus_games"),
+    ("VERIFY before ANSWER", ""),          # a law written by hand
+    ("", ""),
+    ("no separator here", ""),
+])
+def test_axis_of_returns_empty_rather_than_guessing(text, expected):
+    """A law imported from elsewhere names its intervention however it
+    likes, and inventing an axis for it would be guessing."""
+    assert lawgiver.axis_of(text) == expected

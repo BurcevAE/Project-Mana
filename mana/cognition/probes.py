@@ -92,7 +92,7 @@ from .experiments import MIN_EXPERIMENT_VALUE, VALUE_WEIGHTS, select
 from .series import Series
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 #: Information in an axis nobody has varied. The most that can be said
 #: for an experiment: its outcome is entirely unknown.
@@ -107,10 +107,45 @@ IN_CONFOUNDED_FLIP = 0.9
 #: more points refine it rather than discovering it.
 FLIP_FOUND = 0.3
 
+#: An axis carrying a standing law whose limits were never tested. Above
+#: FLIP_FOUND and below a fresh axis: overturning a claim already made is
+#: worth more than refining a boundary and less than the first look at
+#: something nobody has claimed anything about.
+#:
+#: This is what a PROPOSED law is licensed to do -- `laws.py` calls it
+#: "suggestive, nothing more", and pointing at the next experiment is
+#: exactly that. It may not justify a behaviour change, and nothing here
+#: lets it.
+LAW_AT_RISK = 0.8
+
 #: How the cost term is scaled before the weight is applied. Mirrors
 #: `experiments.plan`, so a probe and a pipeline experiment priced at the
 #: same cost score the same penalty.
 COST_SCALE = 500.0
+
+
+def _axes_at_risk(book: Any, domain: str) -> Dict[str, str]:
+    """Axes where a standing law has a limit nobody has tested.
+
+    Scoped by domain: a law about chess says nothing about a series that
+    is not chess, and letting it speak there is how a law gets applied
+    where it was never measured. An empty domain matches nothing rather
+    than everything, for the same reason.
+    """
+    from .laws import REFUTED
+    from .lawgiver import axes_of
+
+    if book is None or not domain:
+        return {}
+    out: Dict[str, str] = {}
+    for law in book.all():
+        if law.status == REFUTED or not law.exceptions:
+            continue
+        if law.condition.domain and law.condition.domain != domain:
+            continue
+        for axis in axes_of(law):
+            out.setdefault(axis, law.exceptions[0])
+    return out
 
 
 @dataclass(frozen=True)
@@ -182,7 +217,8 @@ def _distinct(series: Series, condition: str) -> Tuple[Any, ...]:
 
 def probes(series: Series,
            cost: Optional[Callable[[str], int]] = None,
-           controllable: Optional[Sequence[str]] = None) -> List[Probe]:
+           controllable: Optional[Sequence[str]] = None,
+           book: Any = None) -> List[Probe]:
     """Every axis in the record, with what is known about it.
 
     Includes axes that have been probed and found flat -- their low value
@@ -202,11 +238,17 @@ def probes(series: Series,
         for name in comparison.changed:
             flipped[name] = True
 
+    at_risk = _axes_at_risk(book, series.domain)
+
     axes = sorted(set(series.varied) | set(series.constant) | set(series.partial))
     out: List[Probe] = []
     for condition in axes:
         values = _distinct(series, condition)
-        if flipped.get(condition):
+        if condition in at_risk:
+            information = LAW_AT_RISK
+            reason = (f"стоящий закон с непроверенным пределом: "
+                      f"{at_risk[condition]}")
+        elif flipped.get(condition):
             information = FLIP_FOUND
             reason = "переворот на этой оси уже изолирован"
         elif confounded.get(condition):
@@ -241,7 +283,8 @@ def probes(series: Series,
 
 def choose(series: Series, budget: int,
            cost: Optional[Callable[[str], int]] = None,
-           controllable: Optional[Sequence[str]] = None) -> Optional[Probe]:
+           controllable: Optional[Sequence[str]] = None,
+           book: Any = None) -> Optional[Probe]:
     """The probe worth running next, or None.
 
     Delegates to `experiments.select`, which applies the same
@@ -249,17 +292,18 @@ def choose(series: Series, budget: int,
     worthless experiment because there is budget left is how a research
     loop converts compute into noise. None is a real answer.
     """
-    return select([p for p in probes(series, cost, controllable)
+    return select([p for p in probes(series, cost, controllable, book)
                    if p.controllable], budget)
 
 
 def report(series: Series,
            cost: Optional[Callable[[str], int]] = None,
            budget: int = 10 ** 9,
-           controllable: Optional[Sequence[str]] = None) -> Dict[str, Any]:
+           controllable: Optional[Sequence[str]] = None,
+           book: Any = None) -> Dict[str, Any]:
     """What is known per axis and what would be chosen, without choosing."""
-    found = probes(series, cost, controllable)
-    chosen = choose(series, budget, cost, controllable)
+    found = probes(series, cost, controllable, book)
+    chosen = choose(series, budget, cost, controllable, book)
     notes = ["ценность считается из информативности и цены; прирост "
              "способности здесь не измеряется и в неё не входит"]
     if controllable is None:
