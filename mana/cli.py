@@ -538,6 +538,44 @@ def _show_laws() -> int:
     return 0
 
 
+def _forget_junk(consented: bool) -> int:
+    """Remove stored items the guards would refuse to write today.
+
+    Reports first and removes only when told to. Deleting somebody's
+    memory is not something to do quietly, and a cleanup that reports a
+    count without the rows is one nobody can check.
+    """
+    from .config import Config
+    from . import ManaAgent
+
+    cfg = Config(enable_llm=False, enable_web=False)
+    cfg.ensure_dirs()
+    graph = ManaAgent(cfg).graph_memory
+    report = graph.forget_junk(consented=consented)
+
+    nodes, entities = report["nodes"], report["entities"]
+    if not nodes and not entities:
+        print("Мусора в памяти не найдено.")
+        return 0
+
+    print(f"Записи, которые сегодняшние ограждения не пропустили бы: "
+          f"{len(nodes)} узлов, {len(entities)} осиротевших сущностей")
+    print()
+    for row in nodes:
+        print(f"  узел      {row['text']}")
+    for row in entities:
+        print(f"  сущность  {row['text']}")
+    print()
+    if report.get("error"):
+        print("Не удалось удалить: " + report["error"])
+        return 1
+    if report["removed"]:
+        print("Удалено.")
+        return 0
+    print("Ничего не удалено. Если согласны:  MANA.exe --forget-junk --yes")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Argument parser, split out of main() so tests can construct it
     without running the agent."""
@@ -609,6 +647,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--practice", nargs="?", const=0, type=int, metavar="N",
                         help="Сыграть N партий на проверенном движке и добавить "
                              "их в корпус; без числа — показать накопленное")
+    parser.add_argument("--forget-junk", action="store_true", dest="forget_junk",
+                        help="Показать записи памяти, которые сегодняшние "
+                             "ограждения не пропустили бы; удаляет только с --yes")
     parser.add_argument("--capabilities", action="store_true",
                         help="Что MANA умеет сверх поставки и доказано ли это")
     parser.add_argument("--acquire", metavar="ИМЯ",
@@ -695,6 +736,9 @@ def main() -> int:
 
     if args.practice is not None:
         return _practice(int(args.practice))
+
+    if args.forget_junk:
+        return _forget_junk(bool(args.yes))
 
     if args.capabilities:
         return _show_capabilities()

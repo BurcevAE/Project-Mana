@@ -440,10 +440,17 @@ class MemoryManager:
     def remember_user(self, session_id: str, content: str, metadata: Optional[Dict[str, Any]] = None) -> int:
         if not self.config.memory_store_user_messages:
             return 0
+        # An empty turn says nothing and still costs a line of every
+        # recalled window afterwards. Measured: a blank "USER:" sat at the
+        # top of the transcript handed to the model on every turn.
+        if not (content or "").strip():
+            return 0
         return self._event(session_id, "USER_MESSAGE", content, metadata, "user")
 
     def remember_assistant(self, session_id: str, content: str, metadata: Optional[Dict[str, Any]] = None) -> int:
         if not self.config.memory_store_assistant_responses:
+            return 0
+        if not (content or "").strip():
             return 0
         return self._event(session_id, "MANA_RESPONSE", content, metadata, "mana")
 

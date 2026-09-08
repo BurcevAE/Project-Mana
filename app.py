@@ -314,6 +314,10 @@ def main() -> int:
                 return 2
         return _practice(count)
 
+    if argv and argv[0] == "--forget-junk":
+        from mana.cli import _forget_junk
+        return _forget_junk("--yes" in argv[1:])
+
     if argv and argv[0] == "--capabilities":
         from mana.cli import _show_capabilities
         return _show_capabilities()
