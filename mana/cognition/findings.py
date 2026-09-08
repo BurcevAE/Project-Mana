@@ -334,6 +334,12 @@ class Finding:
 
 
 def ledger_path() -> Path:
+    """Where the ledger lives when nobody says otherwise.
+
+    Kept in step with `Config.findings_path`, which is what an agent
+    actually passes; this default is for readers that show the record
+    without constructing one.
+    """
     from ..paths import data_root
     return Path(data_root()) / LEDGER_DIRNAME / "findings.jsonl"
 

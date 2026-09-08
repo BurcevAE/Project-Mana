@@ -47,6 +47,7 @@ likely to hold a password with the least to show for the risk.
 from __future__ import annotations
 
 import json
+from collections import deque
 import os
 import re
 import secrets
@@ -196,6 +197,12 @@ class Episode:
         return [c.tool for c in self.calls if c.verified == "unobserved"]
 
 
+#: How many recent episodes stay in memory for the live check. Small:
+#: the only reader asks for one session's last few turns, and a
+#: process that runs for weeks must not grow a list of everything it
+#: ever answered.
+RECENT_EPISODES = 24
+
 #: Where the journal lives when nobody says otherwise. Kept in step with
 #: `Config.journal_path`, which is what the agent actually passes; this
 #: default is for readers (`--journal`) that show the record without
@@ -252,6 +259,7 @@ class Journal:
         self.version = str(version or "")
         self._lock = threading.Lock()
         self._local = threading.local()
+        self._recent: "deque[Episode]" = deque(maxlen=RECENT_EPISODES)
 
     # ---------- recording ----------
 
@@ -295,7 +303,26 @@ class Journal:
         except Exception:
             pass
 
+    def session_recent(self, session: str, limit: int = RECENT_EPISODES,
+                       exclude: str = "") -> List[Episode]:
+        """The last episodes of one session, from memory, oldest first.
+
+        From memory rather than off disk. This is read once per turn, the
+        file is capped at 8 MB plus a rotation, and a check that costs a
+        full file read every turn is a check somebody eventually switches
+        off. What it misses -- episodes from before this process started
+        -- is the correct trade for a live check: the full record is
+        still there for `--findings` to walk.
+        """
+        rows = [e for e in list(self._recent)
+                if e.session == session and e.episode_id != exclude]
+        return rows[-limit:] if limit and limit > 0 else rows
+
     def write(self, episode: Episode) -> bool:
+        # Kept in memory whether or not the disk write works: the live
+        # check that reads this should not go blind because a directory
+        # is read-only.
+        self._recent.append(episode)
         line = json.dumps(episode.as_dict(), ensure_ascii=False)
         with self._lock:
             try:

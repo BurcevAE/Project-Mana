@@ -640,9 +640,37 @@ class CoreMixin:
         except Exception:
             self.journal.abandon()
             raise
-        self.journal.finish(str(result.get("answer") or ""),
-                            self._route_of(result))
+        episode = self.journal.finish(str(result.get("answer") or ""),
+                                      self._route_of(result))
+        self._note_observed_failures(episode)
         return result
+
+    def _note_observed_failures(self, episode) -> None:
+        """Write down what objectively went wrong, without being asked.
+
+        The last link of Episode -> Outcome -> Failure -> Finding. Before
+        this, a failure in real use reached the ledger only if a person
+        ran `--findings`, read the report and wrote the finding by hand,
+        so the record of what goes wrong in daily use was as good as
+        somebody's spare attention.
+
+        Mechanical violations only -- see mana.cognition.observed for why
+        a guess must not be written into the ledger automatically.
+        """
+        if episode is None:
+            return
+        try:
+            from ..cognition.findings import Ledger
+            from ..cognition.observed import record
+            earlier = self.journal.session_recent(
+                episode.session, exclude=episode.episode_id)
+            written = record(episode, earlier,
+                             ledger=Ledger(Path(self.config.findings_path)))
+            if written:
+                self._vlog("observed failures: " + ", ".join(
+                    f"{w['invariant']}×{w['seen']}" for w in written))
+        except Exception as exc:
+            self._vlog(f"observed-failure record failed: {exc}")
 
     def _solve_task(self, task: str) -> Dict[str, Any]:
         if self.config.clarify_ambiguous_followups:

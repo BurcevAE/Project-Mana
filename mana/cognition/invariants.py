@@ -72,6 +72,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from ..echo_guard import similarity, SAME_ANSWER, DIFFERENT_QUESTION, MIN_LENGTH
 from ..journal import Episode
+from ..outcome import CONTRADICTED
 
 #: Component version -- see mana/version.py for the bump conventions.
 __version__ = "1.0"
@@ -294,6 +295,34 @@ def _stemmed_target(text: str, known_targets: Sequence[str]) -> str:
     return ""
 
 
+def acted_but_state_disagrees(episode: Episode,
+                              earlier: Sequence[Episode]) -> Optional[Violation]:
+    """A tool ran, looked at the machine, and found the wrong state.
+
+    The only invariant here that reads no text at all. The other three
+    compare an answer against a request or against an earlier answer,
+    which is a judgement however carefully it is made; this one reads a
+    verdict the tool itself reached by comparing what it was asked for
+    against what it found (see mana.outcome). There is nothing left to
+    interpret, and no word list to be wrong.
+
+    `unobserved` is not a violation. A tool that could not check is not a
+    tool that got it wrong, and folding the two together would rebuild
+    the assumption the outcome layer exists to remove.
+    """
+    disagreed = [call.tool for call in episode.calls
+                 if call.verified == CONTRADICTED]
+    if not disagreed:
+        return None
+    return Violation(
+        invariant="acted_but_state_disagrees",
+        kind=MECHANICAL,
+        episode_id=episode.episode_id,
+        reason=("инструмент сам сообщил, что состояние машины не совпало с "
+                "запрошенным: " + ", ".join(disagreed)),
+        evidence={"tools": disagreed, "answer": episode.answer[:200]})
+
+
 #: Every invariant, in the order a report lists them. Explicit rather than
 #: discovered, so one added without a line here fails a test instead of
 #: quietly never running -- this project's recurring failure is machinery
@@ -302,6 +331,7 @@ INVARIANTS: Sequence[Callable[..., Optional[Violation]]] = (
     repeats_earlier_answer,
     claimed_action_without_acting,
     actionable_request_not_acted_on,
+    acted_but_state_disagrees,
 )
 
 
@@ -326,19 +356,34 @@ def scan(episodes: Sequence[Episode],
         targets = known_targets()
     found: List[Violation] = []
     for index, episode in enumerate(episodes):
-        earlier = episodes[:index]
-        for invariant in INVARIANTS:
-            try:
-                if invariant is actionable_request_not_acted_on:
-                    violation = invariant(episode, earlier, targets)
-                else:
-                    violation = invariant(episode, earlier)
-            except Exception:
-                # A broken invariant must not stop the scan; it is the
-                # least important thing running.
-                continue
-            if violation is not None:
-                found.append(violation)
+        found.extend(check(episode, episodes[:index], targets))
+    return found
+
+
+def check(episode: Episode, earlier: Sequence[Episode] = (),
+          targets: Optional[Sequence[str]] = None) -> List[Violation]:
+    """Every invariant one episode violates, in report order.
+
+    Split out of `scan` because the end of a turn has one episode and its
+    own prefix, not a run to walk. `scan` calls this, so which invariants
+    apply and how each is called is written down once -- two copies of
+    that would drift the first time an invariant took a new argument.
+    """
+    if targets is None:
+        targets = known_targets()
+    found: List[Violation] = []
+    for invariant in INVARIANTS:
+        try:
+            if invariant is actionable_request_not_acted_on:
+                violation = invariant(episode, earlier, targets)
+            else:
+                violation = invariant(episode, earlier)
+        except Exception:
+            # A broken invariant must not stop the scan; it is the least
+            # important thing running.
+            continue
+        if violation is not None:
+            found.append(violation)
     return found
 
 
