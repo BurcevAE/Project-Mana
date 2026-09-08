@@ -125,6 +125,76 @@ def _from_premises(lowered: str) -> bool:
     return any(marker in lowered for marker in _FROM_PREMISES)
 
 
+#: The built-in marker vocabulary, as data rather than as a chain of
+#: `elif`s. Written out so that `classify_features` can say which of them
+#: fired without a second copy of the list drifting from the first.
+BUILTIN_MARKERS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("programming", ("функци", "код", "python", "напиши функцию")),
+    ("math", ("вычисли", "посчитай", "сколько", "calculate")),
+    ("sequence", ("продолжи", "последовательность", "sequence")),
+    ("reasoning", ("почему", "объясни", "сравни", "обоснуй")),
+)
+
+#: Which class of failure a wrong answer is. Two different things that
+#: looked identical while `classify` returned only its answer.
+AMBIGUOUS = "ambiguous"      # a feature of the right class was present too
+ABSENT = "absent"            # nothing of the right class was present at all
+
+
+def classify_features(task: str) -> Dict[str, Any]:
+    """Which markers fired, and for which class. Decides nothing.
+
+    Exists so a failure can be diagnosed rather than only counted: a
+    decision nobody can look inside is one nobody can explain.
+    """
+    lowered = (task or "").lower()
+    fired: List[Tuple[str, str]] = []
+    for kind, markers in BUILTIN_MARKERS:
+        for marker in markers:
+            if marker in lowered:
+                fired.append((kind, marker))
+    written = [(rule.decides, rule.marker)
+               for rule in _written_rules() if rule.matches(lowered)]
+    return {"lowered": lowered, "fired": fired, "written": written,
+            "classes": sorted({kind for kind, _ in fired})}
+
+
+def diagnose(task: str, wanted: str, got: str) -> Dict[str, Any]:
+    """Why this answer came out, in the two shapes a marker list can fail.
+
+    AMBIGUOUS: a marker of the wanted class was there and a marker of
+    another class was consulted first -- the features conflict and the
+    order decided.
+
+    ABSENT: no marker of the wanted class appears anywhere in the text --
+    the vocabulary has no way to say this class at all.
+    """
+    features = classify_features(task)
+    for_wanted = [marker for kind, marker in features["fired"] if kind == wanted]
+    others = [(kind, marker) for kind, marker in features["fired"]
+              if kind != wanted]
+    # AMBIGUOUS: a feature of some other class fired and decided, with
+    # nothing of the wanted class to compete against it. That is the
+    # "Сколько раз буква «и» встречается в тексте" shape: a maths word
+    # doing its job where the question is about a text.
+    #
+    # ABSENT: nothing fired at all and the answer came from the fallback.
+    # That is the "Известно: … Кто стоит на позиции 2?" shape: the
+    # vocabulary has no way to say this class.
+    shape = AMBIGUOUS if others else ABSENT
+    return {"shape": shape, "wanted": wanted, "got": got,
+            "wanted_markers": for_wanted, "competing": others,
+            "fired": features["fired"], "classes": features["classes"]}
+
+
+def _written_rules():
+    from .rules import in_force
+    try:
+        return in_force("task_naming")
+    except Exception:
+        return []
+
+
 def classify(task: str, difficulty: Optional[float] = None) -> Tuple[str, float]:
     """A cheap (kind, difficulty) read of the task, with no model involved.
 
@@ -145,6 +215,13 @@ def classify(task: str, difficulty: Optional[float] = None) -> Tuple[str, float]
         from ..brains import BrainPool
         difficulty = BrainPool.estimate_difficulty(task)
     t = (task or "").lower()
+    # A rule MANA wrote, if any, before the built-in list. That seat is
+    # what a constructed rule needs: the ambiguous failure is a conflict
+    # between two present features, and a rule consulted after the
+    # built-ins could never resolve one. Empty by default.
+    for rule in _written_rules():
+        if rule.before_builtin and rule.matches(t):
+            return rule.decides, difficulty
     if any(m in t for m in ("функци", "код", "python", "напиши функцию")):
         # What the task asks to PRODUCE comes first. Found by measuring
         # per domain instead of in aggregate: putting the text check
@@ -168,6 +245,9 @@ def classify(task: str, difficulty: Optional[float] = None) -> Tuple[str, float]
         kind = "reasoning"
     else:
         kind = "general"
+    for rule in _written_rules():
+        if not rule.before_builtin and rule.matches(t):
+            return rule.decides, difficulty
     return kind, difficulty
 
 

@@ -73,11 +73,20 @@ def _no_ambient_adoption(tmp_path_factory, monkeypatch):
     """
     from mana import policy as policy_mod
 
-    store = tmp_path_factory.mktemp("adopted") / "adopted.json"
-    monkeypatch.setattr(policy_mod, "_overlay_path", lambda: store)
+    from mana.cognition import rules as rules_mod
+
+    root = tmp_path_factory.mktemp("adopted")
+    monkeypatch.setattr(policy_mod, "_overlay_path", lambda: root / "adopted.json")
     monkeypatch.setattr(policy_mod, "_adopted_cache", None, raising=False)
+    # Rules MANA wrote are the same kind of state as a setting it adopted,
+    # and a test reading them would pass or fail by what this machine had
+    # installed. Found that way: a knob test came back clean because a
+    # rule installed by an earlier run was still deciding.
+    monkeypatch.setattr(rules_mod, "_path", lambda: root / "rules.json")
+    rules_mod._reset_for_tests()
     yield
     monkeypatch.setattr(policy_mod, "_adopted_cache", None, raising=False)
+    rules_mod._reset_for_tests()
 
 
 @pytest.fixture(autouse=True)

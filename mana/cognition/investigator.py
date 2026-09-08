@@ -51,8 +51,11 @@ import statistics
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from contextlib import nullcontext
+
 from .. import policy as policy_mod
 from ..policy import Policy
+from . import rules as rules_mod
 from . import trials
 from .findings import Finding, Ledger, measurement_of
 from ..core.gates import ACCEPTED, REJECTED
@@ -71,6 +74,42 @@ ACCEPTANCE = (
     "то же на свежей выборке, запечатанной до чтения",
     "ни одна группа не стала хуже ни на одной скрытой выборке",
 )
+
+
+@dataclass(frozen=True)
+class Change:
+    """Something that can be put in force for the length of a measurement.
+
+    Two kinds so far: a policy setting somebody declared, and a rule MANA
+    constructed from a diagnosis. They have the same obligations, so they
+    take the same path -- a second path beside this one is how the second
+    kind would end up held to an easier bar.
+    """
+    label: str
+    kind: str                        # policy | rule | baseline
+    settings: Dict[str, Any] = field(default_factory=dict)
+    policy: Optional[Policy] = None
+    rule: Optional[Any] = None
+    #: The claim this came from, when it came from one. Empty for a knob.
+    hypothesis: Dict[str, Any] = field(default_factory=dict)
+
+    def apply(self):
+        """In force on this thread, for this measurement only."""
+        if self.kind == "policy" and self.policy is not None:
+            return policy_mod.use(self.policy)
+        if self.kind == "rule" and self.rule is not None:
+            return rules_mod.Proposed(self.rule)
+        # The baseline is current behaviour, not a reconstruction of it.
+        return nullcontext()
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {"label": self.label, "kind": self.kind,
+                "settings": dict(self.settings),
+                "hypothesis": dict(self.hypothesis)}
+
+
+#: What the candidate is measured against: whatever the program does now.
+BASELINE = Change(label="как сейчас", kind="baseline")
 
 
 @dataclass(frozen=True)
@@ -93,11 +132,21 @@ class Oracle:
     #: The knobs a candidate may touch. The declared region of change.
     knobs: Tuple[str, ...]
     seeds: Optional[Dict[str, Tuple[int, ...]]] = None
+    #: Where a constructed rule belongs, in the decision's own vocabulary.
+    #: Separate from `name` because the decision has an identity that does
+    #: not change when a second experiment looks at it: a rule found while
+    #: investigating `task_naming_built` is still a rule about task
+    #: naming, and the classifier asks for that scope and no other.
+    scope: str = ""
 
-    def score(self, policy: Policy, seed: int) -> Dict[str, float]:
-        """Per-group accuracy under one policy on one seed."""
+    @property
+    def rule_scope(self) -> str:
+        return self.scope or self.name
+
+    def score(self, change: Change, seed: int) -> Dict[str, float]:
+        """Per-group accuracy under one change on one seed."""
         out: Dict[str, float] = {}
-        with policy_mod.use(policy):
+        with change.apply():
             for group in self.groups:
                 want = self.truth(group)
                 items = list(self.samples(seed, group))
@@ -108,8 +157,8 @@ class Oracle:
                 out[group] = right / len(items)
         return out
 
-    def overall(self, policy: Policy, seed: int) -> float:
-        by_group = self.score(policy, seed)
+    def overall(self, change: Change, seed: int) -> float:
+        by_group = self.score(change, seed)
         return statistics.mean(by_group.values()) if by_group else 0.0
 
 
@@ -141,6 +190,8 @@ class Investigation:
     failing: Dict[str, float] = field(default_factory=dict)
     candidates_tried: int = 0
     chosen: Dict[str, Any] = field(default_factory=dict)
+    #: The claim the chosen change came from, when it came from one.
+    hypothesis: Dict[str, Any] = field(default_factory=dict)
     discovery: Dict[str, Any] = field(default_factory=dict)
     validation: Dict[str, Any] = field(default_factory=dict)
     fresh: Dict[str, Any] = field(default_factory=dict)
@@ -158,6 +209,8 @@ class Investigation:
                 sorted(self.failing.items(), key=lambda kv: kv[1])))
         else:
             lines.append("  провалов нет")
+        if self.hypothesis:
+            lines.append(f"  гипотеза: {self.hypothesis.get('claim', '')}")
         if self.chosen:
             lines.append(f"  кандидатов рассмотрено: {self.candidates_tried}; "
                          f"выбран {self.chosen}")
@@ -177,14 +230,16 @@ class Investigation:
     def as_dict(self) -> Dict[str, Any]:
         return {"oracle": self.oracle, "failing": dict(self.failing),
                 "candidates_tried": self.candidates_tried,
-                "chosen": dict(self.chosen), "discovery": dict(self.discovery),
+                "chosen": dict(self.chosen),
+                "hypothesis": dict(self.hypothesis),
+                "discovery": dict(self.discovery),
                 "validation": dict(self.validation), "fresh": dict(self.fresh),
                 "verdict": self.verdict, "adopted": self.adopted,
                 "stopped_at": self.stopped_at, "why": self.why,
                 "finding_id": self.finding_id}
 
 
-def _candidate_policies(found: Oracle, current: Policy) -> List[Policy]:
+def from_knobs(found: Oracle, seeds: Sequence[int]) -> List[Change]:
     """Every setting in the declared region, one at a time and all at once.
 
     Coordinate-wise plus the combination, the same shape
@@ -192,8 +247,9 @@ def _candidate_policies(found: Oracle, current: Policy) -> List[Policy]:
     product is a budget nobody has, and an accepted combination would not
     say which part of it did the work -- so the singles run too.
     """
+    current = policy_mod.active()
     settings = current.as_dict()
-    out: List[Policy] = []
+    out: List[Change] = []
     combined: Dict[str, Any] = {}
     for name in found.knobs:
         knob = policy_mod._BY_NAME.get(name)
@@ -202,15 +258,71 @@ def _candidate_policies(found: Oracle, current: Policy) -> List[Policy]:
         for option in knob.options:
             if option == settings.get(name):
                 continue
-            out.append(Policy.of(**dict(settings, **{name: option})))
+            made = Policy.of(**dict(settings, **{name: option}))
+            out.append(Change(label=made.describe(), kind="policy",
+                              settings=made.changes(), policy=made))
             combined.setdefault(name, option)
     if len(combined) > 1:
-        out.append(Policy.of(**dict(settings, **combined)))
+        made = Policy.of(**dict(settings, **combined))
+        out.append(Change(label=made.describe(), kind="policy",
+                          settings=made.changes(), policy=made))
     return out
 
 
+def from_hypotheses(found: Oracle, seeds: Sequence[int]) -> List[Change]:
+    """Watch it fail, say why, and build what the claim licenses.
+
+    The other side of the line: a knob is a change somebody wrote down,
+    and this is a change constructed from a diagnosed conflict. The
+    claims come from `cognition/hypothesis.py`, which has no model in it
+    and a deliberately narrow space -- a search wide enough will beat a
+    holdout by luck, so the number of forms per claim is capped there.
+    """
+    from . import hypothesis as hypothesis_mod
+
+    def samples(group):
+        for seed in seeds:
+            for item in found.samples(seed, group):
+                yield item
+
+    def as_text(item) -> str:
+        return getattr(item, "prompt", item) if not isinstance(item, str) else item
+
+    def texts(group):
+        return (as_text(item) for item in samples(group))
+
+    claims = hypothesis_mod.observe(
+        found.rule_scope, texts, found.groups, found.truth,
+        lambda text: found.decide(_Textish(text)))
+    out: List[Change] = []
+    for claim in claims:
+        for rule in hypothesis_mod.forms(claim, texts, found.groups):
+            out.append(Change(
+                label=rule.describe(), kind="rule",
+                settings={"marker": rule.marker, "decides": rule.decides},
+                rule=rule, hypothesis=claim.as_dict()))
+    return out
+
+
+class _Textish(str):
+    """A string that also answers to `.prompt`.
+
+    The oracle's `decide` takes whatever `samples` yields, and the
+    hypothesis layer works in text. Rather than make every oracle carry a
+    text extractor, the text is handed back in a shape both accept.
+    """
+
+    @property
+    def prompt(self) -> str:
+        return str(self)
+
+    @property
+    def difficulty(self) -> Optional[float]:
+        return None
+
+
 def _paired_with_groups(found: Oracle, experiment: str, split: str,
-                        base: Policy, candidate: Policy,
+                        base: Change, candidate: Change,
                         strategy: Optional[Dict[str, Any]] = None
                         ) -> Dict[str, Any]:
     """One read of a split: the paired difference and the per-group margins.
@@ -224,9 +336,9 @@ def _paired_with_groups(found: Oracle, experiment: str, split: str,
         "base": {group: [] for group in found.groups},
         "candidate": {group: [] for group in found.groups}}
 
-    def arm(policy: Policy, side: str):
+    def arm(change: Change, side: str):
         def run(seed: int) -> float:
-            by_group = found.score(policy, seed)
+            by_group = found.score(change, seed)
             for group, value in by_group.items():
                 collected[side][group].append(value)
             return statistics.mean(by_group.values()) if by_group else 0.0
@@ -244,8 +356,16 @@ def _paired_with_groups(found: Oracle, experiment: str, split: str,
 
 
 def investigate(name: str, ledger: Optional[Ledger] = None,
-                allow_adopt: bool = False) -> Investigation:
+                allow_adopt: bool = False,
+                propose: Optional[Callable[[Oracle, Sequence[int]],
+                                           List[Change]]] = None
+                ) -> Investigation:
     """Walk the whole protocol on one declared decision.
+
+    `propose` decides where candidates come from: `from_knobs` searches
+    the region a person declared, `from_hypotheses` diagnoses the failure
+    and builds what its claim licenses. Neither gets a say in what counts
+    as success.
 
     Stops at the first stage that gives an answer, and says which. Every
     stop is a real answer: no failure, no candidate that helps, a
@@ -253,9 +373,10 @@ def investigate(name: str, ledger: Optional[Ledger] = None,
     """
     found = oracle(name)
     ledger = ledger if ledger is not None else Ledger()
+    propose = propose or from_knobs
     report = Investigation(oracle=name)
     experiment = trials.register(name, seeds=found.seeds)
-    current = policy_mod.active()
+    current = BASELINE
 
     # ---------- 1. is anything failing, and where ----------
     base_discovery = trials.score(
@@ -271,10 +392,10 @@ def investigate(name: str, ledger: Optional[Ledger] = None,
                       f"нечего, и это исправный конец")
         return report
 
-    # ---------- 2. what in the declared region helps ----------
-    options = _candidate_policies(found, current)
+    # ---------- 2. what helps, from wherever candidates come from ----------
+    options = propose(found, experiment.seeds[trials.DISCOVERY])
     report.candidates_tried = len(options)
-    scored: List[Tuple[float, float, Policy]] = []
+    scored: List[Tuple[float, float, Change]] = []
     for option in options:
         marks = _mean_by_group(found, option, experiment.seeds[trials.DISCOVERY])
         overall = statistics.mean(marks.values()) if marks else 0.0
@@ -291,7 +412,8 @@ def investigate(name: str, ledger: Optional[Ledger] = None,
         return report
     viable.sort(key=lambda row: (row[0], row[1]), reverse=True)
     best_overall, best_worst, chosen = viable[0]
-    report.chosen = chosen.changes()
+    report.chosen = dict(chosen.settings)
+    report.hypothesis = dict(chosen.hypothesis)
     report.discovery.update({"candidate": best_overall,
                              "worst_group": best_worst})
 
@@ -306,7 +428,7 @@ def investigate(name: str, ledger: Optional[Ledger] = None,
         return report
 
     # ---------- 4. a split that did not exist during the choosing ----------
-    strategy = dict(chosen.changes(), oracle=name)
+    strategy = dict(chosen.settings, oracle=name, kind=chosen.kind)
     trials.seal(name, strategy)
     report.fresh = _paired_with_groups(found, name, trials.FRESH, current,
                                        chosen, strategy=strategy)
@@ -321,7 +443,7 @@ def investigate(name: str, ledger: Optional[Ledger] = None,
     report.verdict = ACCEPTED
     report.finding_id = _record(ledger, found, report, chosen)
     if allow_adopt:
-        policy_mod.adopt(chosen, {
+        evidence = {
             "experiment": name,
             "fresh": {"mean": round(report.fresh["mean"], 4),
                       "interval": [round(report.fresh["low"], 4),
@@ -329,7 +451,15 @@ def investigate(name: str, ledger: Optional[Ledger] = None,
                       "worst_group": round(report.fresh["worst_group"], 4),
                       "n": report.fresh["n"]},
             "verdict": ACCEPTED, "acceptance": list(ACCEPTANCE),
-            "finding_id": report.finding_id})
+            "finding_id": report.finding_id}
+        if chosen.hypothesis:
+            evidence["hypothesis"] = dict(chosen.hypothesis)
+        if chosen.kind == "rule":
+            # A rule MANA wrote about its own behaviour. Same bar as a
+            # setting, and `install` refuses without the evidence too.
+            rules_mod.install(chosen.rule, evidence)
+        else:
+            policy_mod.adopt(chosen.policy, evidence)
         report.adopted = True
     else:
         report.why = ("принятие не разрешено вызывающим: изменение "
@@ -337,11 +467,11 @@ def investigate(name: str, ledger: Optional[Ledger] = None,
     return report
 
 
-def _mean_by_group(found: Oracle, policy: Policy,
+def _mean_by_group(found: Oracle, change: Change,
                    seeds: Sequence[int]) -> Dict[str, float]:
     totals: Dict[str, List[float]] = {group: [] for group in found.groups}
     for seed in seeds:
-        for group, value in found.score(policy, seed).items():
+        for group, value in found.score(change, seed).items():
             totals[group].append(value)
     return {group: statistics.mean(values) if values else 0.0
             for group, values in totals.items()}
@@ -357,11 +487,13 @@ def _why_not(result: Dict[str, Any]) -> str:
 
 
 def _record(ledger: Ledger, found: Oracle, report: Investigation,
-            chosen: Policy) -> str:
+            chosen: Change) -> str:
     result = report.fresh or report.validation
+    asked = ("Какое построенное правило чинит «{}»?" if chosen.kind == "rule"
+             else "Какая настройка в объявленной области чинит «{}»?")
     finding = Finding(
-        question=f"Какая настройка в объявленной области чинит «{found.name}»?",
-        approach=dict(chosen.changes(), domain=found.name),
+        question=asked.format(found.name),
+        approach=dict(chosen.settings, domain=found.name, kind=chosen.kind),
         verdict=report.verdict or REJECTED,
         measurement=measurement_of(
             trials=int(result.get("n") or 0),

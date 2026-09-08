@@ -297,22 +297,32 @@ def test_naming_a_task_is_right_on_every_domain_under_the_adopted_policy():
                 assert got == want, (domain, task.prompt[:70], got)
 
 
-def test_turning_the_knobs_off_brings_the_old_failures_back():
+def test_turning_the_knobs_on_fixes_what_was_failing():
     """The knobs are what changed the behaviour, not something else that
-    happened to move at the same time."""
+    happened to move at the same time.
+
+    Stated from the conservative side now: the defaults went back to
+    False when an adoption became data rather than a source edit, so the
+    behaviour to demonstrate is what turning them ON does.
+    """
     from mana.cognition.compiler import classify
     from mana.cognition.synthesis import DOMAIN_KIND
     from mana.core import tasks as task_gen
     from mana.policy import Policy, use
 
-    old = Policy.of(classify_text_first=False, classify_premise_marker=False)
-    wrong = 0
-    with use(old):
-        for domain in ("logic", "text_ops"):
-            for task in task_gen.generate(domain, 20, seed=777):
-                got, _ = classify(task.prompt, difficulty=task.difficulty)
-                wrong += int(got != DOMAIN_KIND[domain])
-    assert wrong > 20, "the old behaviour stopped being wrong on its own"
+    def wrong_under(policy):
+        wrong = 0
+        with use(policy):
+            for domain in ("logic", "text_ops"):
+                for task in task_gen.generate(domain, 20, seed=777):
+                    got, _ = classify(task.prompt, difficulty=task.difficulty)
+                    wrong += int(got != DOMAIN_KIND[domain])
+        return wrong
+
+    off = Policy.of(classify_text_first=False, classify_premise_marker=False)
+    on = Policy.of(classify_text_first=True, classify_premise_marker=True)
+    assert wrong_under(off) > 20
+    assert wrong_under(on) == 0
 
 
 # --------------------------------------------------------------------------
