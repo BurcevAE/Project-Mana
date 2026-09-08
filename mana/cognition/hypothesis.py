@@ -53,7 +53,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from .compiler import ABSENT, AMBIGUOUS, diagnose
+from .compiler import ABSENT, AMBIGUOUS, OVERREACH, UNDERREACH, diagnose
 from .rules import Rule
 
 #: Component version -- see mana/version.py for the bump conventions.
@@ -189,6 +189,7 @@ def observe(where: str, samples: Callable[[str], Iterable[str]],
         wanted = truth(group)
         shapes: Counter = Counter()
         competing: Counter = Counter()
+        mine: Counter = Counter()
         wrong = total = 0
         for text in samples(group):
             total += 1
@@ -200,13 +201,32 @@ def observe(where: str, samples: Callable[[str], Iterable[str]],
             shapes[found["shape"]] += 1
             for kind, marker in found.get("competing", ())[:1]:
                 competing[(kind, marker)] += 1
+            # Which of MANA's own rules is implicated, and how. Both
+            # shapes point at a rule; they differ in whether it spoke.
+            for marker in found.get("mine_silent", ()):
+                mine[marker] += 1
+            for _, marker in found.get("mine_wrong", ()):
+                mine[marker] += 1
         if not wrong or not total:
             continue
         shape, _ = shapes.most_common(1)[0]
         evidence = {"wrong": wrong, "of": total,
                     "shapes": dict(shapes),
-                    "competing": {f"{k}:{m}": n for (k, m), n in competing.items()}}
-        if shape == AMBIGUOUS:
+                    "competing": {f"{k}:{m}": n for (k, m), n in competing.items()},
+                    "mine": {m: n for m, n in mine.items()}}
+        if shape == UNDERREACH:
+            silent = ", ".join(f"«{m}»" for m in sorted(mine)) or "—"
+            claim = (f"правило {silent}, которое я вывела для «{wanted}», "
+                     f"здесь не срабатывает: его маркер — свойство той "
+                     f"формулировки, на которой его добыли, а не класса. "
+                     f"Нужен признак, переживающий пересказ")
+        elif shape == OVERREACH:
+            wrong_rules = ", ".join(f"«{m}»" for m in sorted(mine)) or "—"
+            claim = (f"правило {wrong_rules}, которое я вывела, решает здесь "
+                     f"и решает неверно: оно право про класс и не право про "
+                     f"край, значит нужно условие, при котором оно не "
+                     f"применяется")
+        elif shape == AMBIGUOUS:
             (kind, marker), _ = competing.most_common(1)[0]
             claim = (f"признак «{marker}» класса «{kind}» решает там, где "
                      f"задача принадлежит «{wanted}»; при совместном "

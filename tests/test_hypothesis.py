@@ -352,3 +352,119 @@ def test_among_measured_equals_the_phrase_wins():
     rows.sort(key=lambda row: (row[0], row[1],
                                -row[2].rule.accidental), reverse=True)
     assert rows[0][2].rule.marker == "считая с"
+
+
+# --------------------------------------------------------------------------
+# a rule of MANA's own can be the thing at fault
+# --------------------------------------------------------------------------
+
+def _install(marker, decides, unless=(), where="task_naming"):
+    from mana.cognition.rules import Rule
+
+    rule = Rule(where=where, marker=marker, decides=decides,
+                unless=tuple(unless),
+                provenance={"group": "logic", "wanted": decides})
+    return rules.install(rule, {"experiment": "t", "fresh": {"n": 1},
+                                "verdict": ACCEPTED})
+
+
+def test_a_rule_that_decided_wrongly_is_named_as_the_cause():
+    """Before this, such a failure came back as ABSENT -- "the vocabulary
+    has no feature for this class" -- which is false and points at the
+    wrong repair."""
+    from mana.cognition.compiler import OVERREACH
+
+    _install("вычисли", "reasoning")          # fires on arithmetic, wrongly
+    task = next(iter(task_gen.generate("arithmetic", 1, 5)))
+    got, _ = classify(task.prompt, difficulty=task.difficulty)
+    assert got == "reasoning"
+
+    found = diagnose(task.prompt, "math", got)
+    assert found["shape"] == OVERREACH
+    assert ("reasoning", "вычисли") in found["mine_wrong"]
+
+
+def test_a_rule_that_stayed_silent_is_named_as_incomplete():
+    """Not a wrong rule -- an incomplete one. The marker is a property of
+    the phrasing it was mined on."""
+    from mana.cognition.compiler import UNDERREACH
+
+    _install("считая с", "reasoning")
+    reworded = next(iter(task_gen.generate("logic", 1, 5,
+                                           surface=task_gen.VARIANT)))
+    got, _ = classify(reworded.prompt, difficulty=reworded.difficulty)
+    assert got != "reasoning"
+
+    found = diagnose(reworded.prompt, "reasoning", got)
+    assert found["shape"] == UNDERREACH
+    assert "считая с" in found["mine_silent"]
+
+
+def test_the_two_shapes_license_different_claims():
+    from mana.cognition.compiler import UNDERREACH
+
+    _install("считая с", "reasoning")
+    seeds = (5,)
+
+    def samples(group):
+        for seed in seeds:
+            for task in task_gen.generate(group, 20, seed,
+                                          surface=task_gen.VARIANT):
+                yield task.prompt
+
+    claims = hypothesis.observe(
+        "task_naming", samples, ("logic",), lambda g: DOMAIN_KIND[g],
+        lambda text: classify(text)[0])
+    assert claims and claims[0].shape == UNDERREACH
+    assert "не срабатывает" in claims[0].claim
+    assert "пересказ" in claims[0].claim
+    assert "считая с" in claims[0].claim
+
+
+def test_a_narrowed_rule_stops_firing_where_it_is_vetoed():
+    from mana.cognition.rules import Rule
+
+    wide = Rule(where="task_naming", marker="вычисли", decides="reasoning")
+    narrow = Rule(where="task_naming", marker="вычисли", decides="reasoning",
+                  unless=("сумму",))
+    assert wide.matches("вычисли сумму чисел")
+    assert not narrow.matches("вычисли сумму чисел")
+    # And the marker is still there -- the two facts are reported apart.
+    assert narrow.fires_on("вычисли сумму чисел")
+    assert narrow.matches("вычисли произведение")
+
+
+def test_a_veto_is_visible_in_the_description():
+    from mana.cognition.rules import Rule
+
+    narrow = Rule(where="task_naming", marker="вычисли", decides="reasoning",
+                  unless=("сумму",))
+    assert "кроме" in narrow.describe() and "сумму" in narrow.describe()
+
+
+# --------------------------------------------------------------------------
+# the ledger is consulted before the quota
+# --------------------------------------------------------------------------
+
+def test_a_candidate_the_ledger_has_answered_is_not_proposed_again(tmp_path):
+    """A quota is a backstop, not a plan: it should be the thing that
+    never has to fire. `cycle.py` learned this over six passes of
+    re-running what it had just run, and the lesson had not travelled."""
+    from mana.cognition.findings import Finding, measurement_of
+    from mana.core.gates import REJECTED
+
+    ledger = Ledger(tmp_path / "f.jsonl")
+    investigator.declare(_oracle())
+    first = investigator.from_hypotheses(_oracle(), (1, 2))
+    assert first
+
+    ledger.record(Finding(
+        question="уже отвечено",
+        approach=dict(first[0].settings, domain="naming", kind="rule"),
+        verdict=REJECTED,
+        measurement=measurement_of(trials=40, interval=(-0.1, -0.05), null=0.0)))
+
+    report = investigator.investigate("naming", ledger=ledger,
+                                      propose=investigator.from_hypotheses)
+    assert report.already_answered == 1
+    assert report.chosen != first[0].settings

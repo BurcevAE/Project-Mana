@@ -190,6 +190,10 @@ class Investigation:
     failing: Dict[str, float] = field(default_factory=dict)
     candidates_tried: int = 0
     chosen: Dict[str, Any] = field(default_factory=dict)
+    #: How many candidates were dropped because the ledger already holds
+    #: an answer for them. A loop that re-runs what it has run is one that
+    #: spends quota to learn what is written down.
+    already_answered: int = 0
     #: The claim the chosen change came from, when it came from one.
     hypothesis: Dict[str, Any] = field(default_factory=dict)
     discovery: Dict[str, Any] = field(default_factory=dict)
@@ -211,6 +215,8 @@ class Investigation:
             lines.append("  провалов нет")
         if self.hypothesis:
             lines.append(f"  гипотеза: {self.hypothesis.get('claim', '')}")
+        if self.already_answered:
+            lines.append(f"  уже отвечено реестром: {self.already_answered}")
         if self.chosen:
             lines.append(f"  кандидатов рассмотрено: {self.candidates_tried}; "
                          f"выбран {self.chosen}")
@@ -230,6 +236,7 @@ class Investigation:
     def as_dict(self) -> Dict[str, Any]:
         return {"oracle": self.oracle, "failing": dict(self.failing),
                 "candidates_tried": self.candidates_tried,
+                "already_answered": self.already_answered,
                 "chosen": dict(self.chosen),
                 "hypothesis": dict(self.hypothesis),
                 "discovery": dict(self.discovery),
@@ -451,7 +458,11 @@ def investigate(name: str, ledger: Optional[Ledger] = None,
 
     # ---------- 2. what helps, from wherever candidates come from ----------
     options = propose(found, experiment.seeds[trials.DISCOVERY])
+    answered = _already_answered(ledger, found)
+    options = [change for change in options
+               if _approach_of(change, found) not in answered]
     report.candidates_tried = len(options)
+    report.already_answered = len(answered)
     scored: List[Tuple[float, float, Change]] = []
     for option in options:
         marks = _mean_by_group(found, option, experiment.seeds[trials.DISCOVERY])
@@ -535,6 +546,39 @@ def investigate(name: str, ledger: Optional[Ledger] = None,
         report.why = ("принятие не разрешено вызывающим: изменение "
                       "измерено и не введено в силу")
     return report
+
+
+def _approach_of(change: Change, found: Oracle) -> str:
+    """How a candidate is named in the ledger. One string, so a set of
+    them can be asked about without rebuilding a Finding each time."""
+    import json
+
+    return json.dumps(dict(change.settings, domain=found.name,
+                           kind=change.kind),
+                      sort_keys=True, ensure_ascii=False, default=str)
+
+
+def _already_answered(ledger: Ledger, found: Oracle) -> set:
+    """Approaches this oracle has a recorded answer for.
+
+    Whatever the verdict: ACCEPTED means it is already in force and
+    proposing it again is noise; REJECTED or NOT_EVALUATED on the same
+    evidence will come out the same way. Re-running it spends a quota to
+    learn what is written down.
+    """
+    import json
+
+    seen = set()
+    try:
+        for finding in ledger.latest():
+            approach = dict(finding.approach or {})
+            if approach.get("domain") != found.name:
+                continue
+            seen.add(json.dumps(approach, sort_keys=True, ensure_ascii=False,
+                                default=str))
+    except Exception:
+        return set()
+    return seen
 
 
 def _mean_by_group(found: Oracle, change: Change,

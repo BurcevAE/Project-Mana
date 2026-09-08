@@ -137,8 +137,15 @@ BUILTIN_MARKERS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
 
 #: Which class of failure a wrong answer is. Two different things that
 #: looked identical while `classify` returned only its answer.
-AMBIGUOUS = "ambiguous"      # a feature of the right class was present too
-ABSENT = "absent"            # nothing of the right class was present at all
+AMBIGUOUS = "ambiguous"      # a feature of another class fired and decided
+ABSENT = "absent"            # nothing fired; the fallback answered
+#: A rule MANA wrote fired and decided wrongly. Right about the class,
+#: wrong about its edge: what it licenses is a narrowing.
+OVERREACH = "overreach"
+#: A rule MANA wrote exists for the class that failed, and did not fire.
+#: Not a wrong rule, an incomplete one: the marker is a property of the
+#: phrasing it was mined on.
+UNDERREACH = "underreach"
 
 
 def classify_features(task: str) -> Dict[str, Any]:
@@ -173,6 +180,10 @@ def diagnose(task: str, wanted: str, got: str) -> Dict[str, Any]:
     for_wanted = [marker for kind, marker in features["fired"] if kind == wanted]
     others = [(kind, marker) for kind, marker in features["fired"]
               if kind != wanted]
+    written = list(features.get("written") or [])
+    mine_fired = [(decides, marker) for decides, marker in written]
+    mine_for_wanted = [r for r in _written_rules() if r.decides == wanted]
+    lowered = features["lowered"]
     # AMBIGUOUS: a feature of some other class fired and decided, with
     # nothing of the wanted class to compete against it. That is the
     # "Сколько раз буква «и» встречается в тексте" shape: a maths word
@@ -181,10 +192,32 @@ def diagnose(task: str, wanted: str, got: str) -> Dict[str, Any]:
     # ABSENT: nothing fired at all and the answer came from the fallback.
     # That is the "Известно: … Кто стоит на позиции 2?" shape: the
     # vocabulary has no way to say this class.
-    shape = AMBIGUOUS if others else ABSENT
+    wrong_rule = [(decides, marker) for decides, marker in mine_fired
+                  if decides != wanted]
+    if wrong_rule:
+        # A rule MANA wrote decided this, and it was wrong. Before this
+        # existed such a failure came back as ABSENT -- "the vocabulary
+        # has no feature for this class" -- which is false and points at
+        # the wrong repair.
+        shape = OVERREACH
+    elif mine_for_wanted and not any(d == wanted for d, _ in mine_fired):
+        # There is a rule for this class and it stayed silent. Whether
+        # its marker is missing or its own veto caught it are different
+        # facts, and both are reported.
+        shape = UNDERREACH
+    elif others:
+        shape = AMBIGUOUS
+    else:
+        shape = ABSENT
     return {"shape": shape, "wanted": wanted, "got": got,
             "wanted_markers": for_wanted, "competing": others,
-            "fired": features["fired"], "classes": features["classes"]}
+            "fired": features["fired"], "classes": features["classes"],
+            "mine": mine_fired,
+            "mine_wrong": wrong_rule,
+            "mine_silent": [r.marker for r in mine_for_wanted
+                            if not r.matches(lowered)],
+            "silenced_by_veto": [r.marker for r in mine_for_wanted
+                                 if r.fires_on(lowered) and not r.matches(lowered)]}
 
 
 def _written_rules():

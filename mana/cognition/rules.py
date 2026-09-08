@@ -64,6 +64,10 @@ class Rule:
     marker: str
     decides: str
     before_builtin: bool = True
+    #: Literals that switch this rule off. The smallest thing that can
+    #: narrow a rule, on purpose: a richer condition is a search space,
+    #: and a search space large enough finds something by accident.
+    unless: Tuple[str, ...] = ()
     #: How the marker did on the half it was mined from. Kept for a
     #: reader, never consulted by the matcher: a rule that scored well is
     #: still just a rule.
@@ -79,11 +83,24 @@ class Rule:
     #: be that something won.
     provenance: Dict[str, Any] = field(default_factory=dict)
 
+    def fires_on(self, lowered: str) -> bool:
+        """Whether the marker is there at all, ignoring the veto.
+
+        Diagnosis needs both: a rule that did not fire because its marker
+        is absent is incomplete, and one that did not fire because a veto
+        caught it is doing what it was narrowed to do.
+        """
+        return self.marker in lowered
+
     def matches(self, lowered: str) -> bool:
+        if any(veto in lowered for veto in self.unless):
+            return False
         return self.marker in lowered
 
     def describe(self) -> str:
         when = "перед встроенными" if self.before_builtin else "после встроенных"
+        if self.unless:
+            when += ", кроме " + ", ".join(f"«{v}»" for v in self.unless)
         return (f"«{self.marker}» → {self.decides} ({when}; на половине "
                 f"открытия: покрытие {self.support:.0%}, вне класса "
                 f"{self.lift:.0%}, случайных совпадений "
