@@ -77,6 +77,21 @@ MIN_SITUATIONS_FOR_CANNOT = 8
 #: watching everything fail, and record that as the way the world is.
 EPISODE_STEPS = 25
 
+#: Reset after this many attempts in a row have failed, instead of on the
+#: clock. Zero keeps the clock.
+#:
+#: The idea is read out of the record rather than picked off a grid: the
+#: schedule decides most of the model's quality -- 0.57 at episode length
+#: 10 against 0.91 at 25 on the discovery seeds -- and a clock wastes
+#: steps at both ends. It cuts a productive episode short, and it leaves a
+#: dead one running: after the power is cut nothing digital works, and
+#: every attempt until the next tick is a failure that removes nothing
+#: from any intersection.
+#:
+#: Off by default, and it stays off until a holdout says otherwise. The
+#: information policy was argued for just as plausibly and measured worse.
+RESET_AFTER_FAILURES = 0
+
 #: What an attempt would be worth, before it is made. The same three
 #: numbers `cognition/probes.py` puts on an experimental axis, for the
 #: same reason -- this is one fact about evidence, not two.
@@ -108,22 +123,39 @@ SETTLED = 0.15
 #: learning.
 MIN_ATTEMPT_VALUE = 0.05
 
-#: Choose by what an attempt would teach, or by whose turn it is.
+#: Three ways to decide what to try next, and the numbers that put them
+#: in this order.
 #:
-#: Coverage is the default because it measured better, not because it is
-#: older. Paired over forty seeds at 400 steps, the length where the two
-#: differ most: precondition precision under the information policy came
-#: to -0.107 [-0.159, -0.056] against coverage, worse in 24 pairs of 40
-#: and better in 6, with twice as many invented preconditions. The
-#: interval is entirely below zero, so `findings.classify` puts it in
-#: WORSE and it is recorded in the ledger as REJECTED.
+#: `BY_PLANNING` is the default because it earned it on data it was not
+#: chosen on. At 400 steps, precondition precision against coverage:
+#: +0.0627 on the discovery seeds, +0.0769 [+0.0526, +0.1041] on the
+#: validation split, and +0.0641 [+0.0410, +0.0894] on a fresh split read
+#: once after the strategy was sealed -- worse in no pair out of forty on
+#: either holdout. Nothing else moved: recall, effects, capability
+#: verdicts and the count of confidently wrong claims are identical under
+#: both.
 #:
-#: Kept rather than deleted: "we tried this and it did not hold" is one of
-#: the more valuable things a research loop can know, and this is now the
-#: baseline any future policy has to beat.
+#: `BY_INFORMATION` was proposed just as plausibly and measured worse:
+#: -0.107 [-0.159, -0.056] over forty paired seeds, worse in 24 pairs and
+#: better in 6, with twice as many invented preconditions. It is kept, not
+#: deleted -- "we tried this and it did not hold" is one of the more
+#: valuable things a research loop can know, and reading its failure is
+#: where the planner came from: scoring cannot reach a state three moves
+#: away, so the answer was to walk there.
+#:
+#: `BY_COVERAGE` is the baseline both were measured against, and it stays
+#: because a default with nothing to compare it to is a preference.
 BY_INFORMATION = "information"
 BY_COVERAGE = "coverage"
-DEFAULT_POLICY = BY_COVERAGE
+#: Walk to the state that would settle a question, using the explorer's
+#: own believed transitions as the map. See `plan_to_discriminate`.
+BY_PLANNING = "planning"
+DEFAULT_POLICY = BY_PLANNING
+
+#: How far ahead a plan may look. Four moves covers every state this
+#: world can reach from a reset; the limit is here so a bigger world
+#: cannot turn one decision into an unbounded search.
+MAX_PLAN_DEPTH = 4
 
 
 @dataclass
@@ -157,6 +189,12 @@ class Explorer:
     #: rather than maintained: a summary that drifts from the attempts it
     #: came from is worse than one that costs a little to rebuild.
     _cache: Dict[str, Any] = field(default_factory=dict)
+    #: How often the planner found a route, and how often its own model
+    #: saw none. Reported rather than summed into one number: a planner
+    #: that never plans and a planner that plans badly are different
+    #: things to fix.
+    plans: int = 0
+    planless: int = 0
 
     # ---------- living in the world ----------
 
@@ -179,7 +217,8 @@ class Explorer:
 
     def explore(self, world: Any, steps: int = 400, seed: int = 0,
                 episode_steps: int = EPISODE_STEPS,
-                policy: str = DEFAULT_POLICY) -> "Explorer":
+                policy: str = DEFAULT_POLICY,
+                reset_after_failures: int = RESET_AFTER_FAILURES) -> "Explorer":
         """Act in the world, spreading attempts evenly over the actions.
 
         Even coverage: with a handful of actions the cheap thing to get
@@ -195,18 +234,49 @@ class Explorer:
         rng = random.Random(seed)
         actions = list(world.actions)
         tried: Dict[str, int] = {name: 0 for name in actions}
+        failures_in_a_row = 0
+        queued: List[str] = []
+        self.plans = 0
+        self.planless = 0
         self.note(world.observe())
         for step in range(steps):
-            if episode_steps and step and step % episode_steps == 0:
+            if reset_after_failures:
+                # The world has stopped answering. Resetting on that
+                # rather than on a clock keeps a productive episode
+                # running and cuts a dead one short.
+                if failures_in_a_row >= reset_after_failures:
+                    world.reset()
+                    failures_in_a_row = 0
+                    self.note(world.observe())
+            elif episode_steps and step and step % episode_steps == 0:
                 world.reset()
                 self.note(world.observe())
-            if policy == BY_COVERAGE:
+            if policy == BY_PLANNING:
+                if not queued:
+                    plan = self.plan_to_discriminate(world.situation())
+                    if plan is None:
+                        # Its own model sees no route. Falling back to
+                        # coverage rather than standing still: a world it
+                        # has not finished touching is not one it has
+                        # finished learning.
+                        self.planless += 1
+                        fewest = min(tried.values())
+                        queued = [rng.choice(
+                            [a for a in actions if tried[a] == fewest])]
+                    else:
+                        route, target, _ = plan
+                        self.plans += 1
+                        queued = list(route) + [target]
+                action = queued.pop(0)
+            elif policy == BY_COVERAGE:
                 fewest = min(tried.values())
                 action = rng.choice([a for a in actions if tried[a] == fewest])
             else:
                 action, _, _ = self.choose(actions, world.situation(), rng)
             tried[action] += 1
-            self.record(world.act(action))
+            outcome = world.act(action)
+            failures_in_a_row = 0 if outcome.succeeded else failures_in_a_row + 1
+            self.record(outcome)
         self.note(world.observe())
         return self
 
@@ -234,6 +304,90 @@ class Explorer:
                 by_action[attempt.action].append(attempt)
             self._cache["by_action"] = by_action
         return by_action[action]
+
+    # ---------- walking to the question ----------
+
+    def _beliefs(self) -> Dict[str, Dict[str, Any]]:
+        """What the explorer currently thinks each action needs and does.
+
+        Computed once per plan rather than per expansion: these walk the
+        whole attempt list, and a search that recomputed them at every
+        node would cost more than the information it is chasing.
+        """
+        out: Dict[str, Dict[str, Any]] = {}
+        for action in sorted({a.action for a in self.attempts}):
+            if not any(a.succeeded for a in self._for(action)):
+                continue
+            candidates = self._candidates(action)
+            effects, _ = self._effects(action)
+            out[action] = {
+                "pre": candidates,
+                "open": candidates - self._discriminated(action, candidates),
+                "eff": effects}
+        return out
+
+    @staticmethod
+    def _after(state: Situation, effects) -> Situation:
+        """The state a believed effect would leave behind.
+
+        A fact replaces the one with the same entity and attribute --
+        `power.on` cannot be both True and False, and a search that let it
+        would plan through states the world cannot be in.
+        """
+        touched = {(entity, attribute) for entity, attribute, _ in effects}
+        kept = {f for f in state if (f[0], f[1]) not in touched}
+        return frozenset(kept | set(effects))
+
+    def plan_to_discriminate(self, state: Situation,
+                             max_depth: int = MAX_PLAN_DEPTH
+                             ) -> Optional[Tuple[List[str], str, Any]]:
+        """A short route to a state that would settle an open question.
+
+        The target: some action with exactly one undiscriminated candidate
+        false and every other candidate true. Succeeding there kills that
+        candidate; failing there confirms it. Both are answers, which is
+        what makes it worth walking to.
+
+        Breadth-first over believed transitions, so the route is the
+        shortest the explorer knows of. Returns None when its own model
+        cannot see a way -- which is honest: a plan built on beliefs is
+        only as good as they are, and this one is measured, not trusted.
+        """
+        beliefs = self._beliefs()
+        if not beliefs:
+            return None
+
+        def settles(here: Situation) -> Optional[Tuple[str, Any]]:
+            for action, belief in beliefs.items():
+                missing = [f for f in belief["pre"] if f not in here]
+                if len(missing) == 1 and missing[0] in belief["open"]:
+                    return (action, missing[0])
+            return None
+
+        found = settles(state)
+        if found is not None:
+            return ([], found[0], found[1])
+
+        seen = {state}
+        frontier: List[Tuple[Situation, List[str]]] = [(state, [])]
+        for _ in range(max(1, max_depth)):
+            nxt: List[Tuple[Situation, List[str]]] = []
+            for here, route in frontier:
+                for action, belief in beliefs.items():
+                    if not belief["pre"] <= here or not belief["eff"]:
+                        continue
+                    there = self._after(here, belief["eff"])
+                    if there in seen:
+                        continue
+                    seen.add(there)
+                    target = settles(there)
+                    if target is not None:
+                        return (route + [action], target[0], target[1])
+                    nxt.append((there, route + [action]))
+            if not nxt:
+                break
+            frontier = nxt
+        return None
 
     # ---------- what an attempt would be worth ----------
 

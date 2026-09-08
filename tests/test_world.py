@@ -278,14 +278,19 @@ def test_choosing_falls_back_when_nothing_clears_the_floor():
     assert value == explore_mod.UNTRIED
 
 
-def test_the_default_policy_is_the_one_that_measured_better():
-    """Adopting the policy I proposed would be the failure this whole
-    apparatus exists to prevent. Paired over forty seeds it came to
-    -0.107 [-0.159, -0.056] on precondition precision, which `classify`
-    puts in WORSE."""
-    assert explore_mod.DEFAULT_POLICY == explore_mod.BY_COVERAGE
+def test_the_default_policy_is_the_one_that_earned_it_on_a_holdout():
+    """The default moved because a number moved, and only after the
+    number came from data the strategy was not chosen on: +0.0769 on
+    validation and +0.0641 on a fresh split read once after sealing,
+    worse in no pair out of forty on either.
+
+    The information policy is still not the default -- it was proposed
+    just as plausibly and measured -0.107.
+    """
+    assert explore_mod.DEFAULT_POLICY == explore_mod.BY_PLANNING
+    assert explore_mod.DEFAULT_POLICY != explore_mod.BY_INFORMATION
     signature = inspect.signature(Explorer.explore)
-    assert signature.parameters["policy"].default == explore_mod.BY_COVERAGE
+    assert signature.parameters["policy"].default == explore_mod.BY_PLANNING
 
 
 def test_both_policies_reach_the_same_ceiling():
@@ -315,3 +320,87 @@ def test_neither_policy_drops_the_unfalsifiable_belief():
                                    policy=policy).model()
         assert ("link", "up", True) in model.rules["request"].preconditions
         assert model.rules["request"].status == BELIEVED
+
+
+# --------------------------------------------------------------------------
+# the schedule that watches the world, and what a holdout said about it
+# --------------------------------------------------------------------------
+
+def test_resetting_on_failures_replaces_the_clock():
+    """Both schedules explore; the question is only which is better, and
+    that is not settled here."""
+    on_the_clock = Explorer().explore(SmallWorld(seed=6), steps=300, seed=6)
+    on_failures = Explorer().explore(SmallWorld(seed=6), steps=300, seed=6,
+                                     reset_after_failures=2)
+    assert len(on_the_clock.attempts) == len(on_failures.attempts) == 300
+    # A different schedule visits different situations; if it did not,
+    # there would be nothing to measure.
+    assert ({a.before for a in on_the_clock.attempts}
+            != {a.before for a in on_failures.attempts})
+
+
+def test_the_default_schedule_is_the_one_the_holdout_did_not_refute():
+    """Chosen on seeds 1..40 it looked better by +0.0035; on forty seeds
+    nothing had read it came to -0.0057 [-0.0133, 0.0000], better in no
+    pair out of forty. The discovery win was fitted to its own seeds, and
+    the default did not move."""
+    assert explore_mod.RESET_AFTER_FAILURES == 0
+    signature = inspect.signature(Explorer.explore)
+    assert signature.parameters["reset_after_failures"].default == 0
+
+
+# --------------------------------------------------------------------------
+# walking to the question
+# --------------------------------------------------------------------------
+
+def test_the_planner_uses_its_own_beliefs_as_the_map():
+    """The first thing in this project that uses a model of a world to
+    decide what to do in it, rather than to report on what was done."""
+    world = SmallWorld(seed=8)
+    explorer = Explorer().explore(world, steps=120, seed=8,
+                                  policy=explore_mod.BY_COVERAGE)
+    plan = explorer.plan_to_discriminate(world.situation())
+    if plan is None:
+        pytest.skip("nothing open to discriminate from this state")
+    route, target, fact = plan
+    assert isinstance(route, list) and isinstance(target, str)
+    # The route is made of actions the explorer believes it can perform.
+    beliefs = explorer._beliefs()
+    assert all(step in beliefs for step in route)
+    # And the target is an action with that fact still undiscriminated.
+    assert fact in beliefs[target]["open"]
+
+
+def test_a_plan_is_never_longer_than_the_limit():
+    world = SmallWorld(seed=9)
+    explorer = Explorer().explore(world, steps=200, seed=9,
+                                  policy=explore_mod.BY_COVERAGE)
+    plan = explorer.plan_to_discriminate(world.situation())
+    if plan is not None:
+        assert len(plan[0]) <= explore_mod.MAX_PLAN_DEPTH
+
+
+def test_no_route_falls_back_rather_than_standing_still():
+    """A world it has not finished touching is not one it has finished
+    learning, so a planner with nothing to plan keeps exploring."""
+    world = SmallWorld(seed=10)
+    explorer = Explorer().explore(world, steps=300, seed=10,
+                                  policy=explore_mod.BY_PLANNING)
+    assert len(explorer.attempts) == 300
+    assert explorer.plans + explorer.planless > 0
+
+
+def test_planning_does_not_break_what_coverage_got_right():
+    """Precision is what the hypothesis said would move. Everything else
+    must not: measured over forty seeds, recall, effects, capability
+    verdicts and the count of confidently wrong claims are identical."""
+    by_coverage = grade(Explorer().explore(
+        SmallWorld(seed=11), steps=400, seed=11,
+        policy=explore_mod.BY_COVERAGE).model())
+    by_planning = grade(Explorer().explore(
+        SmallWorld(seed=11), steps=400, seed=11,
+        policy=explore_mod.BY_PLANNING).model())
+
+    assert by_planning.effect_recall == by_coverage.effect_recall
+    assert by_planning.capabilities_wrong == by_coverage.capabilities_wrong == 0
+    assert by_planning.wrongly_certain == [] == by_coverage.wrongly_certain

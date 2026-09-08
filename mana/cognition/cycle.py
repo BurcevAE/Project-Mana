@@ -86,11 +86,38 @@ class Cycle:
     #: supposed to be.
     missing: str = ""
     finding_id: str = ""
+    #: How the change did on the half it was never chosen on. None when
+    #: there was no holdout to ask.
+    hidden_margin: Optional[float] = None
+    hidden_size: int = 0
+
+    @property
+    def loop_closed(self) -> bool:
+        """Did experience reach a verdict without a person in the middle?
+
+        A fact about machinery. It can be true on four turns, and its
+        being true says nothing about whether MANA got better -- which is
+        why it is reported apart from the next one.
+        """
+        return all(stage.reached for stage in self.stages)
+
+    @property
+    def improvement_proven(self) -> bool:
+        """Did a change chosen on one half do better on the other?
+
+        A fact about the world, and the only one that supports the
+        sentence "MANA improved". No number of gates passed on the half a
+        candidate was chosen on can establish it: that half is where the
+        choosing happened, and a change that wins there may only have
+        been fitted to it.
+        """
+        return (self.verdict == ACCEPTED and self.loop_closed
+                and self.hidden_size > 0
+                and (self.hidden_margin or 0.0) > 0.0)
 
     @property
     def proven(self) -> bool:
-        return (self.verdict == ACCEPTED
-                and all(stage.reached for stage in self.stages))
+        return self.improvement_proven
 
     def stage(self, name: str) -> Optional[Stage]:
         for found in self.stages:
@@ -104,16 +131,28 @@ class Cycle:
         lines.extend(stage.describe() for stage in self.stages)
         lines.append("")
         lines.append(f"вердикт: {self.verdict or '—'}")
+        # Two facts, never one. The first is about the machinery and can
+        # be true on four turns; the second is about the world.
+        lines.append(f"контур замкнут:      "
+                     f"{'да' if self.loop_closed else 'нет'}")
+        lines.append(f"улучшение доказано:  "
+                     f"{'да' if self.improvement_proven else 'нет'}"
+                     + (f" (на скрытой половине {self.hidden_margin:+.2f} "
+                        f"по {self.hidden_size} ситуациям)"
+                        if self.hidden_margin is not None else
+                        " (скрытой половины не было)"))
         if self.missing:
             lines.append(f"не хватает: {self.missing}")
-        else:
-            lines.append("цикл замкнут: изменение доказано на записи")
         return "\n".join(lines)
 
     def as_dict(self) -> Dict[str, Any]:
         return {"stages": [s.as_dict() for s in self.stages],
                 "verdict": self.verdict, "missing": self.missing,
-                "proven": self.proven, "finding_id": self.finding_id}
+                "loop_closed": self.loop_closed,
+                "improvement_proven": self.improvement_proven,
+                "hidden_margin": self.hidden_margin,
+                "hidden_size": self.hidden_size,
+                "finding_id": self.finding_id}
 
 
 def _already_run(row: Dict[str, Any]) -> bool:
@@ -238,22 +277,44 @@ def run(episodes: Sequence[Episode],
                            targets)
     after = fd.evaluate(situations,
                         candidates_mod.dry_responder(candidate_policy), targets)
+    # The half the candidate was not chosen on. `build` has been splitting
+    # it out on every pass since this module was written and nothing read
+    # it, so every run reported "hidden: not measured" -- the holdout
+    # existed and was consulted by nobody.
+    hidden_before = fd.evaluate(list(domain.hidden),
+                                candidates_mod.dry_responder(current), targets)
+    hidden_after = fd.evaluate(list(domain.hidden),
+                               candidates_mod.dry_responder(candidate_policy),
+                               targets)
     fixed = [b.situation_id for b, c in zip(baseline, after)
              if not b.passed and c.passed]
     broke = [b.situation_id for b, c in zip(baseline, after)
              if b.passed and not c.passed]
+    hidden_margin = (fd.pass_rate(hidden_after) - fd.pass_rate(hidden_before)
+                     if domain.hidden else None)
     stages.append(Stage(
         REPLAY, True,
         f"переиграно {len(situations)}: стало проходить {len(fixed)}, "
-        f"сломано {len(broke)}",
+        f"сломано {len(broke)}"
+        + (f"; на скрытой половине ({len(domain.hidden)}) "
+           f"{hidden_margin:+.2f}" if hidden_margin is not None else
+           "; скрытой половины нет"),
         {"fixed": fixed, "broke": broke,
          "baseline_pass_rate": round(fd.pass_rate(baseline), 4),
-         "candidate_pass_rate": round(fd.pass_rate(after), 4)}))
+         "candidate_pass_rate": round(fd.pass_rate(after), 4),
+         "hidden": len(domain.hidden),
+         "hidden_baseline": round(fd.pass_rate(hidden_before), 4)
+                            if domain.hidden else None,
+         "hidden_candidate": round(fd.pass_rate(hidden_after), 4)
+                             if domain.hidden else None,
+         "hidden_margin": round(hidden_margin, 4)
+                          if hidden_margin is not None else None}))
 
     # ---------- 6. the verdict, from the gates ----------
     judged = fd.judge_change(
         description=f"политика {chosen['changes']} против «{chosen['addresses']}»",
-        domain=domain, baseline=baseline, candidate=after)
+        domain=domain, baseline=baseline, candidate=after,
+        hidden_baseline=hidden_before, hidden_candidate=hidden_after)
     verdict = judged["verdict"]
     status = verdict.get("status") or (ACCEPTED if verdict["accepted"] else REJECTED)
     stages.append(Stage(RESULT, True,
@@ -287,7 +348,8 @@ def run(episodes: Sequence[Episode],
 
     missing = _missing(verdict, len(situations))
     return Cycle(stages=tuple(stages), verdict=status, missing=missing,
-                 finding_id=finding_id)
+                 finding_id=finding_id, hidden_margin=hidden_margin,
+                 hidden_size=len(domain.hidden))
 
 
 def _missing(verdict: Dict[str, Any], trials: int) -> str:
