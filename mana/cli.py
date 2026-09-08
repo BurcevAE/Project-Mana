@@ -374,6 +374,46 @@ def _acquire_capability(name: str, consented: bool) -> int:
     return 0
 
 
+def _lichess_token() -> int:
+    """Store the Lichess token, without it ever being a visible string.
+
+    Typed rather than passed as an argument: a command line is readable
+    by any process running as this user, which is the same reason 1C
+    passwords are never put on one. `getpass` does not echo it, it does
+    not reach the shell history, and it goes straight to Windows
+    Credential Manager -- never to a file and never to the repository.
+    """
+    import getpass
+
+    from .net import lichess
+
+    print(f"Токен lichess.org (не отображается). Пустая строка — удалить "
+          f"сохранённый.\n"
+          f"Права, которые нужны: {', '.join(lichess.SCOPES)}")
+    try:
+        value = getpass.getpass("токен: ")
+    except (EOFError, KeyboardInterrupt):
+        print("\nотменено")
+        return 1
+    result = lichess.save_token(value)
+    if not result["ok"]:
+        print(result["error"])
+        return 1
+    if not result["stored"]:
+        print("сохранённый токен удалён")
+        return 0
+    state = lichess.Lichess().describe()
+    print(f"сохранён в диспетчере учётных данных ({lichess.TOKEN_ENV})")
+    if state.get("error"):
+        print(state["error"])
+        return 1
+    print(f"аккаунт: {state.get('user', '?')}   "
+          f"бот: {'да' if state.get('bot') else 'нет'}")
+    if state.get("note"):
+        print(state["note"])
+    return 0
+
+
 def _lichess(games: int, port: int = 0, watch: bool = True) -> int:
     """Play on Lichess, with a window showing what the search was thinking.
 
@@ -880,6 +920,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tried", action="store_true",
                         help="Что уже проверяли и чем это кончилось "
                              "(чтобы не повторять эксперимент заново)")
+    parser.add_argument("--lichess-token", action="store_true",
+                        dest="lichess_token",
+                        help="Ввести токен lichess.org и сохранить его в "
+                             "диспетчере учётных данных (ввод не виден)")
     parser.add_argument("--lichess", nargs="?", const=0, type=int, metavar="N",
                         help="Сыграть N партий на lichess.org с живой доской "
                              "и ходом размышлений; без числа — что доступно")
@@ -981,6 +1025,8 @@ def main() -> int:
     if args.tried:
         return _show_tried()
 
+    if args.lichess_token:
+        return _lichess_token()
     if args.lichess is not None:
         return _lichess(int(args.lichess), int(args.watch_port))
     if args.practice is not None:
