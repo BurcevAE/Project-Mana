@@ -31,7 +31,7 @@ def test_product_version_is_declared_once():
     """Pinned deliberately: the product version must be bumped as part of
     a change, not drift. Update this line in the same commit that changes
     PRODUCT_VERSION -- the failure is the reminder."""
-    assert PRODUCT_VERSION == "2.47.0"
+    assert PRODUCT_VERSION == "2.48.0"
 
 
 def test_every_listed_module_declares_a_version():
@@ -64,8 +64,34 @@ def test_modules_changed_in_this_release_were_bumped():
 
 def test_new_modules_are_registered_for_reporting():
     """A module that exists but is missing from VERSIONED_MODULES would
-    silently vanish from --version output."""
-    assert "intent" in VERSIONED_MODULES
+    silently vanish from --version output.
+
+    This used to assert that one known module was in the list, which is
+    true of any list containing it and says nothing about the one added
+    yesterday. It now walks the package: every module that declares a
+    `__version__` must be registered, which is what the docstring
+    promised. Found by adding eight modules and having nothing notice.
+    """
+    import ast
+    import pathlib
+
+    root = pathlib.Path(__import__("mana").__file__).parent
+    declared = set()
+    for path in sorted(root.rglob("*.py")):
+        if path.name == "__init__.py" or "__pycache__" in path.parts:
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for node in tree.body:
+            if (isinstance(node, ast.Assign)
+                    and any(getattr(t, "id", "") == "__version__"
+                            for t in node.targets)):
+                name = ".".join(path.relative_to(root).with_suffix("").parts)
+                declared.add(name)
+    missing = sorted(declared - set(VERSIONED_MODULES))
+    assert not missing, f"объявляют версию, но не в списке: {missing}"
 
 
 def test_package_version_matches_product_version():
