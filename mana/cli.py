@@ -588,15 +588,27 @@ def _show_laws() -> int:
 
     book = lawgiver.load_book()
     made = []
+    refused = []
     for run in series.all_series():
         made.extend(lawgiver.propose(run, book))
+        refused.extend((run.question, r) for r in lawgiver.assess(run).refusals)
     if made:
         lawgiver.save_book(book)
 
+    # A series that produced nothing used to look exactly like a series
+    # nobody had. Now that there is a bar to clear, the reason a claim did
+    # not clear it is usually the interesting half of the output.
+    if refused:
+        print("на что серии пока не тянут:")
+        for question, refusal in refused:
+            print(f"  [{question[:44]}] {refusal.describe()}")
+        print()
+
     if not book.all():
         print("Законов пока нет.")
-        print("Закон рождается из ИЗОЛИРОВАННОГО переворота в серии: одно "
-              "условие изменилось, класс изменился, метод тот же.")
+        print(f"Закон рождается из СЕРИИ изолированных переворотов: одно "
+              f"условие изменилось, класс изменился, метод тот же — и так "
+              f"минимум {lawgiver.MIN_AGREEING_FLIPS} раза, согласно.")
         print("Смотреть серии:  MANA.exe --series")
         return 0
 
