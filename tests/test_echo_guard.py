@@ -143,3 +143,72 @@ def test_a_repeating_retry_keeps_the_original_answer():
     source = inspect.getsource(core.CoreMixin._reject_echo)
     assert "retry_helped" in source
     assert source.count("return result") >= 3
+
+
+# --------------------------------------------------------------------------
+# the knob has to reach the live path
+#
+# It did not. `echo_lookback` was declared, `previous_exchanges` respected
+# it, the candidate generator proposed it -- and `core.py` called
+# `previous_exchange`, one turn, and never saw any of it. The test that
+# existed checked the function rather than the wiring, so it passed while
+# the knob did nothing.
+#
+# Measured on a real session afterwards: an answer to "Мана, привет!" came
+# back as a configurator instruction and reappeared word for word four
+# turns later. At depth 1 that repeat is invisible; at 6 all four repeats
+# in the session are caught.
+# --------------------------------------------------------------------------
+
+def test_the_agent_reads_as_many_exchanges_as_the_policy_says():
+    import inspect
+
+    from mana.agent_parts import core
+
+    source = inspect.getsource(core.CoreMixin._previous_exchange)
+    assert "previous_exchanges" in source
+    assert "echo_lookback" in source
+
+
+def test_the_agent_checks_against_all_of_them():
+    import inspect
+
+    from mana.agent_parts import core
+
+    source = inspect.getsource(core.CoreMixin._reject_echo)
+    assert "repeats_any_previous" in source
+
+
+def test_a_repeat_older_than_one_turn_is_caught_at_depth(isolated_agent):
+    """The live path, not the helper: the agent reads history through
+    `persistent_memory`, so this drives it the way a session does."""
+    from mana import policy as policy_mod
+    from mana.policy import Policy
+
+    long_answer = ("Поняла, вы хотите запустить конфигуратор информационной "
+                   "базы 1С. Давайте это сделаем. Запустите программу и "
+                   "выберите нужную базу в списке.")
+    session = isolated_agent.session_id
+    memory = isolated_agent.persistent_memory
+    memory.remember_user(session, "запусти конфигуратор")
+    memory.remember_assistant(session, long_answer)
+    memory.remember_user(session, "спасибо")
+    memory.remember_assistant(session, "Пожалуйста, обращайтесь ещё когда угодно.")
+    memory.remember_user(session, "а что такое регистр сведений")
+    memory.remember_assistant(session, "Регистр сведений хранит записи по измерениям.")
+
+    with policy_mod.use(Policy.of(echo_lookback=1)):
+        shallow = isolated_agent._previous_exchange()
+    with policy_mod.use(Policy.of(echo_lookback=6)):
+        deep = isolated_agent._previous_exchange()
+
+    assert len(shallow) == 1
+    assert len(deep) >= 3
+
+    # "Мана, привет!" answered with the configurator text repeats
+    # something three exchanges back -- invisible at depth 1.
+    result = {"answer": long_answer}
+    assert isolated_agent._reject_echo("Мана, привет!", dict(result),
+                                       shallow) == result
+    caught = isolated_agent._reject_echo("Мана, привет!", dict(result), deep)
+    assert caught.get("echo") or caught["answer"] != long_answer

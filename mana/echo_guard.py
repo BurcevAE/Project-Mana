@@ -35,7 +35,7 @@ import re
 from typing import Any, Dict, Optional, Sequence, Tuple
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 #: How alike two answers must be to count as the same one.
 #:

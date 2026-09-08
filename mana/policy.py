@@ -46,7 +46,7 @@ from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Dict, Iterator, Sequence, Tuple
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.1"
+__version__ = "1.2"
 
 
 @dataclass(frozen=True)
@@ -71,12 +71,14 @@ class Knob:
 #: enumerating them always has the do-nothing candidate available and a
 #: comparison against it is a comparison against today.
 KNOBS: Tuple[Knob, ...] = (
-    Knob("echo_lookback", 1, (1, 3, 6, 12), "repeats_earlier_answer",
-         "Сколько прошлых обменов сравнивать. Сегодня — один: "
-         "`previous_exchange` останавливается на первом найденном ответе, "
-         "поэтому повтор старше одного хода невидим. Замерено: ответ, "
-         "идентичный данному тремя ходами раньше, набрал 1.00 против того "
-         "хода и 0.018 против того, который guard смотрит."),
+    Knob("echo_lookback", 6, (6, 1, 3, 12), "repeats_earlier_answer",
+         "Сколько прошлых обменов сравнивать. Было один, и повтор старше "
+         "одного хода оставался невидим. Принято 08.09.2026 по замеру на "
+         "живой сессии: глубина 1 ловила 0 повторов из 12 ходов, 3 — два, "
+         "6 — все четыре, 12 — те же четыре. Ложных срабатываний ни на "
+         "одной глубине не было. Цена ложного — один лишний вызов: при "
+         "срабатывании ответ переспрашивается без вспомненной памяти, и "
+         "если повтор остаётся, возвращается исходный."),
     Knob("echo_same_answer", 0.80, (0.80, 0.70, 0.90), "repeats_earlier_answer",
          "Насколько похожими должны быть два ответа, чтобы считаться одним."),
     Knob("echo_different_question", 0.75, (0.75, 0.60, 0.85),

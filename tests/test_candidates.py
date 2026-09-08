@@ -41,7 +41,7 @@ def test_the_baseline_policy_is_what_is_in_force():
     the findings ledger, verdict NOT_EVALUATED."""
     assert policy_mod.BASELINE.changes() == {}
     assert policy_mod.active() is policy_mod.BASELINE
-    assert policy_mod.get("echo_lookback") == 1
+    assert policy_mod.get("echo_lookback") == 6
     assert policy_mod.get("intent_verb_anywhere") is True
     assert policy_mod.get("intent_verb_forms") == "addressed"
     assert policy_mod.get("intent_stem_match") is True
@@ -268,10 +268,13 @@ def test_echo_candidates_are_refused_rather_than_guessed():
     """When the guard fires the live path retries with context suppressed,
     and what that retry answers cannot be known without the model.
     Reporting a number would be inventing evidence."""
-    allowed, why = candidates.dry_evaluable(Policy.of(echo_lookback=6))
+    # A non-default depth, so the policy actually changes something: a
+    # policy equal to what is in force changes nothing and is trivially
+    # evaluable.
+    allowed, why = candidates.dry_evaluable(Policy.of(echo_lookback=3))
     assert allowed is False
     assert "echo_lookback" in why
-    report = candidates.dry_report(Policy.of(echo_lookback=6), [])
+    report = candidates.dry_report(Policy.of(echo_lookback=3), [])
     assert report["dry_evaluable"] is False
     assert "baseline_pass_rate" not in report
 

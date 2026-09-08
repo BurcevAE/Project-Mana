@@ -510,17 +510,26 @@ class CoreMixin:
         except Exception as exc:
             self._vlog(f"could not record the exchange: {exc}")
 
-    def _previous_exchange(self) -> Tuple[str, str]:
-        """The question and answer from before this turn."""
+    def _previous_exchange(self) -> List[Tuple[str, str]]:
+        """The exchanges before this turn, newest first.
+
+        How many is `policy.echo_lookback`, whose default is 1 -- the
+        behaviour this had before. Measured on a real session: an answer
+        repeated word for word four turns later, and at a depth of one
+        that repeat is invisible. The knob existed and nothing called it.
+        """
+        from .. import policy as policy_mod
+
         try:
-            return echo_guard.previous_exchange(self.persistent_memory,
-                                                self.session_id)
+            return echo_guard.previous_exchanges(
+                self.persistent_memory, self.session_id,
+                limit=int(policy_mod.get("echo_lookback")))
         except Exception as exc:
             self._vlog(f"echo check could not read history: {exc}")
-            return "", ""
+            return []
 
     def _reject_echo(self, task: str, result: Dict[str, Any],
-                     before: Tuple[str, str]) -> Dict[str, Any]:
+                     before: Sequence[Tuple[str, str]]) -> Dict[str, Any]:
         """Answer again, without the conversation, if this one repeats it.
 
         Reproduced on a clean state directory: "Какая погода в Воронеже?"
@@ -542,10 +551,11 @@ class CoreMixin:
         actually correct and the check was wrong.
         """
         answer = str(result.get("answer") or "")
-        previous_question, previous_answer = before
         try:
-            echo = echo_guard.repeats_previous(task, answer, previous_question,
-                                               previous_answer)
+            # Against every exchange the policy asked for, not only the
+            # last: the repeat measured on a real session was four turns
+            # back, and comparing with one turn could not see it.
+            echo = echo_guard.repeats_any_previous(task, answer, before)
         except Exception as exc:
             self._vlog(f"echo check skipped: {exc}")
             return result
@@ -576,9 +586,11 @@ class CoreMixin:
             (self.config.memory_recent_messages,
              self.config.memory_retrieval_limit) = remembered
 
-        again = echo_guard.repeats_previous(
-            task, str(retried.get("answer") or ""), previous_question,
-            previous_answer)
+        # Against the same set the first check used, not just the last
+        # exchange: a retry that lands on a different old answer is still
+        # a repeat, and checking a narrower window would call it fixed.
+        again = echo_guard.repeats_any_previous(
+            task, str(retried.get("answer") or ""), before)
         if again is not None:
             # Still repeating. Keep the original and say so, rather than
             # returning nothing: the check may be the thing that is wrong.
