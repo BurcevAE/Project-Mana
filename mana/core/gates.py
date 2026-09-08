@@ -335,6 +335,25 @@ def required_trials(min_effect: float) -> int:
     return max(MIN_PAIRED_TRIALS, needed)
 
 
+def _too_small_to_tell(failed: Sequence[str], m: Dict[str, Any]) -> bool:
+    """Below the floor, with nothing measured pointing the wrong way.
+
+    A negative margin is evidence about direction whatever the sample
+    size, and so is a counterexample or a regressed domain -- those keep
+    their refutation. What this catches is the case where the only thing
+    wrong with the claim is that there was not enough of it to look at.
+    """
+    if "sample_size" not in failed:
+        return False
+    if float(m.get("dev_margin") or 0.0) < 0.0:
+        return False
+    if int(m.get("counterexamples_found") or 0) > 0:
+        return False
+    if m.get("regressed_domains"):
+        return False
+    return True
+
+
 def judge(claim: Claim, evidence: Evidence) -> Verdict:
     """Apply every gate the claim requires. Returns, never raises.
 
@@ -423,6 +442,16 @@ def judge(claim: Claim, evidence: Evidence) -> Verdict:
     if unevaluated:
         reason = ("не оценено: скрытая выборка не покрывает "
                   + ", ".join(m.get("hidden_unmeasured_domains", [])))
+    elif _too_small_to_tell(failed_required, m):
+        # The same distinction as the line above, applied to the sample
+        # rather than the holdout. Below the floor with nothing pointing
+        # the wrong way, there is no conclusion to record -- and writing
+        # REJECTED here would take the change out of the search on
+        # evidence nobody gathered.
+        unevaluated = True
+        reason = (f"не оценено: парных испытаний {m.get('paired_trials', 0)} "
+                  f"против {MIN_PAIRED_TRIALS}, и ничто из измеренного не "
+                  f"говорит против")
     status = (NOT_EVALUATED if unevaluated
               else (ACCEPTED if accepted else REJECTED))
     return Verdict(accepted=accepted and not unevaluated, reason=reason,

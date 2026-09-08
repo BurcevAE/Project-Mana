@@ -576,6 +576,43 @@ def _show_next() -> int:
     return 0
 
 
+def _run_cycle() -> int:
+    """Walk the whole loop over the record and say where it stopped.
+
+    Every stage of this existed and each was reached by a different flag,
+    so the loop was one a person had to walk. What it prints last is what
+    stopped it: there is nearly always something, and a loop that could
+    not name the stage it stalled at would look exactly like one that
+    quietly did nothing.
+
+    The result goes into the ledger. A cycle whose outcome is not written
+    down has to be re-run to be remembered, and re-running is how a
+    rejected change comes back next week as a new idea.
+    """
+    from .journal import Journal
+    from .cognition import cycle
+
+    journal = Journal()
+    episodes = journal.episodes()
+    ran = cycle.run(episodes)
+    print(ran.describe())
+
+    replay = ran.stage(cycle.REPLAY)
+    if replay:
+        print()
+        print(f"  доля прохождения: {replay.detail['baseline_pass_rate']} → "
+              f"{replay.detail['candidate_pass_rate']}")
+        print(f"  починено: {replay.detail['fixed'] or '—'}")
+        print(f"  сломано:  {replay.detail['broke'] or '—'}")
+    if ran.finding_id:
+        print()
+        print(f"записано в реестр: {ran.finding_id}")
+    print()
+    print("Сухой прогон — верхняя граница: считается, что выполнимое "
+          "действие удаётся. Живой результат может быть только хуже.")
+    return 0
+
+
 def _run_world(steps: int) -> int:
     """Explore the small world and score the model that comes out.
 
@@ -770,6 +807,10 @@ def build_parser() -> argparse.ArgumentParser:
                              "им дало накопленное свидетельство")
     parser.add_argument("--next", action="store_true", dest="next_probe",
                         help="Какое условие стоит поварьировать дальше и почему")
+    parser.add_argument("--cycle", action="store_true",
+                        help="Полный круг: опыт → ошибка → исследование → "
+                             "изменение → повторная ситуация → результат, "
+                             "и чего не хватает, чтобы он замкнулся")
     parser.add_argument("--world", nargs="?", const=1000, type=int, metavar="N",
                         help="Опыт с моделью мира: исследовать маленькую "
                              "вселенную N шагами и сверить восстановленную "
@@ -863,6 +904,9 @@ def main() -> int:
 
     if args.next_probe:
         return _show_next()
+
+    if args.cycle:
+        return _run_cycle()
 
     if args.world is not None:
         return _run_world(int(args.world))

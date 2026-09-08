@@ -482,6 +482,12 @@ def rank(violations: Sequence[Violation], situations: Sequence[Situation],
                 "verdict": prior["finding"]["verdict"],
                 "when": prior["finding"]["created"],
                 "measurement": prior["finding"]["measurement"],
+                # "exact" means this experiment has already been run under
+                # these conditions. Carried because a verdict alone
+                # cannot say that: NOT_EVALUATED is not a rejection, and
+                # re-running it on the same evidence still produces the
+                # same "could not tell".
+                "match": prior.get("match", ""),
                 "conditions_moved": prior["staleness"]["stale"],
                 "changed": prior["staleness"]["changed"]}
         out.append(row)
