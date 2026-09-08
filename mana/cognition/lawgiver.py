@@ -129,6 +129,14 @@ _MEASURED = (WORSE, NOT_BETTER, COSTS_MORE_THAN_IT_GAINS, BETTER)
 #: below it is refused out loud instead of quietly not appearing.
 MIN_AGREEING_FLIPS = 2
 
+#: And they must not all hang on one observation. Two comparisons sharing
+#: an endpoint fail together if that endpoint is a fluke, which is the
+#: dependence replication exists to rule out -- measured on the world
+#: series, where 400->2500 and 1000->2500 both ran into the same 2500 and
+#: looked like two results. The chess pair this bar was set against has
+#: four distinct observations and passes.
+INDEPENDENT_OBSERVATIONS = True
+
 
 @dataclass(frozen=True)
 class Refusal:
@@ -263,6 +271,24 @@ def _from_flip(flip: Comparison, ledger: Ledger
         source=f"{flip.left}->{flip.right}"), None)
 
 
+def _all_share_one(found: Sequence[Candidate]) -> bool:
+    """Is there an observation every one of these comparisons runs into?
+
+    `source` is written as "left->right", so the endpoints are recoverable
+    without the series being passed around again.
+    """
+    if len(found) < 2:
+        return False
+    sets = []
+    for candidate in found:
+        left, _, right = candidate.source.partition("->")
+        sets.append({left, right})
+    shared = set(sets[0])
+    for pair in sets[1:]:
+        shared &= pair
+    return bool(shared)
+
+
 def assess(series: Series, ledger: Optional[Ledger] = None) -> Assessment:
     """What a series supports, and what it refuses to support yet.
 
@@ -302,6 +328,12 @@ def assess(series: Series, ledger: Optional[Ledger] = None) -> Assessment:
                       f"против {MIN_AGREEING_FLIPS}: одно сравнение — это "
                       f"наблюдение, а не серия", len(found)))
             continue
+        if INDEPENDENT_OBSERVATIONS and _all_share_one(found):
+            refusals.append(Refusal(
+                axis, "все перестановки упираются в одно наблюдение: если "
+                      "оно случайность, они ошибочны вместе — это одно "
+                      "свидетельство, а не два", len(found)))
+            continue
         out.extend(found)
     return Assessment(candidates=tuple(out), refusals=tuple(refusals))
 
@@ -340,7 +372,17 @@ def propose(series: Series, book: Optional[LawBook] = None,
             law = book.propose(condition=candidate.condition,
                                intervention=candidate.intervention,
                                claimed_effect=candidate.claimed_effect,
-                               discovered_in=candidate.discovered_in)
+                               discovered_in=candidate.discovered_in,
+                               # Which way the claim points. Without it a
+                               # law about something that hurts is refuted
+                               # by the evidence it was proposed on: its
+                               # effects are negative and every one of them
+                               # would count as disagreement.
+                               direction=1 if candidate.effect >= 0 else -1,
+                               # Where it was measured. A law that drops
+                               # this claims a whole domain on evidence
+                               # from one corner of it.
+                               scope=dict(candidate.scope))
         if candidate.source in law.evidence.experiments:
             continue                    # already folded in on a prior run
         law.record_evidence(effect=candidate.effect, trials=candidate.trials,

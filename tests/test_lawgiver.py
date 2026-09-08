@@ -430,3 +430,40 @@ def test_the_laws_reader_prints_why_a_series_fell_short(tmp_path, monkeypatch,
     printed = capsys.readouterr().out
     assert "не тянут" in printed
     assert "наблюдение, а не серия" in printed
+
+
+# --------------------------------------------------------------------------
+# two comparisons that hang on one observation are not two
+# --------------------------------------------------------------------------
+
+def test_flips_that_all_run_into_one_observation_are_one_witness(ledger):
+    """Found by running the world series: a plateau at 2500 steps was
+    supported by 400->2500 and 1000->2500, and both ran into the same 2500.
+    If that observation is a fluke they are wrong together, which is the
+    dependence replication exists to rule out."""
+    add(ledger, feature_set="base12", corpus_games=1000,
+        interval=[0.6155, 0.7615], created=1.0, verdict=ACCEPTED)
+    add(ledger, feature_set="base12", corpus_games=2000,
+        interval=[0.6155, 0.7615], created=2.0, verdict=ACCEPTED)
+    add(ledger, feature_set="base12", corpus_games=5000,
+        interval=[0.30, 0.44], created=3.0)
+
+    run = read(ledger)
+    assert len(run.isolated_flips) == 2, "the fixture stopped producing two"
+    judged = lawgiver.assess(run, ledger)
+    assert judged.candidates == ()
+    assert any("одно наблюдение" in r.reason for r in judged.refusals)
+
+
+def test_the_chess_pair_is_independent_and_still_passes(ledger):
+    """Four distinct observations, no shared endpoint. The bar was set
+    against this and must not have moved under it."""
+    judged = lawgiver.assess(flipped(ledger), ledger)
+    assert len(judged.candidates) == lawgiver.MIN_AGREEING_FLIPS
+    assert judged.refusals == ()
+
+
+def test_the_law_carries_where_it_was_measured(ledger):
+    law = lawgiver.propose(flipped(ledger), LawBook(), ledger)[0]
+    assert law.scope.get("corpus_games") in (1000, 5000)
+    assert "feature_set" not in law.scope

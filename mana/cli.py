@@ -586,8 +586,25 @@ def _run_world(steps: int) -> int:
     because a missing condition promises too much and an invented one
     refuses work that would have worked.
     """
+    from .cognition import acting, lawgiver
     from .world.explore import Explorer
     from .world.universe import SmallWorld, grade
+
+    # The one place a law is allowed to change what is done rather than
+    # what is measured next. Standing laws only -- a PROPOSED one may
+    # point at the next experiment and no further.
+    from .world.explore import EPISODE_STEPS
+
+    chosen = acting.setting_for("steps", steps, domain="world_model",
+                                book=lawgiver.load_book(),
+                                # The conditions this run is under. A law
+                                # measured at another episode length was
+                                # measured somewhere else, and saying so
+                                # is what keeps it from speaking here.
+                                conditions={"episode_steps": EPISODE_STEPS})
+    if chosen.changed:
+        print("по закону: " + chosen.describe())
+        steps = int(chosen.value)
 
     world = SmallWorld(seed=7)
     model = Explorer().explore(world, steps=steps, seed=7).model()
