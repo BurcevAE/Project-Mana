@@ -493,6 +493,51 @@ def _show_series() -> int:
     return 0
 
 
+def _next_policy_experiment() -> int:
+    """The policy setting worth measuring next, chosen rather than listed.
+
+    The half of "what next" that can be answered: a knob is controllable
+    by construction -- declared in `policy.KNOBS` with its options -- and
+    how much measuring one would tell us comes out of the ledger. The
+    choice goes through `experiments.select`, the same selector that picks
+    a probe and a pipeline experiment.
+    """
+    from .journal import Journal
+    from .cognition import candidates, failure_domain, invariants, lessons
+
+    episodes = Journal().episodes(limit=200)
+    violations = invariants.scan(episodes) if episodes else []
+    learned = lessons.read(invariants_seen=[v.invariant for v in violations])
+    if not violations and not any(l.observed for l in learned.values()):
+        return 0
+
+    situations = failure_domain.situations_from(episodes) if episodes else []
+    rows = candidates.rank(violations, situations, lessons=learned)
+    picked = candidates.choose(violations, situations, budget=10 ** 6,
+                               lessons=learned)
+
+    print("настройка политики — здесь выбор возможен:")
+    if picked is None:
+        made = candidates.plan(violations, lessons=learned)
+        for refusal in made.refusals:
+            print(f"  «{refusal['addresses']}»: {refusal['why']}")
+        if not made.refusals:
+            print("  ничего не проходит порог ценности — это тоже ответ")
+        print()
+        return 0
+
+    print(f"  измерить: {picked['changes']}")
+    print(f"  целит в:  {picked['addresses']} "
+          f"({picked['observed_failures']} наблюдений)")
+    print(f"  ценность: {picked['value']:+.3f} "
+          f"(информативность {picked['information']:.2f})")
+    print(f"  почему:   {picked['information_why']}")
+    for row in rows[1:4]:
+        print(f"    следом: {row['changes']} — ценность {row['value']:+.3f}")
+    print()
+    return 0
+
+
 def _show_next() -> int:
     """Which condition is worth varying next, per question.
 
@@ -503,9 +548,11 @@ def _show_next() -> int:
     """
     from .cognition import lawgiver, probes, series
 
+    _next_policy_experiment()
+
     runs = series.all_series()
     if not runs:
-        print("Реестр находок пуст — предлагать нечего.")
+        print("Серий в реестре нет — по условиям опытов предлагать нечего.")
         return 0
 
     # A standing law with an untested limit lifts the axis it claims

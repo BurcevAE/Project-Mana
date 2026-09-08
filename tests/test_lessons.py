@@ -271,3 +271,146 @@ def test_the_tab_payload_carries_both_halves(tmp_path, monkeypatch):
     assert "lessons" in data
     assert isinstance(data["proposals"], dict)
     assert set(data["proposals"]) >= {"candidates", "refusals"}
+
+
+# --------------------------------------------------------------------------
+# the ranking, before and after the record learned something
+# --------------------------------------------------------------------------
+
+def _echo_rows(ledger, learned=None):
+    return candidates.rank([_violation(REPEATS)], [], ledger=ledger,
+                           lessons=learned)
+
+
+def test_the_same_candidates_are_ranked_differently_after_a_measurement(tmp_path):
+    """The criterion: same set, different order, because of the record."""
+    ledger = Ledger(tmp_path / "f.jsonl")
+    before = _echo_rows(ledger, lessons.read(ledger))
+
+    # Measured under exactly the conditions that hold now: one observed
+    # failure, which is what this violation amounts to.
+    ledger.record(Finding(
+        question=candidates.question_for(REPEATS),
+        approach={"echo_lookback": 3}, verdict=REJECTED,
+        conditions={"observed_failures": 1},
+        measurement=measurement_of(trials=40, interval=(-0.2, -0.05), null=0.0)))
+    after = _echo_rows(ledger, lessons.read(ledger))
+
+    def ids(rows):
+        return [r["candidate_id"] for r in rows]
+
+    assert set(ids(before)) == set(ids(after)), "the set must not change"
+    assert ids(before) != ids(after), "the order must"
+
+    measured = next(r for r in after if r["changes"] == {"echo_lookback": 3})
+    assert measured["information"] == candidates.ALREADY_MEASURED
+    assert ids(after)[-1] == measured["candidate_id"]
+
+
+def test_without_a_record_every_candidate_is_equally_informative(tmp_path):
+    ledger = Ledger(tmp_path / "f.jsonl")
+    rows = _echo_rows(ledger, lessons.read(ledger))
+    assert rows
+    assert {r["information"] for r in rows} == {candidates.NEVER_MEASURED}
+
+
+def test_a_measurement_under_conditions_that_moved_is_a_weaker_prior(tmp_path):
+    ledger = Ledger(tmp_path / "f.jsonl")
+    stale = Finding(question=candidates.question_for(REPEATS),
+                    approach={"echo_lookback": 3}, verdict=REJECTED,
+                    conditions={"observed_failures": 99},  # not 1, as now
+                    measurement=measurement_of(trials=40, interval=(-0.2, -0.05),
+                                               null=0.0))
+    ledger.record(stale)
+    rows = _echo_rows(ledger, lessons.read(ledger))
+    row = next(r for r in rows if r["changes"] == {"echo_lookback": 3})
+    # Measured, but not here: worth more than a settled result and less
+    # than an axis nobody has touched.
+    assert row["information"] == candidates.CONDITIONS_MOVED
+    assert (candidates.ALREADY_MEASURED < row["information"]
+            < candidates.NEVER_MEASURED)
+
+
+def test_an_unmeasured_attempt_does_not_lower_the_information(tmp_path):
+    ledger = Ledger(tmp_path / "f.jsonl")
+    ledger.record(_adopted({"echo_lookback": 3}))
+    rows = _echo_rows(ledger, lessons.read(ledger))
+    row = next(r for r in rows if r["changes"] == {"echo_lookback": 3})
+    assert row["information"] == candidates.NEVER_MEASURED
+
+
+def test_the_value_leaves_the_dry_bound_out(tmp_path):
+    # It exists for some candidates and not others; averaging it in would
+    # make "could not be evaluated" mean "no gain".
+    scored = candidates.Scored(row={}, information=1.0)
+    assert scored.value == 1.0
+    priced = candidates.Scored(row={}, information=1.0,
+                               estimated_calls=int(candidates.COST_SCALE))
+    assert priced.value < scored.value
+
+
+def test_the_dry_bound_still_decides_between_equally_informative_ones(monkeypatch):
+    """The old ordering survives where the record says nothing."""
+    from mana.apps import intent
+    from mana.cognition import failure_domain as fd
+    from mana.journal import Episode
+    from mana.policy import Policy
+
+    targets = ["UT11-ER", "Информационная база"]
+    monkeypatch.setattr(intent, "_known_bases", lambda: targets)
+    episodes = [
+        Episode("a", "s", 1.0,
+                "я хочу поработать с 1С запусти конфигуратор информационной базы",
+                "Чтобы запустить, найдите ярлык 1С на рабочем столе."),
+        Episode("b", "s", 2.0, "расскажи про налоги",
+                "Развёрнутый содержательный ответ про налоги.")]
+    from mana.cognition.invariants import scan
+
+    found = scan(episodes, targets)
+    narrow = Policy.of(intent_verb_anywhere=False, intent_stem_match=False,
+                       intent_verb_forms="imperative")
+    rows = candidates.rank(found, fd.situations_from(episodes, targets),
+                           current=narrow)
+    evaluable = [r for r in rows if r["dry"].get("dry_evaluable")]
+    assert evaluable
+    best = evaluable[0]["dry"]
+    assert best["candidate_pass_rate"] > best["baseline_pass_rate"]
+
+
+# --------------------------------------------------------------------------
+# chosen by the same selector as everything else
+# --------------------------------------------------------------------------
+
+def test_choosing_goes_through_the_shared_selector(tmp_path):
+    ledger = Ledger(tmp_path / "f.jsonl")
+    picked = candidates.choose([_violation(REPEATS)], [], budget=100,
+                               ledger=ledger, lessons=lessons.read(ledger))
+    assert picked is not None
+    assert picked["value"] >= candidates.MIN_EXPERIMENT_VALUE
+
+
+def test_the_least_informative_candidate_is_not_the_one_chosen(tmp_path):
+    ledger = Ledger(tmp_path / "f.jsonl")
+    ledger.record(Finding(
+        question=candidates.question_for(REPEATS),
+        approach={"echo_lookback": 3}, verdict=REJECTED,
+        conditions={"observed_failures": 1},
+        measurement=measurement_of(trials=40, interval=(-0.2, -0.05), null=0.0)))
+    picked = candidates.choose([_violation(REPEATS)], [], budget=100,
+                               ledger=ledger, lessons=lessons.read(ledger))
+    assert picked["changes"] != {"echo_lookback": 3}
+
+
+def test_nothing_to_measure_is_a_real_answer():
+    assert candidates.choose([], [], budget=100) is None
+
+
+def test_next_answers_without_a_journal(tmp_path, monkeypatch, capsys):
+    """The reader is the visible half of this; a crash in it would be
+    found by a person typing the flag, which is the loop this project is
+    trying to get out of."""
+    from mana.cli import _next_policy_experiment
+
+    monkeypatch.chdir(tmp_path)
+    assert _next_policy_experiment() == 0
+    assert capsys.readouterr().out == ""    # nothing to say, said quietly

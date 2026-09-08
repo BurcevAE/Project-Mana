@@ -111,6 +111,11 @@ class Attempt:
     def helped(self) -> bool:
         return self.measured and self.failure == BETTER
 
+    def stale_against(self, conditions: Dict[str, Any]) -> Dict[str, Any]:
+        """The same question `Finding.stale_against` answers, same rule."""
+        from .findings import staleness
+        return staleness(self.conditions, conditions)
+
     def as_dict(self) -> Dict[str, Any]:
         return {"approach": dict(self.approach), "verdict": self.verdict,
                 "failure": self.failure, "conditions": dict(self.conditions),
@@ -178,6 +183,18 @@ class Lesson:
                 if (knob.name, option) not in measured:
                     out.append((knob.name, option))
         return tuple(out)
+
+    def measured_under(self, name: str, value: Any) -> Tuple[Attempt, ...]:
+        """The measured attempts that set this knob to this value.
+
+        Returned rather than reduced to a boolean because the conditions
+        they ran under are the other half of the answer: a result from
+        conditions that no longer hold is a weaker prior than one from
+        conditions that do, and the caller is the one that knows which
+        conditions apply now.
+        """
+        return tuple(a for a in self.learned
+                     if name in a.approach and a.approach[name] == value)
 
     @property
     def exhausted(self) -> bool:

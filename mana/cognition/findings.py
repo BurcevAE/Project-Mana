@@ -219,6 +219,25 @@ def _canonical(value: Any) -> str:
                       separators=(",", ":"), default=str)
 
 
+def staleness(then: Dict[str, Any], now: Dict[str, Any]) -> Dict[str, Any]:
+    """Whether a result measured under `then` still speaks to `now`.
+
+    The one rule, so that every caller asks the same question. A
+    condition recorded then and different now has moved; a condition that
+    matters now and was never recorded then is worse, because nobody can
+    say whether it held -- both count as stale, and the report says which
+    of the two it was.
+    """
+    then, now = dict(then or {}), dict(now or {})
+    changed: Dict[str, Any] = {}
+    for key, was in sorted(then.items()):
+        if key in now and now[key] != was:
+            changed[key] = {"was": was, "now": now[key]}
+    missing = sorted(set(now) - set(then))
+    return {"changed": changed, "not_recorded_then": missing,
+            "stale": bool(changed or missing)}
+
+
 @dataclass(frozen=True)
 class Finding:
     """One experiment, its verdict, and what would make it stale.
@@ -309,14 +328,7 @@ class Finding:
         a re-run would be worse than no ledger, because it would hide the
         one case where re-running was the right call.
         """
-        changed: Dict[str, Any] = {}
-        for key, was in sorted(self.conditions.items()):
-            now = conditions.get(key)
-            if key in conditions and now != was:
-                changed[key] = {"was": was, "now": now}
-        missing = sorted(set(conditions) - set(self.conditions))
-        return {"changed": changed, "not_recorded_then": missing,
-                "stale": bool(changed or missing)}
+        return staleness(self.conditions, conditions)
 
     def describe(self) -> str:
         when = time.strftime("%d.%m.%Y", time.localtime(self.created))
