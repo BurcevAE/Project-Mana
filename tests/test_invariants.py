@@ -134,18 +134,15 @@ def test_describing_an_action_is_not_claiming_it(answer):
 # actionable_request_not_acted_on -- pattern, the wide twin
 # --------------------------------------------------------------------------
 
-def test_it_finds_what_the_narrow_matcher_misses():
-    """Both real misses. `apps/intent.py` requires the imperative at the
-    start of the message and matches base names as literal substrings;
-    neither of these requests survives that, and both are plainly
-    instructions to act."""
-    from mana.apps import intent
-
+def test_it_finds_a_request_that_produced_no_action():
+    """Both of these were misses for the actor until the recognition fix
+    was adopted on 08.09.2026. The detector found them first, which is
+    what a wide shadow twin is for -- and it still fires on any request
+    that produced no action, whatever the actor now recognises."""
     for text in ("я хочу поработать с 1С запусти пожалуйста конфигуратор "
                  "информационной базы",
                  "я хочу что бы ты открыла конфигуратор информационной базы "
                  "на моем компьютере"):
-        assert intent.match(text) is None, "the actor is still narrow here"
         found = actionable_request_not_acted_on(ep(text, "инструкция"), [],
                                                 TARGETS)
         assert found is not None and found.kind == PATTERN

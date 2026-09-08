@@ -35,15 +35,24 @@ def violation(name: str, episode_id: str = "e1") -> Violation:
 # the policy layer -- defaults must be today
 # --------------------------------------------------------------------------
 
-def test_the_baseline_policy_changes_nothing():
-    """Every default is the value the code had before policy.py existed,
-    so importing it cannot alter behaviour."""
+def test_the_baseline_policy_is_what_is_in_force():
+    """A default is the behaviour MANA actually has. Three of these
+    changed when the 1C recognition fix was adopted on 08.09.2026 -- see
+    the findings ledger, verdict NOT_EVALUATED."""
     assert policy_mod.BASELINE.changes() == {}
     assert policy_mod.active() is policy_mod.BASELINE
     assert policy_mod.get("echo_lookback") == 1
-    assert policy_mod.get("intent_verb_anywhere") is False
-    assert policy_mod.get("intent_verb_forms") == "imperative"
-    assert policy_mod.get("intent_stem_match") is False
+    assert policy_mod.get("intent_verb_anywhere") is True
+    assert policy_mod.get("intent_verb_forms") == "addressed"
+    assert policy_mod.get("intent_stem_match") is True
+
+
+def test_every_knob_still_offers_what_it_was_before():
+    """An adopted setting has to stay reversible: the generator proposes
+    the other value, and the gates can send it back."""
+    for knob in KNOBS:
+        assert len(knob.options) >= 2
+        assert knob.default == knob.options[0]
 
 
 def test_only_declared_knobs_may_be_set():
@@ -59,10 +68,12 @@ def test_a_value_outside_the_declared_range_is_refused():
 
 
 def test_a_policy_is_content_addressed():
-    assert (Policy.of(intent_verb_anywhere=True).policy_id
-            == Policy.of(intent_verb_anywhere=True).policy_id)
-    assert (Policy.of(intent_verb_anywhere=True).policy_id
-            != Policy.of(intent_stem_match=True).policy_id)
+    # The non-default value, so these are policies that differ from what
+    # is in force rather than restatements of it.
+    assert (Policy.of(intent_verb_anywhere=False).policy_id
+            == Policy.of(intent_verb_anywhere=False).policy_id)
+    assert (Policy.of(intent_verb_anywhere=False).policy_id
+            != Policy.of(intent_stem_match=False).policy_id)
 
 
 def test_a_policy_applies_only_to_the_thread_that_asked():
@@ -78,21 +89,21 @@ def test_a_policy_applies_only_to_the_thread_that_asked():
         seen.append(policy_mod.get("intent_verb_anywhere"))
         ready.set()
 
-    with policy_mod.use(Policy.of(intent_verb_anywhere=True)):
-        assert policy_mod.get("intent_verb_anywhere") is True
+    with policy_mod.use(Policy.of(intent_verb_anywhere=False)):
+        assert policy_mod.get("intent_verb_anywhere") is False
         worker = threading.Thread(target=other)
         worker.start()
         ready.wait(timeout=5)
         worker.join()
-    assert seen == [False]
-    assert policy_mod.get("intent_verb_anywhere") is False
+    assert seen == [True]                       # the other thread saw the default
+    assert policy_mod.get("intent_verb_anywhere") is True
 
 
 def test_the_policy_is_restored_even_when_the_body_raises():
     with pytest.raises(RuntimeError):
-        with policy_mod.use(Policy.of(intent_verb_anywhere=True)):
+        with policy_mod.use(Policy.of(intent_verb_anywhere=False)):
             raise RuntimeError("evaluation blew up")
-    assert policy_mod.get("intent_verb_anywhere") is False
+    assert policy_mod.get("intent_verb_anywhere") is True
 
 
 def test_every_knob_names_an_invariant_it_can_affect():
@@ -109,38 +120,57 @@ def test_every_knob_names_an_invariant_it_can_affect():
 # the knobs must actually change behaviour
 # --------------------------------------------------------------------------
 
-def test_the_narrow_actor_still_misses_the_real_requests(monkeypatch):
+def test_the_adopted_policy_catches_the_real_requests(monkeypatch):
+    """Both were misses before 08.09.2026; the fix is now the default."""
     monkeypatch.setattr(intent, "_known_bases", lambda: TARGETS)
     for text in REAL_MISSES:
-        assert intent.match(text) is None
+        found = intent.match(text)
+        assert found is not None
+        assert found.params["base"] == "Информационная база"
 
 
-def test_the_widest_policy_catches_both_of_them(monkeypatch):
+def test_turning_the_fix_off_restores_the_old_misses(monkeypatch):
+    """Reversible, and the reverse is a policy like any other."""
+    monkeypatch.setattr(intent, "_known_bases", lambda: TARGETS)
+    narrow = Policy.of(intent_verb_anywhere=False, intent_stem_match=False,
+                       intent_verb_forms="imperative")
+    with policy_mod.use(narrow):
+        for text in REAL_MISSES:
+            assert intent.match(text) is None
+
+
+def test_the_adopted_policy_names_the_base_and_the_mode(monkeypatch):
     """The measured misses, fixed by settings rather than by an edit."""
     monkeypatch.setattr(intent, "_known_bases", lambda: TARGETS)
-    wide = Policy.of(intent_verb_anywhere=True, intent_stem_match=True,
-                     intent_verb_forms="addressed")
-    with policy_mod.use(wide):
-        for text in REAL_MISSES:
-            found = intent.match(text)
-            assert found is not None
-            assert found.params["base"] == "Информационная база"
-            assert found.params["designer"] is True
+    for text in REAL_MISSES:
+        found = intent.match(text)
+        assert found is not None
+        assert found.params["base"] == "Информационная база"
+        assert found.params["designer"] is True
 
 
 @pytest.mark.parametrize("text", [
     "Как запустить 1С?",
-    "ты уже открыла отчёт?",
+    "ты уже открыла 1С?",
     "расскажи что такое конфигуратор",
+    "я не могу запустить 1С, что делать?",
+    "в 1С можно открыть несколько баз сразу?",
+    "в инструкции написано открыть базу через ярлык 1С",
+    "почему не запускается 1С?",
+    "нужно ли закрывать 1С перед обновлением?",
 ])
-def test_widening_does_not_start_launching_things_at_questions(monkeypatch, text):
-    """The reason the actor is narrow in the first place. If a candidate
-    breaks this, it should be rejected, not shipped."""
+def test_the_adopted_policy_does_not_launch_at_questions(monkeypatch, text):
+    """The reason the actor was narrow in the first place. Measured before
+    the guards existed: the widening alone fired on three of these, and
+    launching 1C at somebody asking for help is worse than doing nothing.
+
+    The dry evaluation had reported zero counterexamples -- it searched
+    seven recorded episodes, none of which is a question about 1C.
+    Absence of counterexamples in a small record is not evidence of
+    safety.
+    """
     monkeypatch.setattr(intent, "_known_bases", lambda: TARGETS)
-    wide = Policy.of(intent_verb_anywhere=True, intent_stem_match=True,
-                     intent_verb_forms="addressed")
-    with policy_mod.use(wide):
-        assert intent.match(text) is None
+    assert intent.match(text) is None
 
 
 def test_the_echo_lookback_knob_reaches_the_guard():

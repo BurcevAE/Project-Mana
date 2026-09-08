@@ -15,12 +15,19 @@ change anything would be a second way to modify the system, and the
 second way is always the one with the hole in it -- the same reason
 `brain_factory` may assemble candidates and may not adopt them.
 
-Defaults are today
-------------------
-Every default below is the value the code had before this module existed,
-so importing it changes no behaviour. A knob only matters once a policy
-carrying a different value is put into effect, which happens during
-evaluation and, if the gates accept it, afterwards.
+Defaults are what is in force
+------------------------------
+A default here is the behaviour MANA actually has. Three of them changed
+on 08.09.2026, when the 1C recognition fix was adopted: the loop proposed
+it, a dry run scored it, and it was turned on **under stated uncertainty**
+rather than on a verdict -- the gates want thirty paired trials of live
+evidence and there were seven recorded turns.
+
+That adoption is in the findings ledger with verdict NOT_EVALUATED, so
+the record says what it rests on. When live evidence accumulates the
+gates judge it properly, and the reverse setting is a candidate the
+generator will offer, because every knob's options include what it was
+before.
 
 Per thread, deliberately
 ------------------------
@@ -39,7 +46,7 @@ from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Dict, Iterator, Sequence, Tuple
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 
 @dataclass(frozen=True)
@@ -76,24 +83,26 @@ KNOBS: Tuple[Knob, ...] = (
          "repeats_earlier_answer",
          "Насколько разными должны быть вопросы, чтобы повтор был подозрителен. "
          "Слишком низко — MANA откажется быть последовательной, что хуже дефекта."),
-    Knob("intent_verb_anywhere", False, (False, True),
+    Knob("intent_verb_anywhere", True, (True, False),
          "actionable_request_not_acted_on",
          "Считать ли повелительный глагол в середине сообщения командой. "
-         "Сегодня требуется начало строки, поэтому «я хочу поработать с 1С "
-         "запусти пожалуйста конфигуратор» не распознаётся вовсе."),
-    Knob("intent_verb_forms", "imperative", ("imperative", "addressed"),
+         "Принято 08.09.2026: до этого требовалось начало строки, и «я хочу "
+         "поработать с 1С запусти пожалуйста конфигуратор» не распознавалось "
+         "вовсе. Включено вместе с ограждениями в apps/intent.py — без них "
+         "давало 3 ложных запуска из 12 вопросов про 1С."),
+    Knob("intent_verb_forms", "addressed", ("addressed", "imperative"),
          "actionable_request_not_acted_on",
-         "Какие формы глагола считать просьбой. Сегодня только повелительные "
-         "(«запусти», «открой»). Замерено: «я хочу что бы ты открыла "
-         "конфигуратор» не распознаётся — сослагательного «открыла» в списке "
-         "нет. «addressed» добавляет обращённые к MANA формы, и это заметно "
-         "рискованнее: «ты уже открыла отчёт?» — вопрос, а не команда. "
-         "Поэтому решают ворота, а не мнение."),
-    Knob("intent_stem_match", False, (False, True),
+         "Какие формы глагола считать просьбой. «addressed» добавляет "
+         "обращённые к MANA формы к повелительным: «я хочу что бы ты открыла "
+         "конфигуратор» без них не распознавалось. Риск назван в замере — "
+         "«ты уже открыла 1С?» вопрос, а не команда, — и снят требованием "
+         "маркера просьбы («хочу», «прошу», «можешь») перед такой формой."),
+    Knob("intent_stem_match", True, (True, False),
          "actionable_request_not_acted_on",
-         "Сопоставлять ли имена баз по основам слов. Сегодня — подстрокой, "
-         "поэтому «информационной базы» не находит «Информационная база»: "
-         "по-русски никто не пишет имя в именительном падеже."),
+         "Сопоставлять ли имена баз по основам слов. До принятия — "
+         "подстрокой, поэтому «информационной базы» не находило "
+         "«Информационная база»: по-русски никто не пишет имя базы в "
+         "именительном падеже."),
 )
 
 _BY_NAME = {knob.name: knob for knob in KNOBS}

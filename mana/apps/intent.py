@@ -42,7 +42,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 #: Imperatives that mean "do it", at the start of the message. A verb in
 #: the middle ("расскажи, как запустить") is describing, not asking.
@@ -122,6 +122,79 @@ _ASKS_ABOUT = re.compile(
     r"^\s*(?:как|каким образом|почему|зачем|что такое|что за|"
     r"где|когда|можно ли|стоит ли|возможно ли|в чём|в чем)\b",
     re.IGNORECASE)
+
+#: An interrogative anywhere. What decides is its POSITION relative to
+#: the verb, not a question mark:
+#:
+#:     как запустить 1С       "как" before the verb  -> asking about
+#:     запусти 1С, что бы я   "что" after the verb   -> part of the ask
+#:
+#: Requiring a question mark was measured and too weak -- "расскажи, как
+#: запустить 1С" has none and launched 1C. Dropping the requirement
+#: without the position rule is too strong, for the second line above.
+#: "что" is excluded before "бы": «чтобы»/«что бы» subordinates a clause
+#: rather than asking anything, and it is exactly what makes "я хочу что
+#: бы ты открыла конфигуратор" a request. Measured -- without the
+#: exclusion the position rule blocked that very message.
+_QUESTION_WORD = re.compile(
+    r"\b(?:как|почему|зачем|что(?!\s*бы\b)|где|когда|можно|нужно|стоит|"
+    r"возможно|какой|какую|сколько|ли)\b", re.IGNORECASE)
+
+#: A negation in front of the verb. "не могу запустить", "не
+#: запускается" -- never an instruction, whatever else the message says.
+_NEGATED = re.compile(
+    r"\bне\s+(?:\w+\s+){0,2}?(?:могу|можешь|может|получается|выходит|"
+    r"запуск\w*|открыв\w*|запускается|открывается)", re.IGNORECASE)
+
+#: Reported speech: describing an instruction given to somebody else.
+#: "в инструкции написано открыть базу" quotes a manual; it does not ask
+#: for anything. A real category, like negation and interrogation -- and
+#: the last guard added, because past this point the guards would be
+#: fitted to the dozen messages they were measured on rather than to
+#: shapes of the language.
+_REPORTED = re.compile(
+    r"\b(?:написано|сказано|указано|говорится|пишет|пишут|"
+    r"в инструкции|в документации|в справке|по инструкции)\b",
+    re.IGNORECASE)
+
+#: What turns an addressed form into a request. "я хочу что бы ты
+#: открыла" asks for it; "ты уже открыла 1С?" asks about it, and the
+#: difference is this marker rather than the verb.
+_REQUEST_MARKER = re.compile(
+    r"\b(?:хочу|хотел|хотела|прошу|попрошу|можешь|сможешь|давай|"
+    r"пожалуйста|надо чтобы|нужно чтобы)\b", re.IGNORECASE)
+
+
+def _asks_rather_than_asks_for(text: str, forms: str,
+                               verb_at: int = 0) -> bool:
+    """Is this a message ABOUT an action rather than a request for one?
+
+    Only consulted when the verb is allowed away from the start of the
+    message. With the narrow default an imperative opens the sentence and
+    none of these shapes can arise.
+
+    `verb_at` is where the launch verb was found: an interrogative before
+    it is asking about the action, after it is part of the request.
+    """
+    head = (text or "").lower()
+    if _ASKS_ABOUT.match(head):
+        return True
+    if _NEGATED.search(head):
+        return True
+    if _REPORTED.search(head):
+        return True
+    asking = _QUESTION_WORD.search(head)
+    if asking and asking.start() < verb_at:
+        return True
+    if "?" in head and asking:
+        return True
+    if forms == "addressed" and not _REQUEST_MARKER.search(head):
+        # A past or future form with nothing asking for it is a question
+        # about what happened, not an instruction.
+        if re.search(r"\b(?:открыл\w*|запустил\w*|включил\w*|"
+                     r"откроешь|запустишь|включишь)\b", head):
+            return True
+    return False
 
 
 def _stem_match(text: str, name: str) -> bool:
@@ -216,8 +289,10 @@ def match(task: str) -> Optional[Intent]:
     verbs = _launch_pattern()
     if policy_mod.get("intent_verb_anywhere"):
         launcher = re.search(rf"\b{verbs}\b", head)
-        if launcher and _ASKS_ABOUT.match(head):
-            launcher = None            # asking how, not asking for
+        if launcher and _asks_rather_than_asks_for(
+                head, str(policy_mod.get("intent_verb_forms")),
+                launcher.start()):
+            launcher = None            # asking about, not asking for
     else:
         launcher = re.match(rf"^\s*{verbs}\b", head)
     if not launcher:
