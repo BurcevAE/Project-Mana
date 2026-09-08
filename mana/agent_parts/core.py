@@ -483,7 +483,7 @@ class CoreMixin:
             found = app_intent.match(task)
             if found is None:
                 return None
-            outcome = app_intent.perform(found, self.tools)
+            outcome = app_intent.perform(found, self.tools, goal=task)
             answer = app_intent.describe(found, outcome)
         except Exception as exc:
             self._vlog(f"app intent failed: {exc}")

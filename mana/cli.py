@@ -133,6 +133,19 @@ def format_brains(status: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+#: How a call is stamped when the record is read back. "!" is the call
+#: itself failing, which was the only state this printer had; the other
+#: two come from the tool having looked at the machine afterwards, and
+#: telling them apart is the point of mana.outcome.
+_MARKS = {"contradicted": "✗", "unobserved": "?"}
+
+
+def _mark(call) -> str:
+    if not call.ok:
+        return "!"
+    return _MARKS.get(call.verified, "")
+
+
 def _show_journal(limit: int) -> int:
     """Print what the last turns actually did.
 
@@ -162,7 +175,7 @@ def _show_journal(limit: int) -> int:
 
     for ep in journal.episodes(limit=limit):
         when = time.strftime("%d.%m %H:%M", time.localtime(ep.started))
-        tools = ", ".join(f"{c.tool}{'' if c.ok else '!'}" for c in ep.calls)
+        tools = ", ".join(f"{c.tool}{_mark(c)}" for c in ep.calls)
         print(f"[{when}] {ep.route:<13} {ep.latency:5.1f}s")
         print(f"  запрос:       {ep.request[:150]}")
         print(f"  ответ:        {ep.answer[:150]}")

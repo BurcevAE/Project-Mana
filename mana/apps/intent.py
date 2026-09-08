@@ -41,6 +41,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+from ..outcome import UNOBSERVED, Outcome
+
 #: Component version -- see mana/version.py for the bump conventions.
 __version__ = "1.1"
 
@@ -413,18 +415,68 @@ def describe(intent: Intent, outcome: Dict[str, Any]) -> str:
         return (f"Открыт в Notepad++: {data.get('path')}{where}. "
                 f"Прочитать введённое обратно отсюда нельзя.")
     if intent.action == "launch_onec":
-        if data.get("base"):
-            return (f"Запущена база «{data['base']}» ({data.get('kind')}, "
-                    f"{data.get('location')}) в режиме "
-                    f"«{data.get('mode')}»."
-                    + (f" {data['warning']}" if data.get("warning") else ""))
-        offered = ", ".join(data.get("bases_offered") or []) or "список пуст"
-        return (f"Открыто окно выбора базы 1С. Базу выбираете вы; "
-                f"предложены: {offered}.")
+        return _describe_launch(data)
     return "Сделано."
 
 
-def perform(intent: Intent, registry: Any) -> Dict[str, Any]:
+#: What an unobserved axis means to a person. The reply names the axes
+#: it could not check, so "не подтвердила" is never a shrug.
+_UNSEEN = {"running": "жив ли процесс",
+           "base": "какая база открыта",
+           "mode": "в каком режиме открыто"}
+
+
+def _describe_launch(data: Dict[str, Any]) -> str:
+    """What the machine showed, in three different sentences.
+
+    There used to be one, assembled out of the arguments that had just
+    been passed in, so it read the same whether the base opened or 1С
+    exited half a second later. Every branch here is decided by
+    `outcome.verified`, and the middle branch -- started but not
+    confirmed -- is the one that did not exist before and is the honest
+    answer most of the time.
+    """
+    outcome = Outcome.from_dict(data.get("outcome") or {})
+    warning = f" {data['warning']}" if data.get("warning") else ""
+
+    if not data.get("base"):
+        offered = ", ".join(data.get("bases_offered") or []) or "список пуст"
+        if outcome.failed():
+            return ("1С запущена, но окна выбора базы среди процессов нет. "
+                    f"Известные базы: {offered}.")
+        return (f"Открыто окно выбора базы 1С. Базу выбираете вы; "
+                f"предложены: {offered}.")
+
+    where = f"({data.get('kind')}, {data.get('location')})"
+    mode = data.get("mode")
+    delta = outcome.delta()
+
+    if "running" in delta:
+        code = outcome.evidence.get("exit_code")
+        tail = f", код возврата {code}" if code is not None else ""
+        return (f"Не открылось: 1С запустилась и сразу завершилась{tail}. "
+                f"Просили «{data['base']}» {where} в режиме «{mode}».{warning}")
+    if "mode" in delta:
+        return (f"Открылось не то: просили режим «{delta['mode']['expected']}», "
+                f"а в окне 1С — «{delta['mode']['observed']}». "
+                f"База «{data['base']}» {where}.{warning}")
+    if outcome.failed():
+        return f"Не то, что просили: {outcome.summary()}.{warning}"
+
+    if outcome.verified == UNOBSERVED:
+        # Named from `outcome.unobserved`, never assumed. A title that
+        # gives the base but not the mode is a real case, and saying
+        # "не видно, какая база открыта" about it would be false while
+        # the verdict beside it was right.
+        why = outcome.note or ("по заголовку окна 1С не видно, " + ", ".join(
+            _UNSEEN.get(axis, axis) for axis in outcome.unobserved))
+        return (f"Запустила «{data['base']}» {where} в режиме «{mode}» — "
+                f"процесс работает, но {why}.{warning}")
+    return (f"Открыта база «{data['base']}» {where} в режиме «{mode}» — "
+            f"проверено по окну 1С.{warning}")
+
+
+def perform(intent: Intent, registry: Any, goal: str = "") -> Dict[str, Any]:
     """Call the tool this intent names, and report what it returned.
 
     Both branches report the truth: a refusal is passed through as a
@@ -434,6 +486,11 @@ def perform(intent: Intent, registry: Any) -> Dict[str, Any]:
     params = dict(intent.params)
     if intent.action == "launch_editor":
         params["launch_only"] = True
+    if intent.action == "launch_onec":
+        # The person's own words travel with the call. `expected` is this
+        # module's reading of them, and a reader comparing the two later
+        # is how a wrong reading gets caught rather than assumed correct.
+        params["goal"] = goal or intent.said
     result = registry.call(intent.tool, **params)
     return {"ok": bool(getattr(result, "ok", False)),
             "output": getattr(result, "output", None),

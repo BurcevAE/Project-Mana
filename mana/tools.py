@@ -111,9 +111,9 @@ class FunctionTool(BaseTool):
 class ToolRegistry:
     def __init__(self) -> None:
         self._tools: Dict[str, BaseTool] = {}
-        self._observer: Optional[Callable[[str, bool, float, str], None]] = None
+        self._observer: Optional[Callable[..., None]] = None
 
-    def observe(self, observer: Optional[Callable[[str, bool, float, str], None]]) -> None:
+    def observe(self, observer: Optional[Callable[..., None]]) -> None:
         """Be told about every dispatch, or pass None to stop.
 
         `call` is the single point every capability invocation goes
@@ -122,6 +122,13 @@ class ToolRegistry:
         the answer text was written to memory and the trace of actions
         was written nowhere, so a reply that narrated an action it never
         performed left no evidence of the discrepancy behind.
+
+        Called as (name, ok, latency, error, verified). `ok` says the
+        call did not raise, which is a fact about Python; `verified` says
+        whether the tool looked at the machine afterwards and what it
+        found, which is a fact about the world. A tool that does not
+        observe leaves it empty, and empty is not "fine" -- see
+        mana.outcome.
 
         The observer is advisory. It is called after the tool returns and
         its exceptions are swallowed, because an accounting hook that can
@@ -161,7 +168,8 @@ class ToolRegistry:
         if self._observer is not None:
             try:
                 self._observer(name, bool(result.ok), float(result.latency),
-                               str(result.error or ""))
+                               str(result.error or ""),
+                               str((result.meta or {}).get("verified") or ""))
             except Exception:
                 pass
         return result

@@ -30,6 +30,15 @@ every launch that carries one returns a `warning` saying so. Hiding the
 trade-off would have been the easy option and the wrong one -- a user who
 is not told cannot decide.
 
+Reporting what happened, not what was asked for
+------------------------------------------------
+Every launch here comes back with an `mana.outcome.Outcome`: the goal in
+the person's words, the state the launch was supposed to produce, and the
+state actually found on the machine afterwards. The verdict is derived
+from the last two. See that module for why there are three verdicts and
+why an axis nobody could look at is never counted as one that came out
+right.
+
 Creating a base asks instead of guessing
 -----------------------------------------
 `create_base` refuses without an explicit path. That refusal *is* the
@@ -48,9 +57,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from . import AppUnavailable
+from ..outcome import Outcome
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 #: Where 1C keeps the list of bases the launcher shows.
 IBASES = Path(os.environ.get("APPDATA", "")) / "1C" / "1CEStart" / "ibases.v8i"
@@ -200,6 +210,81 @@ def _pids(image: str) -> set:
     return found
 
 
+#: What 1C prints in the title bar of the Configurator, lower-cased. No
+#: Предприятие window carries this word, which is what makes it usable as
+#: evidence in one direction: finding it when Предприятие was asked for is
+#: a real contradiction. Not finding it says nothing, because the
+#: Предприятие window and the password dialog are both titled
+#: "1С:Предприятие" and telling them apart by title is not possible.
+DESIGNER_MARKER = "конфигуратор"
+
+
+def _window_title(pid: int) -> str:
+    """The window title of one process, or "" when it has none yet.
+
+    `tasklist /V` prints it as the last CSV field -- verified on this
+    machine rather than taken from documentation. A process with no window
+    is reported by tasklist as "N/A", which is not a title and comes back
+    as "".
+
+    Only the title. The command line, which is where /P puts the password,
+    is never read: this module refuses to write that anywhere, and reading
+    it back into a returned dict would undo that in one line.
+    """
+    try:
+        listing = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {int(pid)}", "/V", "/FO", "CSV", "/NH"],
+            capture_output=True, text=True, errors="replace", timeout=15)
+    except Exception:
+        return ""
+    for line in listing.stdout.splitlines():
+        fields = [f.strip('"') for f in line.split('","')]
+        if len(fields) > 1 and fields[1].strip() == str(int(pid)):
+            title = fields[-1].strip()
+            return "" if title.upper() == "N/A" else title
+    return ""
+
+
+def _observe(process, base: str, settle: float) -> Dict[str, Dict[str, Any]]:
+    """Look at what the launch left behind. Reports only what is there.
+
+    Waits for a window title to appear rather than for a fixed period,
+    and stops early if the process exits -- which is the case worth
+    catching, and the one the old code reported as a successful launch.
+    """
+    observed: Dict[str, Any] = {}
+    evidence: Dict[str, Any] = {"pid": process.pid}
+
+    title = ""
+    deadline = time.time() + max(0.5, settle)
+    while True:
+        code = process.poll()
+        if code is not None:
+            # It started and then stopped. Nothing else is worth reading:
+            # there is no window to look at and the exit code is the fact.
+            observed["running"] = False
+            evidence["exit_code"] = code
+            return {"observed": observed, "evidence": evidence,
+                    "note": "процесс 1С завершился сразу после запуска"}
+        title = _window_title(process.pid)
+        if title or time.time() >= deadline:
+            break
+        time.sleep(0.5)
+
+    observed["running"] = process.poll() is None
+    evidence["window"] = title
+
+    low = title.lower()
+    if base and base.strip().lower() in low:
+        observed["base"] = base
+    if DESIGNER_MARKER in low:
+        observed["mode"] = "конфигуратор"
+
+    note = "" if title else ("окно ещё не появилось: 1С может спрашивать "
+                             "пароль или всё ещё открываться")
+    return {"observed": observed, "evidence": evidence, "note": note}
+
+
 def launch_selector(settle: float = 4.0) -> Dict[str, Any]:
     """Open the base list and let the person choose. Scenario 1.
 
@@ -230,18 +315,32 @@ def launch_selector(settle: float = 4.0) -> Dict[str, Any]:
             break
         time.sleep(0.3)
 
-    return {"launched": True, "what": "окно выбора базы 1С",
+    note = ("базу выбираете вы, в окне 1С" if window_pid else
+            "окно не найдено среди процессов; возможно, 1С ещё "
+            "запускается или окно уже было открыто")
+    # This function was already observing -- diffing the process list is
+    # what the loop above does. It just had nowhere to say so in a form
+    # anything else could read.
+    outcome = Outcome(
+        action="onec_launch_selector",
+        goal="открыть окно выбора базы 1С",
+        expected={"window": True},
+        observed={"window": True} if window_pid else {},
+        evidence={"starter_pid": shim.pid, "window_pid": window_pid},
+        note="" if window_pid else note)
+    return {"launched": bool(window_pid), "what": "окно выбора базы 1С",
             "executable": starter,
             "starter_pid": shim.pid,
             "pid": window_pid,
             "bases_offered": [b["name"] for b in bases()],
-            "note": ("базу выбираете вы, в окне 1С" if window_pid else
-                     "окно не найдено среди процессов; возможно, 1С ещё "
-                     "запускается или окно уже было открыто")}
+            "outcome": outcome.as_dict(),
+            "verified": outcome.verified,
+            "note": note}
 
 
 def launch(base: str = "", user: str = "", password: str = "",
-           designer: bool = False, thin: bool = False) -> Dict[str, Any]:
+           designer: bool = False, thin: bool = False,
+           goal: str = "", settle: float = 4.0) -> Dict[str, Any]:
     """Open one base. Scenario 2.
 
     With no `base` this falls through to the selector, because launching
@@ -275,19 +374,40 @@ def launch(base: str = "", user: str = "", password: str = "",
                    "открыта, его может прочитать любая программа, запущенная "
                    "от вашего имени, без прав администратора")
 
+    mode = "конфигуратор" if designer else "предприятие"
     process = subprocess.Popen(_command_line(parts))
+
+    # Everything above this line is the request. Everything below is what
+    # the machine says happened, and they are kept apart on purpose: the
+    # previous version of this function returned `base` and `mode` as
+    # results when they were arguments, so "запустила базу X" was said
+    # with equal confidence whether X opened or 1С exited on the spot.
+    seen = _observe(process, base, settle)
+    outcome = Outcome(
+        action="onec_launch",
+        goal=goal or f"открыть {base} в режиме {mode}",
+        expected={"running": True, "base": base, "mode": mode},
+        observed=seen["observed"],
+        evidence=seen["evidence"],
+        note=seen["note"])
+
     return {
-        "launched": True,
+        # Now means what it says: a process that is alive. It used to mean
+        # that Popen returned.
+        "launched": bool(seen["observed"].get("running")),
         "base": base,
         "kind": known[base]["kind"],
         "location": known[base]["location"],
-        "mode": "конфигуратор" if designer else "предприятие",
+        "mode": mode,
         "user": user or "(спросит 1С)",
         # Returned for diagnosis with the password stripped: this dict ends
         # up in a trace, and a trace is a file on disk.
         "command": " ".join(part for part in parts
                             if not part.startswith("/P")),
         "pid": process.pid,
+        "outcome": outcome.as_dict(),
+        "verified": outcome.verified,
+        "observed": outcome.summary(),
         "warning": warning,
     }
 

@@ -115,10 +115,18 @@ class ToolCall:
     ok: bool
     latency: float = 0.0
     error: str = ""
+    #: What the tool observed afterwards: confirmed, contradicted,
+    #: unobserved, or empty when the tool does not observe at all. Kept
+    #: apart from `ok`, which only ever meant that the call returned --
+    #: an episode where every call is ok and every verdict is
+    #: "contradicted" is a turn that did nothing it claimed to do, and
+    #: before this the record could not tell the two apart.
+    verified: str = ""
 
     def as_dict(self) -> Dict[str, Any]:
         return {"tool": self.tool, "ok": self.ok,
-                "latency": round(self.latency, 4), "error": self.error}
+                "latency": round(self.latency, 4), "error": self.error,
+                "verified": self.verified}
 
 
 @dataclass
@@ -147,7 +155,8 @@ class Episode:
     def from_dict(cls, row: Dict[str, Any]) -> "Episode":
         calls = [ToolCall(tool=str(c.get("tool", "")), ok=bool(c.get("ok")),
                           latency=float(c.get("latency") or 0.0),
-                          error=str(c.get("error") or ""))
+                          error=str(c.get("error") or ""),
+                          verified=str(c.get("verified") or ""))
                  for c in (row.get("calls") or [])]
         return cls(episode_id=str(row.get("episode_id", "")),
                    session=str(row.get("session", "")),
@@ -167,6 +176,24 @@ class Episode:
     def acted(self) -> bool:
         """Did anything succeed? The plain form of "did it do something"."""
         return any(c.ok for c in self.calls)
+
+    def contradicted(self) -> List[str]:
+        """Tools that ran and left the machine in the wrong state.
+
+        A mechanical failure with nothing interpreted: the tool itself
+        compared what it was asked for against what it found. This is the
+        cheapest evidence in the journal and the only kind that needs no
+        model to read it.
+        """
+        return [c.tool for c in self.calls if c.verified == "contradicted"]
+
+    def unverified(self) -> List[str]:
+        """Tools that acted and never looked at the result.
+
+        Reported separately from `contradicted` because it is a different
+        thing to fix: not a wrong action, an unobserved one.
+        """
+        return [c.tool for c in self.calls if c.verified == "unobserved"]
 
 
 #: Where the journal lives when nobody says otherwise. Kept in step with
@@ -196,10 +223,12 @@ class Recorder:
         self._journal = journal
         self.episode = episode
 
-    def note(self, tool: str, ok: bool, latency: float, error: str = "") -> None:
+    def note(self, tool: str, ok: bool, latency: float, error: str = "",
+             verified: str = "") -> None:
         self.episode.calls.append(ToolCall(
             tool=str(tool), ok=bool(ok), latency=float(latency or 0.0),
-            error=_clip(scrub(error), MAX_ERROR)))
+            error=_clip(scrub(error), MAX_ERROR),
+            verified=str(verified or "")))
 
     def close(self, answer: str, route: str = "pipeline") -> Episode:
         ep = self.episode
@@ -256,13 +285,13 @@ class Journal:
         self._local.recorder = None
 
     def note_call(self, tool: str, ok: bool, latency: float,
-                  error: str = "") -> None:
+                  error: str = "", verified: str = "") -> None:
         """Registry hook. Silent when this thread has no episode open."""
         recorder = self.current()
         if recorder is None:
             return
         try:
-            recorder.note(tool, ok, latency, error)
+            recorder.note(tool, ok, latency, error, verified)
         except Exception:
             pass
 
@@ -325,6 +354,26 @@ class Journal:
                     yield Episode.from_dict(json.loads(line))
                 except Exception:
                     continue
+
+    def contradicted_calls(self, limit: int = 0) -> List[Dict[str, str]]:
+        """Every recorded call whose tool says it did not do what it was
+        asked to do.
+
+        Mechanical evidence with nothing interpreted: the tool compared
+        the state it was asked for against the state it found. Kept here
+        so that a reader -- a person, or the finding generator -- does not
+        have to walk the episodes to ask the one question the record was
+        extended to answer.
+        """
+        out: List[Dict[str, str]] = []
+        for episode in self.episodes(limit=limit):
+            for call in episode.calls:
+                if call.verified == "contradicted":
+                    out.append({"episode": episode.episode_id,
+                                "request": episode.request,
+                                "answer": episode.answer,
+                                "tool": call.tool})
+        return out
 
     def stats(self, limit: int = 0) -> Dict[str, Any]:
         """A shape of the record, for looking at what has accumulated.

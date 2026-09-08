@@ -404,32 +404,53 @@ def test_the_password_is_passed_to_1c_and_kept_out_of_the_result(
     class FakeProcess:
         pid = 4242
 
+        def poll(self):
+            return None                         # still running
+
     def fake_popen(line, *a, **k):
         seen["line"] = line
         return FakeProcess()
 
     monkeypatch.setattr(fake_bases.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(fake_bases, "_require", lambda kind: r"C:\1cv8.exe")
+    # No window yet -- which is what 1C looks like while it asks for the
+    # password it was just handed one of. Stubbed rather than read from
+    # the real process list: a made-up pid can collide with a real
+    # process, and a test that reads a stranger's window title fails on a
+    # Tuesday for no reason anybody can reconstruct.
+    monkeypatch.setattr(fake_bases, "_window_title", lambda pid: "")
 
     result = fake_bases.launch(base="UT11-ER", user="Иванов",
-                               password="тайна123")
+                               password="тайна123", settle=0.0)
 
     assert "тайна123" in seen["line"]          # 1C really gets it
     assert "тайна123" not in result["command"]  # the trace does not
     assert "тайна123" not in repr(result)
     assert result["warning"]                    # and the caller is told
+    # Started, and honest about not knowing what opened.
+    assert result["verified"] == "unobserved"
 
 
 def test_no_password_means_no_warning_and_1c_will_ask(fake_bases, monkeypatch):
     class FakeProcess:
         pid = 1
 
+        def poll(self):
+            return None
+
     monkeypatch.setattr(fake_bases.subprocess, "Popen",
                         lambda *a, **k: FakeProcess())
     monkeypatch.setattr(fake_bases, "_require", lambda kind: r"C:\1cv8.exe")
-    result = fake_bases.launch(base="UT11-ER", user="Иванов")
+    monkeypatch.setattr(fake_bases, "_window_title",
+                        lambda pid: "UT11-ER - 1С:Предприятие")
+    result = fake_bases.launch(base="UT11-ER", user="Иванов", settle=0.0)
     assert result["warning"] == ""
     assert result["user"] == "Иванов"
+    # The title names the base, so that much is confirmed. The mode is
+    # not: the Предприятие window and the password dialog are titled the
+    # same way, so the verdict stays honest about what was actually seen.
+    assert result["outcome"]["observed"]["base"] == "UT11-ER"
+    assert result["outcome"]["unobserved"] == ["mode"]
 
 
 def test_creating_a_base_without_a_path_is_the_question(fake_bases):
