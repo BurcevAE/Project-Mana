@@ -268,11 +268,20 @@ class OneCLaunchTool(_AppTool):
             user=str(kwargs.get("user", "")),
             password=str(kwargs.get("password", "")),
             designer=bool(kwargs.get("designer", False)),
-            thin=bool(kwargs.get("thin", False)))
+            thin=bool(kwargs.get("thin", False)),
+            goal=str(kwargs.get("goal", "")))
         # The warning rides in meta as well as output: a caller that only
-        # reads meta still learns the password was exposed.
+        # reads meta still learns the password was exposed. The verdict
+        # rides there too, which is how it reaches the journal.
+        #
+        # `ok` stays True even when the verdict contradicts the request:
+        # the call worked, 1С really was started, and reporting a tool
+        # failure would have callers retry and launch it a second time in
+        # answer to a bad first launch.
         return ToolResult(ok=True, output=data,
-                          meta={"warning": data.get("warning", "")})
+                          meta={"warning": data.get("warning", ""),
+                                "outcome": data.get("outcome") or {},
+                                "verified": data.get("verified", "")})
 
 
 class OneCCreateBaseTool(_AppTool):

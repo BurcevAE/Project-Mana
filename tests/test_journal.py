@@ -69,15 +69,20 @@ def test_a_password_in_a_tool_error_never_reaches_the_file(tmp_path):
 
 
 def test_tool_arguments_are_not_recorded_at_all(tmp_path):
-    # The observer signature is name/ok/latency/error by design: arguments
-    # are the field most likely to carry a credential with the least to
-    # show for the risk, so there is nowhere for them to be written.
+    # The observer signature is name/ok/latency/error/verified by design:
+    # arguments are the field most likely to carry a credential with the
+    # least to show for the risk, so there is nowhere for them to be
+    # written. `verified` is a verdict the tool reached about the machine
+    # afterwards -- see mana.outcome -- and never a copy of what went in;
+    # a 1С launch carries a password in its arguments and reports only
+    # "unobserved" here.
     journal = Journal(tmp_path / "e.jsonl")
     recorder = journal.open("q", session="s")
     journal.note_call("onec_launch", True, 0.0)
     episode = journal.finish("ok", "app_intent")
     assert episode is not None
-    assert episode.calls[0].as_dict().keys() == {"tool", "ok", "latency", "error"}
+    assert episode.calls[0].as_dict().keys() == {
+        "tool", "ok", "latency", "error", "verified"}
 
 
 # --------------------------------------------------------------------------

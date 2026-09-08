@@ -126,7 +126,7 @@ class LawEvidence:
 
     @property
     def positive_share(self) -> float:
-        """How often the effect went the way the law claims.
+        """How often the effect came out above zero.
 
         Kept apart from the mean because they answer different questions:
         a mean of +0.05 built from +0.4 and -0.3 is not a law, it is two
@@ -136,6 +136,20 @@ class LawEvidence:
             return 0.0
         return sum(1 for e in self.effects if e > 0) / len(self.effects)
 
+    def agreeing_share(self, direction: int = 1) -> float:
+        """How often the effect went the way the law claims.
+
+        Not the same question as `positive_share`, and treating them as
+        one meant a law claiming harm was refuted by the evidence it was
+        proposed on: its effects are negative, and every one of them was
+        counted as disagreement.
+        """
+        if not self.effects:
+            return 0.0
+        wanted = 1 if direction >= 0 else -1
+        return sum(1 for e in self.effects
+                   if (e > 0) == (wanted > 0) and e != 0) / len(self.effects)
+
 
 @dataclass
 class CognitiveLaw:
@@ -143,6 +157,17 @@ class CognitiveLaw:
     condition: Condition
     intervention: Tuple[str, ...]
     claimed_effect: str
+    #: Which way the claim points: +1 for "this raises the outcome", -1
+    #: for "this lowers it". The status is decided by how often the
+    #: measured effect agreed with this, so a law about something that
+    #: hurts can be supported by evidence that it does.
+    direction: int = 1
+    #: The conditions that were held while this was measured. `Condition`
+    #: is a fixed shape and cannot carry them, and dropping them let a law
+    #: measured at one episode length claim a whole domain. A caller whose
+    #: conditions disagree with these is outside where this was measured,
+    #: and `cognition/acting.py` will not act on it there.
+    scope: Dict[str, Any] = field(default_factory=dict)
     evidence: LawEvidence = field(default_factory=LawEvidence)
     exceptions: List[str] = field(default_factory=list)
     status: str = PROPOSED
@@ -161,7 +186,8 @@ class CognitiveLaw:
         also having some supporting evidence.
         """
         ev = self.evidence
-        if ev.trials and ev.positive_share < 0.5 and ev.trials >= MIN_TRIALS_FOR_SUPPORT:
+        agreeing = ev.agreeing_share(self.direction)
+        if ev.trials and agreeing < 0.5 and ev.trials >= MIN_TRIALS_FOR_SUPPORT:
             return REFUTED
         if ev.hidden_contradictions > ev.hidden_confirmations:
             return REFUTED
@@ -232,7 +258,7 @@ class CognitiveLaw:
         return (f"[{self.status}] если {self.condition.describe()}, "
                 f"то {' → '.join(self.intervention)} даёт {self.claimed_effect} "
                 f"(эффект {ev.mean_effect:+.3f} по {ev.trials} испытаниям, "
-                f"положительных {ev.positive_share:.0%})")
+                f"согласных {ev.agreeing_share(self.direction):.0%})")
 
     def as_dict(self) -> Dict[str, Any]:
         payload = asdict(self)
@@ -248,6 +274,8 @@ class CognitiveLaw:
             condition=Condition(**(data.get("condition") or {})),
             intervention=tuple(data.get("intervention") or ()),
             claimed_effect=data.get("claimed_effect", ""),
+            direction=int(data.get("direction", 1) or 1),
+            scope=dict(data.get("scope") or {}),
             evidence=LawEvidence(**ev),
             exceptions=list(data.get("exceptions") or []),
             status=data.get("status", PROPOSED),
@@ -269,9 +297,12 @@ class LawBook:
         self._laws: Dict[str, CognitiveLaw] = {law.law_id: law for law in (laws or ())}
 
     def propose(self, condition: Condition, intervention: Sequence[str],
-                claimed_effect: str, discovered_in: str = "") -> CognitiveLaw:
+                claimed_effect: str, discovered_in: str = "",
+                direction: int = 1,
+                scope: Optional[Dict[str, Any]] = None) -> CognitiveLaw:
         law = CognitiveLaw(law_id=uuid.uuid4().hex[:12], condition=condition,
                            intervention=tuple(intervention), claimed_effect=claimed_effect,
+                           direction=int(direction), scope=dict(scope or {}),
                            discovered_in=discovered_in)
         self._laws[law.law_id] = law
         return law

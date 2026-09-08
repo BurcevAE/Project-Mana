@@ -268,7 +268,8 @@ class AgentSession:
         """
         from mana.journal import Journal
         from mana.cognition import (candidates, failure_domain, findings,
-                                    invariants, lawgiver, probes, series)
+                                    invariants, lawgiver, lessons, probes,
+                                    series)
 
         out: Dict[str, Any] = {}
 
@@ -315,12 +316,31 @@ class AgentSession:
 
         part("findings", found)
 
+        learned = {}
+        try:
+            learned = lessons.read(
+                invariants_seen=[v.invariant for v in violations])
+        except Exception:
+            learned = {}
+
+        part("lessons", lambda: [l.as_dict() for l in sorted(
+            learned.values(), key=lambda x: -x.observed)])
+
         def proposed():
             situations = failure_domain.situations_from(episodes)
-            book = lawgiver.load_book()
-            return candidates.rank(violations, situations, ledger=None)
+            made = candidates.plan(violations, lessons=learned)
+            rows = candidates.rank(violations, situations, ledger=None,
+                                   lessons=learned)
+            # The refusals ride with the proposals rather than in their
+            # own section: "nothing can be tuned for this" is an answer to
+            # the same question, and a reader who sees only candidates
+            # concludes the rest was never noticed.
+            return {"candidates": rows,
+                    "refusals": [dict(r) for r in made.refusals]}
 
-        part("proposals", proposed if violations else (lambda: []))
+        has_work = bool(violations) or any(l.observed for l in learned.values())
+        part("proposals", proposed if has_work else
+             (lambda: {"candidates": [], "refusals": []}))
 
         part("tried", lambda: [f.as_dict() | {"describe": f.describe()}
                                for f in findings.Ledger().latest()])

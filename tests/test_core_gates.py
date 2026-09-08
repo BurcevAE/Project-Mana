@@ -452,3 +452,47 @@ def test_a_caller_that_only_asks_accepted_still_gets_the_safe_answer():
     import inspect
     source = inspect.getsource(gates.Verdict)
     assert "accepted: bool" in source
+
+
+# --------------------------------------------------------------------------
+# too small to tell is its own answer
+# --------------------------------------------------------------------------
+
+def test_too_small_to_tell_is_not_a_rejection():
+    """The gate already draws this line for the hidden holdout: "we could
+    not test it" is not "we tested it and it did not hold". A sample below
+    the floor with nothing measured pointing the wrong way is the same
+    fact, and calling it REJECTED takes a change out of the search on
+    evidence nobody gathered."""
+    claim = Claim(claim_id="small", kind="program", description="",
+                  asserts_domains=())
+    outcomes = [PairedOutcome(f"t{n}", "d", False, True) for n in range(5)]
+    verdict = gates.judge(claim, Evidence(paired_dev=outcomes,
+                                          counterexamples_sought=5,
+                                          counterexamples_found=0))
+    assert "sample_size" in verdict.failed_gates
+    assert verdict.status == gates.NOT_EVALUATED
+    assert verdict.accepted is False
+    assert "не оценено" in verdict.reason
+
+
+def test_a_negative_margin_is_still_a_rejection_however_small_the_sample():
+    """A direction is evidence whatever the sample size. Only the case
+    with nothing to conclude changes."""
+    claim = Claim(claim_id="small-bad", kind="program", description="",
+                  asserts_domains=())
+    outcomes = [PairedOutcome(f"t{n}", "d", True, False) for n in range(5)]
+    verdict = gates.judge(claim, Evidence(paired_dev=outcomes,
+                                          counterexamples_sought=5,
+                                          counterexamples_found=0))
+    assert verdict.status == gates.REJECTED
+
+
+def test_a_counterexample_is_a_rejection_however_small_the_sample():
+    claim = Claim(claim_id="small-broken", kind="program", description="",
+                  asserts_domains=())
+    outcomes = [PairedOutcome(f"t{n}", "d", False, True) for n in range(5)]
+    verdict = gates.judge(claim, Evidence(paired_dev=outcomes,
+                                          counterexamples_sought=5,
+                                          counterexamples_found=1))
+    assert verdict.status == gates.REJECTED

@@ -155,6 +155,11 @@ class Config:
     # field rather than a path derived inside the journal, so the test
     # suite's isolation redirects it like every other file MANA writes.
     journal_path: str = "journal/episodes.jsonl"
+    #: The findings ledger. Under Config for the same reason as the
+    #: journal: it is written during an ordinary turn now, and a state
+    #: path that ignores Config cannot be redirected by a test -- which
+    #: is how 46 real episodes once landed in the repository root.
+    findings_path: str = "findings/findings.jsonl"
     # Minimum similarity for a stored memory to be injected as context.
     # Without a floor, any query retrieves any entry (see KnowledgeBase.search)
     # -- a greeting once pulled back a stored answer about AI news.
@@ -372,7 +377,8 @@ class Config:
     #: sandbox directory was created lazily somewhere else entirely.
     STATE_PATH_FIELDS = ("knowledge_db_path", "state_file", "history_file", "cache_file",
                          "experience_db_path", "evolution_report_file", "memory_db_path",
-                         "memory_root", "local_exec_workdir", "journal_path")
+                         "memory_root", "local_exec_workdir", "journal_path",
+                         "findings_path")
 
     def ensure_dirs(self) -> None:
         """Resolve every state path and create its parent.
@@ -399,7 +405,7 @@ class Config:
             setattr(self, name, str(resolve_data_path(value)))
         for name in ("knowledge_db_path", "state_file", "history_file", "cache_file",
                      "experience_db_path", "evolution_report_file", "memory_db_path",
-                     "journal_path"):
+                     "journal_path", "findings_path"):
             Path(getattr(self, name)).parent.mkdir(parents=True, exist_ok=True)
         Path(self.memory_root).mkdir(parents=True, exist_ok=True)
 

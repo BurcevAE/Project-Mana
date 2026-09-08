@@ -47,6 +47,7 @@ likely to hold a password with the least to show for the risk.
 from __future__ import annotations
 
 import json
+from collections import deque
 import os
 import re
 import secrets
@@ -115,10 +116,18 @@ class ToolCall:
     ok: bool
     latency: float = 0.0
     error: str = ""
+    #: What the tool observed afterwards: confirmed, contradicted,
+    #: unobserved, or empty when the tool does not observe at all. Kept
+    #: apart from `ok`, which only ever meant that the call returned --
+    #: an episode where every call is ok and every verdict is
+    #: "contradicted" is a turn that did nothing it claimed to do, and
+    #: before this the record could not tell the two apart.
+    verified: str = ""
 
     def as_dict(self) -> Dict[str, Any]:
         return {"tool": self.tool, "ok": self.ok,
-                "latency": round(self.latency, 4), "error": self.error}
+                "latency": round(self.latency, 4), "error": self.error,
+                "verified": self.verified}
 
 
 @dataclass
@@ -147,7 +156,8 @@ class Episode:
     def from_dict(cls, row: Dict[str, Any]) -> "Episode":
         calls = [ToolCall(tool=str(c.get("tool", "")), ok=bool(c.get("ok")),
                           latency=float(c.get("latency") or 0.0),
-                          error=str(c.get("error") or ""))
+                          error=str(c.get("error") or ""),
+                          verified=str(c.get("verified") or ""))
                  for c in (row.get("calls") or [])]
         return cls(episode_id=str(row.get("episode_id", "")),
                    session=str(row.get("session", "")),
@@ -168,6 +178,30 @@ class Episode:
         """Did anything succeed? The plain form of "did it do something"."""
         return any(c.ok for c in self.calls)
 
+    def contradicted(self) -> List[str]:
+        """Tools that ran and left the machine in the wrong state.
+
+        A mechanical failure with nothing interpreted: the tool itself
+        compared what it was asked for against what it found. This is the
+        cheapest evidence in the journal and the only kind that needs no
+        model to read it.
+        """
+        return [c.tool for c in self.calls if c.verified == "contradicted"]
+
+    def unverified(self) -> List[str]:
+        """Tools that acted and never looked at the result.
+
+        Reported separately from `contradicted` because it is a different
+        thing to fix: not a wrong action, an unobserved one.
+        """
+        return [c.tool for c in self.calls if c.verified == "unobserved"]
+
+
+#: How many recent episodes stay in memory for the live check. Small:
+#: the only reader asks for one session's last few turns, and a
+#: process that runs for weeks must not grow a list of everything it
+#: ever answered.
+RECENT_EPISODES = 24
 
 #: Where the journal lives when nobody says otherwise. Kept in step with
 #: `Config.journal_path`, which is what the agent actually passes; this
@@ -196,10 +230,12 @@ class Recorder:
         self._journal = journal
         self.episode = episode
 
-    def note(self, tool: str, ok: bool, latency: float, error: str = "") -> None:
+    def note(self, tool: str, ok: bool, latency: float, error: str = "",
+             verified: str = "") -> None:
         self.episode.calls.append(ToolCall(
             tool=str(tool), ok=bool(ok), latency=float(latency or 0.0),
-            error=_clip(scrub(error), MAX_ERROR)))
+            error=_clip(scrub(error), MAX_ERROR),
+            verified=str(verified or "")))
 
     def close(self, answer: str, route: str = "pipeline") -> Episode:
         ep = self.episode
@@ -223,6 +259,7 @@ class Journal:
         self.version = str(version or "")
         self._lock = threading.Lock()
         self._local = threading.local()
+        self._recent: "deque[Episode]" = deque(maxlen=RECENT_EPISODES)
 
     # ---------- recording ----------
 
@@ -256,17 +293,36 @@ class Journal:
         self._local.recorder = None
 
     def note_call(self, tool: str, ok: bool, latency: float,
-                  error: str = "") -> None:
+                  error: str = "", verified: str = "") -> None:
         """Registry hook. Silent when this thread has no episode open."""
         recorder = self.current()
         if recorder is None:
             return
         try:
-            recorder.note(tool, ok, latency, error)
+            recorder.note(tool, ok, latency, error, verified)
         except Exception:
             pass
 
+    def session_recent(self, session: str, limit: int = RECENT_EPISODES,
+                       exclude: str = "") -> List[Episode]:
+        """The last episodes of one session, from memory, oldest first.
+
+        From memory rather than off disk. This is read once per turn, the
+        file is capped at 8 MB plus a rotation, and a check that costs a
+        full file read every turn is a check somebody eventually switches
+        off. What it misses -- episodes from before this process started
+        -- is the correct trade for a live check: the full record is
+        still there for `--findings` to walk.
+        """
+        rows = [e for e in list(self._recent)
+                if e.session == session and e.episode_id != exclude]
+        return rows[-limit:] if limit and limit > 0 else rows
+
     def write(self, episode: Episode) -> bool:
+        # Kept in memory whether or not the disk write works: the live
+        # check that reads this should not go blind because a directory
+        # is read-only.
+        self._recent.append(episode)
         line = json.dumps(episode.as_dict(), ensure_ascii=False)
         with self._lock:
             try:
@@ -325,6 +381,26 @@ class Journal:
                     yield Episode.from_dict(json.loads(line))
                 except Exception:
                     continue
+
+    def contradicted_calls(self, limit: int = 0) -> List[Dict[str, str]]:
+        """Every recorded call whose tool says it did not do what it was
+        asked to do.
+
+        Mechanical evidence with nothing interpreted: the tool compared
+        the state it was asked for against the state it found. Kept here
+        so that a reader -- a person, or the finding generator -- does not
+        have to walk the episodes to ask the one question the record was
+        extended to answer.
+        """
+        out: List[Dict[str, str]] = []
+        for episode in self.episodes(limit=limit):
+            for call in episode.calls:
+                if call.verified == "contradicted":
+                    out.append({"episode": episode.episode_id,
+                                "request": episode.request,
+                                "answer": episode.answer,
+                                "tool": call.tool})
+        return out
 
     def stats(self, limit: int = 0) -> Dict[str, Any]:
         """A shape of the record, for looking at what has accumulated.

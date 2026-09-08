@@ -40,11 +40,22 @@ def read(ledger):
 
 
 def flipped(ledger):
-    """One isolated flip on feature_set, NOT_BETTER -> COSTS_MORE."""
-    add(ledger, feature_set="base12", corpus_games=5000,
+    """The flip on feature_set, isolated twice: once at each corpus size.
+
+    Two agreeing comparisons rather than one, because one is not a series
+    -- and because this is what the real run held. The two base12 sides
+    share a class, so `corpus_games` is a flat axis here and the only
+    flips are the two on `feature_set`.
+    """
+    add(ledger, feature_set="base12", corpus_games=1000,
         interval=[0.4495, 0.6144], created=1.0)
-    add(ledger, feature_set="extended", corpus_games=5000,
+    add(ledger, feature_set="extended", corpus_games=1000,
         interval=[0.6155, 0.7615], created=2.0, verdict=ACCEPTED,
+        cost_ratio=7.41)
+    add(ledger, feature_set="base12", corpus_games=5000,
+        interval=[0.4495, 0.6144], created=3.0)
+    add(ledger, feature_set="extended", corpus_games=5000,
+        interval=[0.6155, 0.7615], created=4.0, verdict=ACCEPTED,
         cost_ratio=7.41)
     return read(ledger)
 
@@ -60,6 +71,9 @@ def test_proposed_is_the_ceiling_without_a_hidden_set(ledger):
     laws = lawgiver.propose(flipped(ledger), book, ledger)
     assert len(laws) == 1
     assert laws[0].status == PROPOSED
+    # Two agreeing flips, folded into one law rather than two half-laws.
+    assert laws[0].evidence.trials == 480
+    assert len(laws[0].evidence.experiments) == 2
     assert laws[0].evidence.trials >= MIN_TRIALS_FOR_SUPPORT
     assert laws[0].evidence.hidden_confirmations == 0
 
@@ -85,12 +99,72 @@ def test_the_report_says_what_proposed_means():
 # only isolated flips
 # --------------------------------------------------------------------------
 
-def test_an_isolated_flip_becomes_a_candidate(ledger):
+def test_agreeing_isolated_flips_become_a_candidate(ledger):
     found = lawgiver.candidates(flipped(ledger), ledger)
-    assert len(found) == 1
-    assert found[0].intervention == ("feature_set: base12 -> extended",)
-    assert found[0].discovered_in == "chess"
-    assert found[0].trials == 240
+    assert len(found) == lawgiver.MIN_AGREEING_FLIPS
+    assert {c.intervention for c in found} == {("feature_set: base12 -> extended",)}
+    assert {c.discovered_in for c in found} == {"chess"}
+    assert {c.trials for c in found} == {240}
+
+
+def test_one_isolated_flip_is_an_observation_and_not_a_series(ledger):
+    """The bar this module now holds: a claim needs a series behind it.
+
+    One isolated flip says the outcome moved while this axis differed,
+    which is not yet the claim that the axis moves the outcome.
+    """
+    add(ledger, feature_set="base12", corpus_games=5000,
+        interval=[0.4495, 0.6144], created=1.0)
+    add(ledger, feature_set="extended", corpus_games=5000,
+        interval=[0.6155, 0.7615], created=2.0, verdict=ACCEPTED)
+
+    one = read(ledger)
+    assert len(one.isolated_flips) == 1
+    judged = lawgiver.assess(one, ledger)
+    assert judged.candidates == ()
+    assert len(judged.refusals) == 1
+    assert "наблюдение, а не серия" in judged.refusals[0].reason
+    assert lawgiver.propose(one, LawBook(), ledger) == []
+
+
+def test_flips_that_disagree_stop_the_axis_outright(ledger):
+    """An axis whose flips point both ways does not explain the outcome,
+    and averaging them would put a claim in the book that neither
+    comparison supports."""
+    add(ledger, feature_set="base12", corpus_games=1000,
+        interval=[0.4495, 0.6144], created=1.0)
+    add(ledger, feature_set="extended", corpus_games=1000,
+        interval=[0.6155, 0.7615], created=2.0, verdict=ACCEPTED)
+    add(ledger, feature_set="base12", corpus_games=5000,
+        interval=[0.6155, 0.7615], created=3.0, verdict=ACCEPTED)
+    add(ledger, feature_set="extended", corpus_games=5000,
+        interval=[0.4495, 0.6144], created=4.0)
+
+    judged = lawgiver.assess(read(ledger), ledger)
+    assert judged.candidates == ()
+    assert any("противоречат" in r.reason for r in judged.refusals)
+
+
+def test_a_flip_out_of_an_unmeasured_side_is_not_an_effect(ledger):
+    """`Comparison.usable` screens out UNCLASSIFIED and stops there, so
+    NOT_MEASURED -> BETTER used to read as an improvement caused by the
+    axis. It is a change in what was measured, not in what happened."""
+    from mana.core.gates import NOT_EVALUATED
+
+    ledger.record(Finding(question=QUESTION, approach=APPROACH,
+                          verdict=NOT_EVALUATED,
+                          measurement=measurement_of(240, [0.4, 0.6], 0.5),
+                          conditions={"feature_set": "base12",
+                                      "corpus_games": 1000},
+                          created=1.0))
+    add(ledger, feature_set="extended", corpus_games=1000,
+        interval=[0.6155, 0.7615], created=2.0, verdict=ACCEPTED)
+
+    read_series = read(ledger)
+    assert read_series.isolated_flips, "the fixture stopped producing a flip"
+    judged = lawgiver.assess(read_series, ledger)
+    assert judged.candidates == ()
+    assert any("не измерена" in r.reason for r in judged.refusals)
 
 
 def test_a_confounded_flip_becomes_nothing(ledger):
@@ -166,7 +240,11 @@ def test_proposing_twice_does_not_double_the_evidence(ledger):
     lawgiver.propose(read_series, book, ledger)
     lawgiver.propose(read_series, book, ledger)
     assert len(book.all()) == 1
-    assert book.all()[0].evidence.trials == 240
+    # Two flips, folded once each. Proposing again adds nothing: the same
+    # claim reached twice is stronger evidence for one law, not two laws
+    # each carrying half of it.
+    assert book.all()[0].evidence.trials == 480
+    assert len(book.all()[0].evidence.experiments) == 2
 
 
 # --------------------------------------------------------------------------
@@ -195,9 +273,11 @@ def test_an_exception_is_not_a_refutation(ledger):
 
 
 def test_the_held_conditions_travel_as_scope(ledger):
-    candidate = lawgiver.candidates(flipped(ledger), ledger)[0]
-    assert candidate.scope["corpus_games"] == 5000
-    assert "feature_set" not in candidate.scope     # that is the intervention
+    found = lawgiver.candidates(flipped(ledger), ledger)
+    # One candidate per flip, each carrying the corpus size it held.
+    assert {c.scope["corpus_games"] for c in found} == {1000, 5000}
+    for candidate in found:
+        assert "feature_set" not in candidate.scope   # that is the intervention
 
 
 # --------------------------------------------------------------------------
@@ -216,9 +296,12 @@ def test_contradicting_evidence_demotes_a_law(ledger):
     assert law.status == PROPOSED
 
     law.record_evidence(effect=-0.4, trials=300, experiment_id="later")
-    assert law.status == PROPOSED, "одно опровержение из двух — это 50/50"
+    assert law.status == PROPOSED, "одно опровержение из трёх — не большинство"
 
     law.record_evidence(effect=-0.3, trials=300, experiment_id="later-still")
+    assert law.status == PROPOSED, "два из четырёх — это ровно 50/50"
+
+    law.record_evidence(effect=-0.2, trials=300, experiment_id="and-again")
     assert law.status == REFUTED
 
 
@@ -234,8 +317,8 @@ def test_a_refuted_law_is_kept_and_not_acted_on(ledger):
     things a research loop can know."""
     book = LawBook()
     law = lawgiver.propose(flipped(ledger), book, ledger)[0]
-    law.record_evidence(effect=-0.4, trials=300, experiment_id="later")
-    law.record_evidence(effect=-0.3, trials=300, experiment_id="later-still")
+    for n, effect in enumerate((-0.4, -0.3, -0.2)):
+        law.record_evidence(effect=effect, trials=300, experiment_id=f"later-{n}")
     assert law.status == REFUTED
 
     assert law in book.all()
@@ -255,7 +338,7 @@ def test_a_book_survives_a_round_trip(tmp_path, ledger):
     restored = lawgiver.load_book(path)
     assert len(restored.all()) == 1
     assert restored.all()[0].status == PROPOSED
-    assert restored.all()[0].evidence.trials == 240
+    assert restored.all()[0].evidence.trials == 480
 
 
 def test_an_unwritable_book_does_not_raise(tmp_path, ledger):
@@ -311,3 +394,76 @@ def test_axis_of_returns_empty_rather_than_guessing(text, expected):
     """A law imported from elsewhere names its intervention however it
     likes, and inventing an axis for it would be guessing."""
     assert lawgiver.axis_of(text) == expected
+
+
+# --------------------------------------------------------------------------
+# the bar, stated where it is read
+# --------------------------------------------------------------------------
+
+def test_the_assessment_reports_both_halves(ledger):
+    judged = lawgiver.assess(flipped(ledger), ledger)
+    assert judged.candidates and judged.refusals == ()
+    payload = judged.as_dict()
+    assert set(payload) == {"candidates", "refusals"}
+
+
+def test_the_laws_reader_prints_why_a_series_fell_short(tmp_path, monkeypatch,
+                                                        capsys, ledger):
+    """The reader is where this is read; a series that produced nothing
+    used to look exactly like a series nobody had."""
+    from mana import cli
+
+    add(ledger, feature_set="base12", corpus_games=5000,
+        interval=[0.4495, 0.6144], created=1.0)
+    add(ledger, feature_set="extended", corpus_games=5000,
+        interval=[0.6155, 0.7615], created=2.0, verdict=ACCEPTED)
+
+    monkeypatch.setattr("mana.cognition.series.all_series",
+                        lambda *a, **k: [read(ledger)])
+    monkeypatch.setattr("mana.cognition.lawgiver.load_book", lambda *a, **k: LawBook())
+    monkeypatch.setattr("mana.cognition.lawgiver.save_book", lambda *a, **k: True)
+    # The reader asks for the default ledger; here that is the test one,
+    # or every refusal would read "находка не найдена в реестре".
+    monkeypatch.setattr("mana.cognition.lawgiver.Ledger", lambda *a, **k: ledger)
+
+    assert cli._show_laws() == 0
+    printed = capsys.readouterr().out
+    assert "не тянут" in printed
+    assert "наблюдение, а не серия" in printed
+
+
+# --------------------------------------------------------------------------
+# two comparisons that hang on one observation are not two
+# --------------------------------------------------------------------------
+
+def test_flips_that_all_run_into_one_observation_are_one_witness(ledger):
+    """Found by running the world series: a plateau at 2500 steps was
+    supported by 400->2500 and 1000->2500, and both ran into the same 2500.
+    If that observation is a fluke they are wrong together, which is the
+    dependence replication exists to rule out."""
+    add(ledger, feature_set="base12", corpus_games=1000,
+        interval=[0.6155, 0.7615], created=1.0, verdict=ACCEPTED)
+    add(ledger, feature_set="base12", corpus_games=2000,
+        interval=[0.6155, 0.7615], created=2.0, verdict=ACCEPTED)
+    add(ledger, feature_set="base12", corpus_games=5000,
+        interval=[0.30, 0.44], created=3.0)
+
+    run = read(ledger)
+    assert len(run.isolated_flips) == 2, "the fixture stopped producing two"
+    judged = lawgiver.assess(run, ledger)
+    assert judged.candidates == ()
+    assert any("одно наблюдение" in r.reason for r in judged.refusals)
+
+
+def test_the_chess_pair_is_independent_and_still_passes(ledger):
+    """Four distinct observations, no shared endpoint. The bar was set
+    against this and must not have moved under it."""
+    judged = lawgiver.assess(flipped(ledger), ledger)
+    assert len(judged.candidates) == lawgiver.MIN_AGREEING_FLIPS
+    assert judged.refusals == ()
+
+
+def test_the_law_carries_where_it_was_measured(ledger):
+    law = lawgiver.propose(flipped(ledger), LawBook(), ledger)[0]
+    assert law.scope.get("corpus_games") in (1000, 5000)
+    assert "feature_set" not in law.scope

@@ -133,6 +133,19 @@ def format_brains(status: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+#: How a call is stamped when the record is read back. "!" is the call
+#: itself failing, which was the only state this printer had; the other
+#: two come from the tool having looked at the machine afterwards, and
+#: telling them apart is the point of mana.outcome.
+_MARKS = {"contradicted": "✗", "unobserved": "?"}
+
+
+def _mark(call) -> str:
+    if not call.ok:
+        return "!"
+    return _MARKS.get(call.verified, "")
+
+
 def _show_journal(limit: int) -> int:
     """Print what the last turns actually did.
 
@@ -162,7 +175,7 @@ def _show_journal(limit: int) -> int:
 
     for ep in journal.episodes(limit=limit):
         when = time.strftime("%d.%m %H:%M", time.localtime(ep.started))
-        tools = ", ".join(f"{c.tool}{'' if c.ok else '!'}" for c in ep.calls)
+        tools = ", ".join(f"{c.tool}{_mark(c)}" for c in ep.calls)
         print(f"[{when}] {ep.route:<13} {ep.latency:5.1f}s")
         print(f"  запрос:       {ep.request[:150]}")
         print(f"  ответ:        {ep.answer[:150]}")
@@ -229,7 +242,7 @@ def _show_proposals(limit: int) -> int:
     core/gates.py, on evidence.
     """
     from .journal import Journal
-    from .cognition import invariants, candidates, failure_domain
+    from .cognition import invariants, candidates, failure_domain, lessons
 
     journal = Journal()
     episodes = journal.episodes(limit=limit)
@@ -238,13 +251,31 @@ def _show_proposals(limit: int) -> int:
         return 0
 
     violations = invariants.scan(episodes)
-    if not violations:
+    # What the record knows, not only what this window holds: a failure
+    # seen fourteen times in real work is worth addressing on a day when
+    # the last twenty turns happen to be clean.
+    learned = lessons.read(invariants_seen=[v.invariant for v in violations])
+    if not violations and not any(l.observed for l in learned.values()):
         print(f"Просмотрено ходов: {len(episodes)}. Нарушений нет — "
               f"предлагать нечего.")
         return 0
 
     situations = failure_domain.situations_from(episodes)
-    rows = candidates.rank(violations, situations)
+    made = candidates.plan(violations, lessons=learned)
+    rows = candidates.rank(violations, situations, lessons=learned)
+
+    if learned:
+        print("что известно об отказах:")
+        for lesson in sorted(learned.values(), key=lambda l: -l.observed):
+            print("  " + lesson.describe())
+        print()
+    if made.refusals:
+        print("на что настройкой не ответить:")
+        for refusal in made.refusals:
+            print(f"  «{refusal['addresses']}» ({refusal['observed_failures']}): "
+                  f"{refusal['why']}")
+        print()
+
     print(f"Ходов: {len(episodes)}   нарушений: {len(violations)}   "
           f"кандидатов: {len(rows)}")
     print("Оценка всухую — верхняя граница: считается, что выполнимое "
@@ -462,6 +493,51 @@ def _show_series() -> int:
     return 0
 
 
+def _next_policy_experiment() -> int:
+    """The policy setting worth measuring next, chosen rather than listed.
+
+    The half of "what next" that can be answered: a knob is controllable
+    by construction -- declared in `policy.KNOBS` with its options -- and
+    how much measuring one would tell us comes out of the ledger. The
+    choice goes through `experiments.select`, the same selector that picks
+    a probe and a pipeline experiment.
+    """
+    from .journal import Journal
+    from .cognition import candidates, failure_domain, invariants, lessons
+
+    episodes = Journal().episodes(limit=200)
+    violations = invariants.scan(episodes) if episodes else []
+    learned = lessons.read(invariants_seen=[v.invariant for v in violations])
+    if not violations and not any(l.observed for l in learned.values()):
+        return 0
+
+    situations = failure_domain.situations_from(episodes) if episodes else []
+    rows = candidates.rank(violations, situations, lessons=learned)
+    picked = candidates.choose(violations, situations, budget=10 ** 6,
+                               lessons=learned)
+
+    print("настройка политики — здесь выбор возможен:")
+    if picked is None:
+        made = candidates.plan(violations, lessons=learned)
+        for refusal in made.refusals:
+            print(f"  «{refusal['addresses']}»: {refusal['why']}")
+        if not made.refusals:
+            print("  ничего не проходит порог ценности — это тоже ответ")
+        print()
+        return 0
+
+    print(f"  измерить: {picked['changes']}")
+    print(f"  целит в:  {picked['addresses']} "
+          f"({picked['observed_failures']} наблюдений)")
+    print(f"  ценность: {picked['value']:+.3f} "
+          f"(информативность {picked['information']:.2f})")
+    print(f"  почему:   {picked['information_why']}")
+    for row in rows[1:4]:
+        print(f"    следом: {row['changes']} — ценность {row['value']:+.3f}")
+    print()
+    return 0
+
+
 def _show_next() -> int:
     """Which condition is worth varying next, per question.
 
@@ -472,9 +548,11 @@ def _show_next() -> int:
     """
     from .cognition import lawgiver, probes, series
 
+    _next_policy_experiment()
+
     runs = series.all_series()
     if not runs:
-        print("Реестр находок пуст — предлагать нечего.")
+        print("Серий в реестре нет — по условиям опытов предлагать нечего.")
         return 0
 
     # A standing law with an untested limit lifts the axis it claims
@@ -498,6 +576,85 @@ def _show_next() -> int:
     return 0
 
 
+def _run_cycle() -> int:
+    """Walk the whole loop over the record and say where it stopped.
+
+    Every stage of this existed and each was reached by a different flag,
+    so the loop was one a person had to walk. What it prints last is what
+    stopped it: there is nearly always something, and a loop that could
+    not name the stage it stalled at would look exactly like one that
+    quietly did nothing.
+
+    The result goes into the ledger. A cycle whose outcome is not written
+    down has to be re-run to be remembered, and re-running is how a
+    rejected change comes back next week as a new idea.
+    """
+    from .journal import Journal
+    from .cognition import cycle
+
+    journal = Journal()
+    episodes = journal.episodes()
+    ran = cycle.run(episodes)
+    print(ran.describe())
+
+    replay = ran.stage(cycle.REPLAY)
+    if replay:
+        print()
+        print(f"  доля прохождения: {replay.detail['baseline_pass_rate']} → "
+              f"{replay.detail['candidate_pass_rate']}")
+        print(f"  починено: {replay.detail['fixed'] or '—'}")
+        print(f"  сломано:  {replay.detail['broke'] or '—'}")
+    if ran.finding_id:
+        print()
+        print(f"записано в реестр: {ran.finding_id}")
+    print()
+    print("Сухой прогон — верхняя граница: считается, что выполнимое "
+          "действие удаётся. Живой результат может быть только хуже.")
+    return 0
+
+
+def _run_world(steps: int) -> int:
+    """Explore the small world and score the model that comes out.
+
+    An experiment, not a feature: nothing in the running agent consults a
+    world model, and this reports how much of one can be recovered from
+    acting in a world whose rules are known. The two failure kinds are
+    printed apart -- what was never established and what was invented --
+    because a missing condition promises too much and an invented one
+    refuses work that would have worked.
+    """
+    from .cognition import acting, lawgiver
+    from .world.explore import Explorer
+    from .world.universe import SmallWorld, grade
+
+    # The one place a law is allowed to change what is done rather than
+    # what is measured next. Standing laws only -- a PROPOSED one may
+    # point at the next experiment and no further.
+    from .world.explore import EPISODE_STEPS
+
+    chosen = acting.setting_for("steps", steps, domain="world_model",
+                                book=lawgiver.load_book(),
+                                # The conditions this run is under. A law
+                                # measured at another episode length was
+                                # measured somewhere else, and saying so
+                                # is what keeps it from speaking here.
+                                conditions={"episode_steps": EPISODE_STEPS})
+    if chosen.changed:
+        print("по закону: " + chosen.describe())
+        steps = int(chosen.value)
+
+    world = SmallWorld(seed=7)
+    model = Explorer().explore(world, steps=steps, seed=7).model()
+    print(model.describe())
+    print()
+    print(f"=== сверка с настоящими правилами мира ({steps} шагов) ===")
+    print(grade(model).describe())
+    print()
+    print("Это опыт над самой идеей модели мира, а не возможность агента: "
+          "живой путь ответа никакую модель мира не спрашивает.")
+    return 0
+
+
 def _show_laws() -> int:
     """The law book: conditional claims and the status the evidence earns.
 
@@ -510,15 +667,27 @@ def _show_laws() -> int:
 
     book = lawgiver.load_book()
     made = []
+    refused = []
     for run in series.all_series():
         made.extend(lawgiver.propose(run, book))
+        refused.extend((run.question, r) for r in lawgiver.assess(run).refusals)
     if made:
         lawgiver.save_book(book)
 
+    # A series that produced nothing used to look exactly like a series
+    # nobody had. Now that there is a bar to clear, the reason a claim did
+    # not clear it is usually the interesting half of the output.
+    if refused:
+        print("на что серии пока не тянут:")
+        for question, refusal in refused:
+            print(f"  [{question[:44]}] {refusal.describe()}")
+        print()
+
     if not book.all():
         print("Законов пока нет.")
-        print("Закон рождается из ИЗОЛИРОВАННОГО переворота в серии: одно "
-              "условие изменилось, класс изменился, метод тот же.")
+        print(f"Закон рождается из СЕРИИ изолированных переворотов: одно "
+              f"условие изменилось, класс изменился, метод тот же — и так "
+              f"минимум {lawgiver.MIN_AGREEING_FLIPS} раза, согласно.")
         print("Смотреть серии:  MANA.exe --series")
         return 0
 
@@ -638,6 +807,14 @@ def build_parser() -> argparse.ArgumentParser:
                              "им дало накопленное свидетельство")
     parser.add_argument("--next", action="store_true", dest="next_probe",
                         help="Какое условие стоит поварьировать дальше и почему")
+    parser.add_argument("--cycle", action="store_true",
+                        help="Полный круг: опыт → ошибка → исследование → "
+                             "изменение → повторная ситуация → результат, "
+                             "и чего не хватает, чтобы он замкнулся")
+    parser.add_argument("--world", nargs="?", const=1000, type=int, metavar="N",
+                        help="Опыт с моделью мира: исследовать маленькую "
+                             "вселенную N шагами и сверить восстановленную "
+                             "модель с её настоящими правилами")
     parser.add_argument("--series", action="store_true",
                         help="Как менялся результат по каждому вопросу при "
                              "изменении условий")
@@ -727,6 +904,12 @@ def main() -> int:
 
     if args.next_probe:
         return _show_next()
+
+    if args.cycle:
+        return _run_cycle()
+
+    if args.world is not None:
+        return _run_world(int(args.world))
 
     if args.series:
         return _show_series()

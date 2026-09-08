@@ -76,6 +76,7 @@ from .. import policy as policy_mod
 from ..journal import ToolCall
 from ..policy import Policy, Knob
 from .brain_factory import ALGORITHMIC, choose_mechanism
+from .experiments import MIN_EXPERIMENT_VALUE, VALUE_WEIGHTS, select
 from .failure_domain import Situation
 from .invariants import Violation
 
@@ -91,6 +92,21 @@ EXACTLY_COMPUTABLE = {
     "actionable_request_not_acted_on": True,   # a name against a known list
     "claimed_action_without_acting": True,     # a call list, and whether it ran
 }
+
+#: How much measuring a setting would tell us. The same three numbers
+#: `probes.py` uses for an experimental axis, with the same meanings:
+#: nobody has measured this, somebody measured it under conditions that
+#: have since moved, somebody measured it under conditions that still
+#: hold. Stated here rather than imported so that changing one module's
+#: scale does not silently reweight the other.
+NEVER_MEASURED = 1.0
+CONDITIONS_MOVED = 0.9
+ALREADY_MEASURED = 0.3
+
+#: What a candidate costs to measure properly, when nobody prices it.
+#: Left at zero rather than guessed: an invented cost would order the
+#: list by a number nobody measured.
+COST_SCALE = 500.0
 
 #: Knobs whose effect cannot be seen without running the model. Named
 #: here rather than discovered, so a knob added without thinking about
@@ -128,34 +144,80 @@ def _with(current: Policy, **changes: Any) -> Policy:
     return Policy.of(**trimmed)
 
 
-def propose(violations: Sequence[Violation],
-            current: Optional[Policy] = None) -> List[Candidate]:
-    """Changes worth measuring, given what actually went wrong.
+@dataclass(frozen=True)
+class Plan:
+    """What to try, and what nothing can be tried for.
 
-    Returns an empty list when nothing went wrong, which is the common
-    and correct answer: a system with no observed failures has nothing to
-    propose, and a generator that produced candidates anyway would be
-    changing a working system on speculation.
+    The second half used to be silence. An invariant with no knob aimed
+    at it, or one whose knob space has been measured out, produced an
+    empty list exactly like an invariant nobody had ever seen -- so a
+    reader could not tell "we have no proposal" from "we have no idea".
     """
+    candidates: Tuple[Candidate, ...] = ()
+    refusals: Tuple[Dict[str, Any], ...] = ()
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {"candidates": [c.as_dict() for c in self.candidates],
+                "refusals": [dict(r) for r in self.refusals]}
+
+
+def plan(violations: Sequence[Violation],
+         current: Optional[Policy] = None,
+         lessons: Optional[Dict[str, Any]] = None) -> Plan:
+    """Changes worth measuring, and the failures nothing here can address.
+
+    With no lessons this aims at the violations it was handed, which is
+    what it always did. With them it aims at the record: a failure seen
+    fourteen times in real work outranks one seen once, even when the
+    window shows one of each, and a failure the ledger knows about is
+    addressed even when this particular window is clean.
+
+    Returns nothing to try when nothing went wrong, which is the common
+    and correct answer: a generator that produced candidates for a system
+    with no observed failures would be changing a working system on
+    speculation.
+    """
+    from .lessons import EXHAUSTED, NO_KNOB
+
     current = current or policy_mod.BASELINE
     counts: Dict[str, int] = {}
     for violation in violations:
         counts[violation.invariant] = counts.get(violation.invariant, 0) + 1
+    # What the record knows, not only what this window holds.
+    for name, lesson in (lessons or {}).items():
+        counts[name] = max(counts.get(name, 0), int(getattr(lesson, "observed", 0)))
+    counts = {name: n for name, n in counts.items() if n > 0}
 
     out: List[Candidate] = []
+    refused: List[Dict[str, Any]] = []
     for invariant in sorted(counts, key=lambda k: (-counts[k], k)):
         observed = counts[invariant]
+        lesson = (lessons or {}).get(invariant)
+
+        knobs = policy_mod.knobs_for(invariant)
+        if not knobs:
+            refused.append({"addresses": invariant, "observed_failures": observed,
+                            "strategy": NO_KNOB,
+                            "why": (f"в политике нет настройки, которая целит в "
+                                    f"«{invariant}»; это чинится кодом, а не "
+                                    f"подбором")})
+            continue
+
         choice = choose_mechanism(
             invariant, examples=observed,
             exactly_computable=EXACTLY_COMPUTABLE.get(invariant))
         if choice.mechanism != ALGORITHMIC:
             # A knob is the wrong shape of fix here. Saying so beats
             # offering one anyway, which is how a search ends up
-            # optimising what it can adjust rather than what is wrong.
+            # optimising what it can adjust rather than what is wrong --
+            # and until now this said it only to itself.
+            refused.append({"addresses": invariant, "observed_failures": observed,
+                            "strategy": choice.mechanism, "why": choice.reason})
             continue
 
-        knobs = policy_mod.knobs_for(invariant)
-        if not knobs:
+        if lesson is not None and getattr(lesson, "exhausted", False):
+            refused.append({"addresses": invariant, "observed_failures": observed,
+                            "strategy": EXHAUSTED, "why": lesson.strategy()[1]})
             continue
 
         singles: List[Candidate] = []
@@ -187,7 +249,14 @@ def propose(violations: Sequence[Violation],
                            + ", ".join(f"{k}={v!r}" for k, v in sorted(combined.items()))
                            + ". Отдельные настройки могут быть недостаточны "
                              "поодиночке.")))
-    return out
+    return Plan(candidates=tuple(out), refusals=tuple(refused))
+
+
+def propose(violations: Sequence[Violation],
+            current: Optional[Policy] = None,
+            lessons: Optional[Dict[str, Any]] = None) -> List[Candidate]:
+    """The changes half of `plan`. Kept because most callers want only it."""
+    return list(plan(violations, current, lessons).candidates)
 
 
 # --------------------------------------------------------------------------
@@ -278,6 +347,68 @@ def dry_report(policy: Policy, situations: Sequence[Situation],
     }
 
 
+def information_for(candidate: Candidate, lessons: Optional[Dict[str, Any]] = None,
+                    conditions: Optional[Dict[str, Any]] = None
+                    ) -> Tuple[float, str]:
+    """How much a proper measurement of this candidate would tell us.
+
+    Averaged over the settings it changes, because a candidate that turns
+    two knobs is informative about both and reducing it to its best half
+    would make every combination look as good as its most novel part.
+
+    With no lesson to read, everything scores NEVER_MEASURED -- which is
+    true of an empty record and keeps the ordering exactly as it was.
+    """
+    lesson = (lessons or {}).get(candidate.addresses)
+    changed = sorted(candidate.policy.changes().items())
+    if lesson is None or not changed:
+        return (NEVER_MEASURED, "нет записи об измерениях этой оси")
+
+    conditions = dict(conditions or {})
+    scores: List[float] = []
+    notes: List[str] = []
+    for name, value in changed:
+        attempts = lesson.measured_under(name, value)
+        if not attempts:
+            scores.append(NEVER_MEASURED)
+            notes.append(f"{name}={value!r}: не измерялось")
+            continue
+        # The ledger's own rule, not a second copy of it: a result with
+        # no conditions recorded is stale too, because nobody can say
+        # whether they held.
+        moved = all(a.stale_against(conditions)["stale"] for a in attempts)
+        if moved:
+            scores.append(CONDITIONS_MOVED)
+            notes.append(f"{name}={value!r}: измерено в других условиях")
+        else:
+            scores.append(ALREADY_MEASURED)
+            notes.append(f"{name}={value!r}: уже измерено в этих условиях")
+    return (sum(scores) / len(scores), "; ".join(notes))
+
+
+@dataclass(frozen=True)
+class Scored:
+    """A candidate priced the way every other experiment here is priced.
+
+    `value` and `estimated_calls` are named to match `ExperimentPlan` and
+    `Probe`, so `experiments.select` chooses among these without a third
+    selector being written.
+    """
+    row: Dict[str, Any]
+    information: float
+    estimated_calls: int = 0
+    priced: bool = False
+
+    @property
+    def value(self) -> float:
+        """Information and cost. The dry bound is deliberately not here --
+        it exists for some candidates and not others, and averaging it in
+        would make "could not be evaluated" mean "no gain"."""
+        cost_term = (VALUE_WEIGHTS["cost"]
+                     * min(1.0, self.estimated_calls / COST_SCALE))
+        return VALUE_WEIGHTS["information_gain"] * self.information + cost_term
+
+
 def question_for(invariant: str) -> str:
     """How a candidate's aim is phrased in the findings ledger.
 
@@ -308,7 +439,8 @@ def prior_for(candidate: Candidate, ledger: Any = None) -> Optional[Dict[str, An
 
 def rank(violations: Sequence[Violation], situations: Sequence[Situation],
          current: Optional[Policy] = None,
-         ledger: Any = None) -> List[Dict[str, Any]]:
+         ledger: Any = None,
+         lessons: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """Every candidate, with what is already known and what a dry run
     says, best first.
 
@@ -325,28 +457,76 @@ def rank(violations: Sequence[Violation], situations: Sequence[Situation],
     """
     current = current or policy_mod.BASELINE
     out: List[Dict[str, Any]] = []
-    for candidate in propose(violations, current):
+    for candidate in propose(violations, current, lessons):
         row = candidate.as_dict()
         row["dry"] = dry_report(candidate.policy, situations, current)
+        conditions = {"observed_failures": candidate.observed}
+        information, why = information_for(candidate, lessons, conditions)
+        row["information"] = round(information, 4)
+        row["information_why"] = why
+        row["value"] = round(
+            Scored(row=row, information=information).value, 4)
+        lesson = (lessons or {}).get(candidate.addresses)
+        if lesson is not None:
+            # "Tried" and "learned" travel separately. Both of this
+            # project's adoptions are NOT_EVALUATED, so a reader that
+            # counted attempts would think two things were known here
+            # when nothing is.
+            row["lesson"] = {"observed": lesson.observed,
+                             "tried": len(lesson.tried),
+                             "learned": len(lesson.learned),
+                             "strategy": lesson.strategy()[0]}
         prior = prior_for(candidate, ledger)
         if prior is not None:
             row["already_tried"] = {
                 "verdict": prior["finding"]["verdict"],
                 "when": prior["finding"]["created"],
                 "measurement": prior["finding"]["measurement"],
+                # "exact" means this experiment has already been run under
+                # these conditions. Carried because a verdict alone
+                # cannot say that: NOT_EVALUATED is not a rejection, and
+                # re-running it on the same evidence still produces the
+                # same "could not tell".
+                "match": prior.get("match", ""),
                 "conditions_moved": prior["staleness"]["stale"],
                 "changed": prior["staleness"]["changed"]}
         out.append(row)
 
-    def key(row: Dict[str, Any]) -> Tuple[int, float, float, int]:
+    def key(row: Dict[str, Any]) -> Tuple[int, float, float, float, int]:
         prior = row.get("already_tried") or {}
         settled = (prior.get("verdict") == "REJECTED"
                    and not prior.get("conditions_moved"))
         dry = row.get("dry") or {}
+        # Value first: measure what nobody has measured before measuring a
+        # predicted improvement on an axis already known. The dry bound is
+        # the next key rather than part of the first, because it exists
+        # for some candidates and not others.
+        value = float(row.get("value", NEVER_MEASURED))
         if not dry.get("dry_evaluable"):
-            return (0 if settled else 1, 0.0, 0.0, 0)
+            return (0 if settled else 1, value, 0.0, 0.0, 0)
         gain = dry["candidate_pass_rate"] - dry["baseline_pass_rate"]
         broke = -float((dry.get("counterexamples") or {}).get("found", 0))
-        return (0 if settled else 1, gain, broke, -len(row["changes"]))
+        return (0 if settled else 1, value, gain, broke, -len(row["changes"]))
 
     return sorted(out, key=key, reverse=True)
+
+
+def choose(violations: Sequence[Violation], situations: Sequence[Situation],
+           budget: int, current: Optional[Policy] = None, ledger: Any = None,
+           lessons: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """The candidate worth measuring next, or None.
+
+    Delegates to `experiments.select`, the same selector that picks a
+    pipeline experiment and a probe, so all three are held to one floor:
+    running a worthless experiment because there is budget left is how a
+    research loop converts compute into noise. None is a real answer.
+    """
+    rows = rank(violations, situations, current, ledger, lessons)
+    scored = [Scored(row=row, information=float(row.get("information",
+                                                       NEVER_MEASURED)),
+                     estimated_calls=int(row.get("estimated_calls", 0) or 0))
+              for row in rows
+              if not ((row.get("already_tried") or {}).get("verdict") == "REJECTED"
+                      and not (row.get("already_tried") or {}).get("conditions_moved"))]
+    best = select(scored, budget)
+    return best.row if best is not None else None
