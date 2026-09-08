@@ -119,8 +119,21 @@ def self_check() -> int:
     # collected the top-level package and none of its submodules would
     # pass a package check and still have no semantic search.
     from mana import optional_deps
+    # The MODE, not just a library check. `HAS_SKLEARN` was reported as
+    # "semantic_search: true" while `memory.semantic_search` had no way
+    # to use it: embeddings are absent by design in a packaged build and
+    # the fallback was word overlap, which scores 0 between "погода" and
+    # "погоде". The flag said the capability was there while the search
+    # returned the newest rows for every question.
+    from mana.optional_deps import HAS_SENTENCE_TRANSFORMERS
+    semantic_mode = ("embeddings" if HAS_SENTENCE_TRANSFORMERS
+                     else "tfidf" if optional_deps.HAS_SKLEARN
+                     else "word_overlap")
     capabilities = {
-        "semantic_search": optional_deps.HAS_SKLEARN,
+        # True only when the search can actually tell one question from
+        # another. Word overlap cannot, on an inflected language.
+        "semantic_search": semantic_mode != "word_overlap",
+        "semantic_search_mode": semantic_mode,
         "web_search": optional_deps.HAS_WEB,
         "pdf_reading": optional_deps.HAS_FITZ,
         "hardware_detection": optional_deps.HAS_PSUTIL,
