@@ -132,8 +132,14 @@ def test_a_live_process_with_no_window_yet_is_unobserved_not_failed():
     try:
         seen = onec_launch._observe(process, "УТ", settle=1.0)
         assert seen["observed"]["running"] is True
+        # The base and the mode stay unobserved whether or not a title
+        # turned up: a python process started from a console inherits
+        # that console's title, so "a live process has no window title"
+        # was an assumption about the test runner rather than about the
+        # world. It failed once in a full suite run and passed alone,
+        # which is exactly what an assumption like that looks like.
         assert "base" not in seen["observed"] and "mode" not in seen["observed"]
-        assert seen["note"]
+        assert seen["note"] or seen["evidence"].get("window")
         outcome = Outcome("onec_launch", "открыть УТ",
                           expected={"running": True, "base": "УТ"},
                           observed=seen["observed"])
