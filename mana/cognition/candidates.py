@@ -128,34 +128,80 @@ def _with(current: Policy, **changes: Any) -> Policy:
     return Policy.of(**trimmed)
 
 
-def propose(violations: Sequence[Violation],
-            current: Optional[Policy] = None) -> List[Candidate]:
-    """Changes worth measuring, given what actually went wrong.
+@dataclass(frozen=True)
+class Plan:
+    """What to try, and what nothing can be tried for.
 
-    Returns an empty list when nothing went wrong, which is the common
-    and correct answer: a system with no observed failures has nothing to
-    propose, and a generator that produced candidates anyway would be
-    changing a working system on speculation.
+    The second half used to be silence. An invariant with no knob aimed
+    at it, or one whose knob space has been measured out, produced an
+    empty list exactly like an invariant nobody had ever seen -- so a
+    reader could not tell "we have no proposal" from "we have no idea".
     """
+    candidates: Tuple[Candidate, ...] = ()
+    refusals: Tuple[Dict[str, Any], ...] = ()
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {"candidates": [c.as_dict() for c in self.candidates],
+                "refusals": [dict(r) for r in self.refusals]}
+
+
+def plan(violations: Sequence[Violation],
+         current: Optional[Policy] = None,
+         lessons: Optional[Dict[str, Any]] = None) -> Plan:
+    """Changes worth measuring, and the failures nothing here can address.
+
+    With no lessons this aims at the violations it was handed, which is
+    what it always did. With them it aims at the record: a failure seen
+    fourteen times in real work outranks one seen once, even when the
+    window shows one of each, and a failure the ledger knows about is
+    addressed even when this particular window is clean.
+
+    Returns nothing to try when nothing went wrong, which is the common
+    and correct answer: a generator that produced candidates for a system
+    with no observed failures would be changing a working system on
+    speculation.
+    """
+    from .lessons import EXHAUSTED, NO_KNOB
+
     current = current or policy_mod.BASELINE
     counts: Dict[str, int] = {}
     for violation in violations:
         counts[violation.invariant] = counts.get(violation.invariant, 0) + 1
+    # What the record knows, not only what this window holds.
+    for name, lesson in (lessons or {}).items():
+        counts[name] = max(counts.get(name, 0), int(getattr(lesson, "observed", 0)))
+    counts = {name: n for name, n in counts.items() if n > 0}
 
     out: List[Candidate] = []
+    refused: List[Dict[str, Any]] = []
     for invariant in sorted(counts, key=lambda k: (-counts[k], k)):
         observed = counts[invariant]
+        lesson = (lessons or {}).get(invariant)
+
+        knobs = policy_mod.knobs_for(invariant)
+        if not knobs:
+            refused.append({"addresses": invariant, "observed_failures": observed,
+                            "strategy": NO_KNOB,
+                            "why": (f"в политике нет настройки, которая целит в "
+                                    f"«{invariant}»; это чинится кодом, а не "
+                                    f"подбором")})
+            continue
+
         choice = choose_mechanism(
             invariant, examples=observed,
             exactly_computable=EXACTLY_COMPUTABLE.get(invariant))
         if choice.mechanism != ALGORITHMIC:
             # A knob is the wrong shape of fix here. Saying so beats
             # offering one anyway, which is how a search ends up
-            # optimising what it can adjust rather than what is wrong.
+            # optimising what it can adjust rather than what is wrong --
+            # and until now this said it only to itself.
+            refused.append({"addresses": invariant, "observed_failures": observed,
+                            "strategy": choice.mechanism, "why": choice.reason})
             continue
 
-        knobs = policy_mod.knobs_for(invariant)
-        if not knobs:
+        if lesson is not None and getattr(lesson, "exhausted", False):
+            refused.append({"addresses": invariant, "observed_failures": observed,
+                            "strategy": EXHAUSTED, "why": lesson.strategy()[1]})
             continue
 
         singles: List[Candidate] = []
@@ -187,7 +233,14 @@ def propose(violations: Sequence[Violation],
                            + ", ".join(f"{k}={v!r}" for k, v in sorted(combined.items()))
                            + ". Отдельные настройки могут быть недостаточны "
                              "поодиночке.")))
-    return out
+    return Plan(candidates=tuple(out), refusals=tuple(refused))
+
+
+def propose(violations: Sequence[Violation],
+            current: Optional[Policy] = None,
+            lessons: Optional[Dict[str, Any]] = None) -> List[Candidate]:
+    """The changes half of `plan`. Kept because most callers want only it."""
+    return list(plan(violations, current, lessons).candidates)
 
 
 # --------------------------------------------------------------------------
@@ -308,7 +361,8 @@ def prior_for(candidate: Candidate, ledger: Any = None) -> Optional[Dict[str, An
 
 def rank(violations: Sequence[Violation], situations: Sequence[Situation],
          current: Optional[Policy] = None,
-         ledger: Any = None) -> List[Dict[str, Any]]:
+         ledger: Any = None,
+         lessons: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """Every candidate, with what is already known and what a dry run
     says, best first.
 
@@ -325,9 +379,19 @@ def rank(violations: Sequence[Violation], situations: Sequence[Situation],
     """
     current = current or policy_mod.BASELINE
     out: List[Dict[str, Any]] = []
-    for candidate in propose(violations, current):
+    for candidate in propose(violations, current, lessons):
         row = candidate.as_dict()
         row["dry"] = dry_report(candidate.policy, situations, current)
+        lesson = (lessons or {}).get(candidate.addresses)
+        if lesson is not None:
+            # "Tried" and "learned" travel separately. Both of this
+            # project's adoptions are NOT_EVALUATED, so a reader that
+            # counted attempts would think two things were known here
+            # when nothing is.
+            row["lesson"] = {"observed": lesson.observed,
+                             "tried": len(lesson.tried),
+                             "learned": len(lesson.learned),
+                             "strategy": lesson.strategy()[0]}
         prior = prior_for(candidate, ledger)
         if prior is not None:
             row["already_tried"] = {

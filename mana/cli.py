@@ -242,7 +242,7 @@ def _show_proposals(limit: int) -> int:
     core/gates.py, on evidence.
     """
     from .journal import Journal
-    from .cognition import invariants, candidates, failure_domain
+    from .cognition import invariants, candidates, failure_domain, lessons
 
     journal = Journal()
     episodes = journal.episodes(limit=limit)
@@ -251,13 +251,31 @@ def _show_proposals(limit: int) -> int:
         return 0
 
     violations = invariants.scan(episodes)
-    if not violations:
+    # What the record knows, not only what this window holds: a failure
+    # seen fourteen times in real work is worth addressing on a day when
+    # the last twenty turns happen to be clean.
+    learned = lessons.read(invariants_seen=[v.invariant for v in violations])
+    if not violations and not any(l.observed for l in learned.values()):
         print(f"Просмотрено ходов: {len(episodes)}. Нарушений нет — "
               f"предлагать нечего.")
         return 0
 
     situations = failure_domain.situations_from(episodes)
-    rows = candidates.rank(violations, situations)
+    made = candidates.plan(violations, lessons=learned)
+    rows = candidates.rank(violations, situations, lessons=learned)
+
+    if learned:
+        print("что известно об отказах:")
+        for lesson in sorted(learned.values(), key=lambda l: -l.observed):
+            print("  " + lesson.describe())
+        print()
+    if made.refusals:
+        print("на что настройкой не ответить:")
+        for refusal in made.refusals:
+            print(f"  «{refusal['addresses']}» ({refusal['observed_failures']}): "
+                  f"{refusal['why']}")
+        print()
+
     print(f"Ходов: {len(episodes)}   нарушений: {len(violations)}   "
           f"кандидатов: {len(rows)}")
     print("Оценка всухую — верхняя граница: считается, что выполнимое "

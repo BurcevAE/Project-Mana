@@ -814,14 +814,40 @@ async function refreshSelf() {
                 + "«Догадка» — совпадение со списком слов: полезно и не факт.");
   }
 
+  /* ---- what the record says about each failure ---- */
+  const lessons = data.lessons || [];
+  if (!lessons.error && lessons.length) {
+    selfSection(box, "Что известно об отказах");
+    lessons.slice(0, 8).forEach(l => {
+      /* "Пробовали" and "узнали" are different numbers on purpose. A
+         verdict with no measurement behind it is a decision taken under
+         stated uncertainty, and reading it as knowledge is how a ledger
+         turns into a diary. */
+      const tags = [[`наблюдений: ${l.observed}`, ""],
+                    [`пробовали: ${l.tried}`, ""],
+                    [`узнали: ${l.learned}`, l.learned ? "measured" : "guess"]];
+      selfRow(box, l.invariant, l.why, tags);
+    });
+    selfNote(box, "«Пробовали» — что записано. «Узнали» — за чем стоит "
+                + "измерение. Оба принятых изменения проекта — NOT_EVALUATED, "
+                + "то есть приняты при названной неопределённости.");
+  }
+
   /* ---- what it proposes ---- */
-  const proposals = data.proposals || [];
+  const plan = data.proposals || {};
+  const proposals = plan.candidates || [];
+  const refusals = plan.refusals || [];
   selfSection(box, "Предлагает попробовать");
-  if (proposals.error) {
-    selfNote(box, "не удалось: " + proposals.error);
-  } else if (!proposals.length) {
+  if (plan.error) {
+    selfNote(box, "не удалось: " + plan.error);
+  } else if (!proposals.length && !refusals.length) {
     selfNote(box, "Нечего предлагать: без наблюдённого отказа кандидатов нет.");
   } else {
+    refusals.forEach(r => {
+      selfRow(box, r.addresses, r.why,
+              [[`наблюдений: ${r.observed_failures}`, ""],
+               ["настройкой не лечится", "guess"]]);
+    });
     proposals.slice(0, 6).forEach(row => {
       const dry = row.dry || {};
       /* Baseline is what MANA does NOW, not what the record says: after
@@ -838,6 +864,10 @@ async function refreshSelf() {
       selfRow(box, JSON.stringify(row.changes), row.rationale, tags);
     });
     const recorded = (proposals.find(r => r.dry && r.dry.dry_evaluable) || {}).dry;
+    if (refusals.length) {
+      selfNote(box, "Строки без кандидата — это отказы, на которые в "
+                  + "пространстве настроек ответа нет: чинится кодом.");
+    }
     if (recorded) {
       selfNote(box, `Сравнение с сегодняшним поведением. В записи было `
                   + `${recorded.recorded_pass_rate} — разница показывает, `
