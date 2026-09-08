@@ -143,6 +143,12 @@ CAPABILITIES = (
                modules=("docx",)),
     Capability("xlsx", "чтение и запись .xlsx без установленного Excel",
                modules=("openpyxl",)),
+    # The engine is deliberately not named here: `chess_judge` looks for
+    # it in MANA's data directory rather than on PATH, and its absence is
+    # a degraded judge with a working fallback rather than a missing
+    # capability. What this line is about is whether MANA can play at all.
+    Capability("chess", "играть в шахматы: свой поиск, судья и партии на lichess",
+               modules=("chess", "requests")),
     Capability("editor", "открыть файл в Notepad++ на нужной строке",
                executable="notepad++.exe"),
     # pythoncom is named alongside win32com because the COM thread calls

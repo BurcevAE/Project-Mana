@@ -1,0 +1,397 @@
+"""Playing in a world MANA did not make up.
+
+The tests that matter most here are the two refusals. `chess_judge` is
+kept from ever picking a move; this module is kept from ever upgrading the
+account, because that call is irreversible and belongs to the person whose
+account it is. Both are checked by reading the source, so they survive
+edits by someone who does not know why the rule exists.
+
+Everything else is protocol detail that has already gone wrong somewhere:
+a stream reader that treats a keep-alive as an ending, a client that
+answers rate limiting with more requests, a board held in this process
+disagreeing with the board Lichess believes in.
+"""
+from __future__ import annotations
+
+import json
+from typing import Any, Dict, Iterator, List
+
+import pytest
+
+chess = pytest.importorskip("chess", reason="оракул не приобретён")
+
+from mana.cognition import chess_bot, chess_watch
+from mana.net import lichess
+
+
+# --------------------------------------------------------------------------
+# the account is not ours to change
+# --------------------------------------------------------------------------
+
+def test_the_client_cannot_upgrade_the_account():
+    """Irreversible, and about a person's account rather than about MANA."""
+    import inspect
+
+    source = inspect.getsource(lichess)
+    # The path appears three times on purpose -- the constant, the guard
+    # that refuses it, and the command a person runs themselves. What
+    # must not exist is a line that both names it and asks for it.
+    asking = ("_request(", ".post(", ".request(", "session.get(")
+    for line in source.splitlines():
+        if "upgrade" not in line.lower():
+            continue
+        assert not any(verb in line for verb in asking), line
+    assert "raise LichessError" in source.split("if path == UPGRADE_PATH:")[1][:400]
+
+
+def test_building_the_upgrade_path_by_hand_is_refused():
+    client = lichess.Lichess(bearer="x")
+    with pytest.raises(lichess.LichessError) as raised:
+        client._url(lichess.UPGRADE_PATH)
+    assert "необратим" in str(raised.value)
+    assert "curl" in str(raised.value)          # the remedy travels with it
+
+
+def test_the_upgrade_command_is_something_a_person_can_run():
+    text = lichess.upgrade_command()
+    assert "POST" in text and lichess.UPGRADE_PATH in text
+    assert "<ВАШ_ТОКЕН>" in text                # never a real token
+
+
+# --------------------------------------------------------------------------
+# the token
+# --------------------------------------------------------------------------
+
+def test_the_environment_wins_over_the_stored_token(monkeypatch):
+    monkeypatch.setenv(lichess.TOKEN_ENV, "from-env")
+    assert lichess.token() == "from-env"
+
+
+def test_no_token_is_a_state_with_a_remedy(monkeypatch):
+    monkeypatch.delenv(lichess.TOKEN_ENV, raising=False)
+    monkeypatch.setattr(lichess, "token", lambda: "")
+    state = lichess.Lichess(bearer="").describe()
+    assert state["token"] is False
+    assert lichess.TOKEN_ENV in state["note"]
+
+
+def test_describing_the_account_never_reports_the_token():
+    client = lichess.Lichess(bearer="secret-token-value")
+    client.account = lambda: {"username": "manabot", "title": "BOT"}
+    state = client.describe()
+    assert "secret-token-value" not in json.dumps(state, ensure_ascii=False)
+    assert state["bot"] is True and state["user"] == "manabot"
+
+
+def test_an_account_that_is_not_a_bot_says_what_to_do():
+    client = lichess.Lichess(bearer="x")
+    client.account = lambda: {"username": "someone", "title": ""}
+    state = client.describe()
+    assert state["bot"] is False
+    assert "необратимо" in state["note"] and "curl" in state["note"]
+
+
+def test_a_missing_token_refuses_before_any_request(monkeypatch):
+    monkeypatch.setattr(lichess, "token", lambda: "")
+    with pytest.raises(lichess.NoToken):
+        lichess.Lichess(bearer="")._request("GET", "/api/account")
+
+
+# --------------------------------------------------------------------------
+# the transport
+# --------------------------------------------------------------------------
+
+class _Response:
+    def __init__(self, status=200, payload=None, lines=()):
+        self.status_code = status
+        self._payload = payload if payload is not None else {"ok": True}
+        self.text = json.dumps(self._payload)
+        self._lines = list(lines)
+
+    def json(self):
+        return self._payload
+
+    def iter_lines(self):
+        return iter(self._lines)
+
+
+class _Session:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls: List[tuple] = []
+        self.headers: Dict[str, str] = {}
+
+    def request(self, method, url, **kwargs):
+        self.calls.append((method, url, kwargs))
+        return self.responses.pop(0)
+
+    def get(self, url, **kwargs):
+        self.calls.append(("GET", url, kwargs))
+        return self.responses.pop(0)
+
+
+def test_a_keep_alive_line_is_not_the_end_of_the_stream():
+    """Lichess sends an empty line every few seconds. A reader that stops
+    on one disconnects constantly and looks like a network fault."""
+    lines = [b"", json.dumps({"type": "challenge"}).encode(), b"",
+             b"{half", json.dumps({"type": "gameStart"}).encode()]
+    client = lichess.Lichess(bearer="x", session=_Session([_Response(lines=lines)]))
+    got = list(client._stream("/api/stream/event"))
+    assert [row["type"] for row in got] == ["challenge", "gameStart"]
+
+
+def test_rate_limiting_is_waited_out_once_not_retried_in_a_loop(monkeypatch):
+    slept: List[float] = []
+    monkeypatch.setattr(lichess.time, "sleep", lambda s: slept.append(s))
+    session = _Session([_Response(status=429), _Response(payload={"ok": 1})])
+    client = lichess.Lichess(bearer="x", session=session)
+    assert client._request("GET", "/api/account") == {"ok": 1}
+    assert len(session.calls) == 2                  # one retry, not a loop
+    assert slept and slept[0] > 0
+
+
+def test_a_rejected_token_names_the_scopes_it_needs():
+    client = lichess.Lichess(bearer="x", session=_Session([_Response(status=401)]))
+    with pytest.raises(lichess.LichessError) as raised:
+        client._request("GET", "/api/account")
+    for scope in lichess.SCOPES:
+        assert scope in str(raised.value)
+
+
+# --------------------------------------------------------------------------
+# what MANA agrees to play
+# --------------------------------------------------------------------------
+
+def test_a_refusal_carries_its_reason():
+    """A decline nobody can read is indistinguishable from a bug."""
+    policy = chess_bot.Policy()
+    accept, why = policy.verdict(lichess.Challenge(id="1", by="x",
+                                                   variant="atomic"))
+    assert accept is False and "atomic" in why
+
+
+def test_rated_games_are_off_until_someone_turns_them_on():
+    rated = lichess.Challenge(id="1", by="x", rated=True, speed="rapid")
+    assert chess_bot.Policy().verdict(rated)[0] is False
+    assert chess_bot.Policy(rated=True).verdict(rated)[0] is True
+
+
+def test_a_normal_challenge_is_accepted():
+    ok = lichess.Challenge(id="1", by="x", speed="rapid")
+    accept, why = chess_bot.Policy().verdict(ok)
+    assert accept is True and why
+
+
+# --------------------------------------------------------------------------
+# one game, without a network
+# --------------------------------------------------------------------------
+
+class _Fake:
+    """A Lichess that plays 1.e4 e5 and then stops."""
+
+    def __init__(self, frames):
+        self.frames = frames
+        self.sent: List[str] = []
+        self.accepted: List[str] = []
+        self.declined: List[str] = []
+
+    def account(self):
+        return {"username": "manabot", "title": "BOT"}
+
+    def stream_game(self, game_id) -> Iterator[Dict[str, Any]]:
+        return iter(self.frames)
+
+    def move(self, game_id, uci, offering_draw=False):
+        self.sent.append(uci)
+        return {"ok": True}
+
+    def accept(self, cid):
+        self.accepted.append(cid)
+        return {"ok": True}
+
+    def decline(self, cid, reason="generic"):
+        self.declined.append(cid)
+        return {"ok": True}
+
+
+def _bot(frames, **kw):
+    bot = chess_bot.Bot(client=_Fake(frames), judge_depth=0, record=False, **kw)
+    bot.username = "manabot"
+    return bot
+
+
+FULL = {"type": "gameFull", "id": "g1", "initialFen": "startpos",
+        "white": {"id": "manabot", "name": "manabot"},
+        "black": {"id": "rival", "name": "rival"},
+        "state": {"type": "gameState", "moves": "", "status": "started"}}
+
+
+def test_it_moves_when_it_is_its_turn_and_not_otherwise():
+    frames = [FULL,
+              {"type": "gameState", "moves": "e2e4 e7e5", "status": "started"},
+              {"type": "gameState", "moves": "e2e4 e7e5 g1f3 b8c6",
+               "status": "mate", "winner": "white"}]
+    bot = _bot(frames)
+    bot._play(lichess.GameStart(id="g1"))
+    seat = bot.finished[0]
+    assert len(bot.client.sent) == 2          # one for each of its turns
+    for uci in bot.client.sent:
+        assert len(uci) >= 4
+    assert seat.status == "mate" and seat.winner == "white"
+
+
+def test_every_move_it_makes_is_recorded_with_what_it_considered():
+    bot = _bot([FULL])
+    bot._play(lichess.GameStart(id="g1"))
+    seat = bot.finished[0]
+    assert len(seat.thoughts) == 1
+    thought = seat.thoughts[0]
+    assert thought["considered"] and thought["chosen"]
+    assert len(thought["considered"]) == 20   # every legal first move
+    assert "margin" in thought and "close_call" in thought
+
+
+def test_the_side_it_plays_comes_from_the_game_not_from_a_guess():
+    black = dict(FULL, white={"id": "rival", "name": "rival"},
+                 black={"id": "manabot", "name": "manabot"})
+    bot = _bot([black])
+    bot._play(lichess.GameStart(id="g1"))
+    seat = bot.finished[0]
+    assert seat.us is False and seat.opponent == "rival"
+    assert bot.client.sent == []              # white has not moved yet
+
+
+def test_the_position_is_rebuilt_from_the_stream_not_kept_in_memory():
+    """After a reconnect the board this process holds and the board
+    Lichess believes in can differ, and theirs is the one that decides
+    the game."""
+    seat = chess_bot.Seat(game_id="g", moves=["e2e4", "e7e5", "g1f3"])
+    board = seat.board()
+    assert board.fen().startswith(
+        "rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b")
+
+
+def test_a_finished_game_is_not_played_into():
+    frames = [dict(FULL, state={"moves": "", "status": "aborted"})]
+    bot = _bot(frames)
+    bot._play(lichess.GameStart(id="g1"))
+    assert bot.client.sent == []
+    assert bot.finished[0].status == "aborted"
+
+
+def test_a_challenge_is_refused_while_a_game_is_running():
+    bot = _bot([])
+    bot.seats["busy"] = chess_bot.Seat(game_id="busy")
+    bot._on_challenge(lichess.Challenge(id="c1", by="rival", speed="rapid"))
+    assert bot.client.declined == ["c1"] and bot.client.accepted == []
+
+
+def test_our_own_challenge_coming_back_is_ignored():
+    bot = _bot([])
+    bot._on_challenge(lichess.Challenge(id="c1", by="manabot", speed="rapid"))
+    assert bot.client.declined == [] and bot.client.accepted == []
+
+
+def test_playing_requires_the_account_to_be_a_bot():
+    bot = _bot([])
+    bot.client.account = lambda: {"username": "someone", "title": ""}
+    with pytest.raises(lichess.LichessError) as raised:
+        bot.run()
+    assert "не бот" in str(raised.value) and "необратимо" in str(raised.value)
+
+
+def test_the_summary_of_a_game_reports_its_denominator():
+    seat = chess_bot.Seat(game_id="g")
+    seat.thoughts = [{"close_call": True}, {"close_call": False}]
+    seat.judged = [{"loss": 0.0, "mistake": False, "blunder": False},
+                   {"loss": 400.0, "mistake": True, "blunder": True}]
+    row = chess_bot.summarise(seat)
+    assert row["moves"] == 2 and row["judged"] == 2
+    assert row["blunders"] == 1 and row["mean_loss"] == 200.0
+    assert row["close_share"] == 0.5
+
+
+def test_nothing_in_the_bot_adapts_between_games():
+    """Stage 0 on purpose: a baseline collected by a player that changes
+    while it is measured is not a baseline."""
+    import inspect
+
+    source = inspect.getsource(chess_bot)
+    for learning in ("adopt(", "policy.adopt", "install(", "propose("):
+        assert learning not in source
+
+
+# --------------------------------------------------------------------------
+# the window
+# --------------------------------------------------------------------------
+
+def test_the_window_listens_on_loopback_only():
+    """It serves an unauthenticated page reporting what MANA is doing."""
+    with pytest.raises(ValueError):
+        chess_watch.start(port=0, host="0.0.0.0")
+
+
+def test_the_window_forwards_only_chess_events():
+    from mana import events
+
+    before = len(chess_watch.STATE.frames)
+    chess_watch._sink(events.Event(kind="status", text="не про шахматы"))
+    chess_watch._sink(events.Event(kind="status", text="",
+                                   data={"chess": {"kind": "move"}}))
+    assert len(chess_watch.STATE.frames) == before + 1
+    assert chess_watch.STATE.frames[-1] == {"kind": "move"}
+
+
+def test_a_window_opened_mid_game_is_not_blank():
+    chess_watch.STATE.frames = [{"kind": "position", "fen": "x"}]
+    sink = chess_watch.STATE.subscribe()
+    try:
+        assert sink.get_nowait() == {"kind": "position", "fen": "x"}
+    finally:
+        chess_watch.STATE.unsubscribe(sink)
+
+
+def test_the_page_needs_nothing_from_a_network():
+    """The moment worth watching is often the one where the connection is
+    what is failing."""
+    for fetched in ("cdn", "http://", "https://fonts", "<script src"):
+        assert fetched not in chess_watch.PAGE.replace(
+            "https://lichess.org", "")
+
+
+def test_a_second_window_cannot_take_a_port_that_is_already_serving():
+    """Found by running it. `HTTPServer` sets `allow_reuse_address`, and
+    on Windows that lets a second process bind a port another one is
+    already listening on: both sit in LISTENING, the first keeps taking
+    the connections, and the new window shows the previous game. For a
+    window whose whole job is to show what is happening now, quietly
+    showing something else is the worst available failure.
+    """
+    first = chess_watch.start(0)
+    try:
+        port = first.server_address[1]
+        with pytest.raises(OSError):
+            chess_watch.start(port)
+    finally:
+        first.shutdown()
+        first.server_close()
+
+
+def test_the_command_stops_before_playing_when_the_account_is_not_a_bot(capsys):
+    """Nothing is played, and the irreversible step is printed rather
+    than taken."""
+    from mana import cli
+
+    class _Client:
+        def describe(self):
+            return {"token": True, "env": lichess.TOKEN_ENV, "user": "someone",
+                    "bot": False, "note": "…" + lichess.upgrade_command()}
+
+    original = lichess.Lichess
+    lichess.Lichess = lambda *a, **k: _Client()
+    try:
+        assert cli._lichess(1) == 1
+    finally:
+        lichess.Lichess = original
+    out = capsys.readouterr().out
+    assert "curl" in out and "бот: нет" in out

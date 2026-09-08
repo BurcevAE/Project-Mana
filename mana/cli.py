@@ -374,6 +374,65 @@ def _acquire_capability(name: str, consented: bool) -> int:
     return 0
 
 
+def _lichess(games: int, port: int = 0, watch: bool = True) -> int:
+    """Play on Lichess, with a window showing what the search was thinking.
+
+    Without a number this reports what this machine can do and stops. The
+    account upgrade is not among the things it can do: turning an account
+    into a bot is irreversible and belongs to the person whose account it
+    is, so it is printed as a command rather than performed.
+    """
+    from .cognition import chess_bot, chess_watch
+    from .net import lichess
+
+    client = lichess.Lichess()
+    state = client.describe()
+    print(f"токен: {'есть' if state['token'] else 'нет'} ({state['env']})")
+    if "user" in state:
+        print(f"аккаунт: {state['user']}   бот: "
+              f"{'да' if state.get('bot') else 'нет'}")
+    if state.get("error"):
+        print(f"Lichess: {state['error']}")
+    if state.get("note"):
+        print(state["note"])
+    if not state.get("bot"):
+        return 1
+    if games <= 0:
+        path = chess_bot.games_path()
+        played = sum(1 for _ in path.open(encoding="utf-8")) if path.exists() else 0
+        print(f"сыграно и записано: {played}   {path}")
+        print("Играть:  MANA.exe --lichess 1")
+        return 0
+
+    httpd = None
+    if watch:
+        try:
+            httpd = chess_watch.start(port or chess_watch.DEFAULT_PORT)
+            print(f"наблюдение: {chess_watch.url(httpd)}")
+        except OSError as exc:
+            print(f"окно не открылось ({exc}); играю без него")
+
+    bot = chess_bot.Bot(client=client)
+    events.install_console_sink()
+    print(f"Жду вызова на lichess.org/@/{state['user']} "
+          f"(или бросьте вызов сами). Ctrl+C — выход.")
+    try:
+        seats = bot.run(games=games)
+    except KeyboardInterrupt:
+        bot.stop()
+        seats = bot.finished
+    finally:
+        if httpd is not None:
+            httpd.shutdown()
+    for seat in seats:
+        row = chess_bot.summarise(seat)
+        print(f"{seat.url}  {seat.status} {seat.winner}  "
+              f"ходов {row['moves']}, ошибок {row['mistakes']}, "
+              f"зевков {row['blunders']}, жребием "
+              f"{row['close_share']:.0%}")
+    return 0
+
+
 def _practice(games: int) -> int:
     """Play games against itself and add them to the corpus.
 
@@ -821,6 +880,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tried", action="store_true",
                         help="Что уже проверяли и чем это кончилось "
                              "(чтобы не повторять эксперимент заново)")
+    parser.add_argument("--lichess", nargs="?", const=0, type=int, metavar="N",
+                        help="Сыграть N партий на lichess.org с живой доской "
+                             "и ходом размышлений; без числа — что доступно")
+    parser.add_argument("--watch-port", type=int, default=0, dest="watch_port",
+                        help="Порт окна наблюдения (только 127.0.0.1)")
     parser.add_argument("--practice", nargs="?", const=0, type=int, metavar="N",
                         help="Сыграть N партий на проверенном движке и добавить "
                              "их в корпус; без числа — показать накопленное")
@@ -917,6 +981,8 @@ def main() -> int:
     if args.tried:
         return _show_tried()
 
+    if args.lichess is not None:
+        return _lichess(int(args.lichess), int(args.watch_port))
     if args.practice is not None:
         return _practice(int(args.practice))
 
