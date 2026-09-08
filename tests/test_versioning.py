@@ -163,3 +163,30 @@ def test_component_versions_never_raise_on_a_bad_module(monkeypatch):
     monkeypatch.setattr(importlib, "import_module", boom)
     result = version_mod.component_versions()
     assert all("unavailable" in v for v in result.values())
+
+
+def test_every_reader_is_reachable_from_the_installed_program():
+    """A flag in `mana/cli.py` that `app.py` does not forward is a
+    diagnostic nobody on a user's machine can run.
+
+    Found by building 2.48.0 and typing `--cycle` at the packaged
+    program: it silently opened the window, because `app.py` keeps an
+    explicit list of flags and two new ones were not in it. The list is
+    explicit on purpose -- the alternative is forwarding everything,
+    including flags that only make sense in a checkout -- so what this
+    checks is that nothing named `_show_*` or `_run_*` is missing from
+    it.
+    """
+    import ast
+    import pathlib
+
+    root = pathlib.Path(__import__("mana").__file__).parent.parent
+    cli = ast.parse((root / "mana" / "cli.py").read_text(encoding="utf-8"))
+    readers = {node.name for node in cli.body
+               if isinstance(node, ast.FunctionDef)
+               and (node.name.startswith("_show_") or node.name.startswith("_run_"))}
+
+    app_source = (root / "app.py").read_text(encoding="utf-8")
+    missing = sorted(name for name in readers if name not in app_source)
+    assert not missing, (
+        f"из установленной программы недостижимы: {missing}")

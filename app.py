@@ -295,6 +295,26 @@ def main() -> int:
         from mana.cli import _show_next
         return _show_next()
 
+    if argv and argv[0] == "--cycle":
+        # The whole loop over the record this machine actually made.
+        # Reachable from the installed program for the same reason
+        # `--journal` is: the record of what went wrong lives on the
+        # user's machine, and a diagnostic that needs the repository is
+        # one nobody there can run.
+        from mana.cli import _run_cycle
+        return _run_cycle()
+
+    if argv and argv[0] == "--world":
+        from mana.cli import _run_world
+        steps = 1000
+        if len(argv) > 1:
+            try:
+                steps = int(argv[1])
+            except ValueError:
+                print("Использование: MANA.exe --world [сколько шагов]")
+                return 2
+        return _run_world(steps)
+
     if argv and argv[0] == "--series":
         from mana.cli import _show_series
         return _show_series()
