@@ -212,3 +212,106 @@ def test_more_steps_do_not_lift_the_unlearnable():
     short = grade(_explored(steps=600))
     long = grade(_explored(steps=6000))
     assert short.precondition_recall == long.precondition_recall
+
+
+# --------------------------------------------------------------------------
+# choosing what to try, and what the choice was measured to be worth
+# --------------------------------------------------------------------------
+
+def test_an_untried_action_is_worth_the_most():
+    explorer = Explorer()
+    value, why = explorer.value_of("open_file", frozenset())
+    assert value == explore_mod.UNTRIED
+    assert "не пробовали" in why
+
+
+def test_a_situation_with_one_false_candidate_is_the_valuable_one():
+    """A failure confirms that candidate and a success kills it. The only
+    shape where both outcomes conclude something.
+
+    Built by hand rather than by running: whether a real run has already
+    discriminated a given candidate depends on how long it ran, and a test
+    that depends on that is testing the run, not the rule.
+    """
+    on = frozenset({("power", "on", True)})
+    off = frozenset({("power", "on", False)})
+    explorer = Explorer()
+    for _ in range(3):
+        explorer.record(Observation(action="launch", target="", succeeded=True,
+                                    before=on, after=on))
+    # Both values have been seen, so the fact is learnable; the candidate
+    # held in every success and no failure has singled it out yet.
+    explorer.record(Observation(action="other", target="", succeeded=True,
+                                before=off, after=off))
+
+    value, why = explorer.value_of("launch", off)
+    assert value == explore_mod.DISCRIMINATING
+    assert "ровно одно условие ложно" in why
+
+    # And once a failure has singled it out, there is nothing left to ask.
+    explorer.record(Observation(action="launch", target="", succeeded=False,
+                                before=off, after=off))
+    settled, _ = explorer.value_of("launch", off)
+    assert settled < explore_mod.DISCRIMINATING
+
+
+def test_repeating_the_same_attempt_in_the_same_state_is_worth_less():
+    """Otherwise a greedy policy picks the same action in the same
+    unchanged situation for ever, which is a confident way to learn
+    nothing."""
+    world = SmallWorld(seed=5)
+    explorer = Explorer().explore(world, steps=200, seed=5)
+    situation = world.situation()
+    before, _ = explorer.value_of("heat_rod", situation)
+    explorer.record(world.act("heat_rod"))
+    after, _ = explorer.value_of("heat_rod", situation)
+    assert after < before or before == 0.0
+
+
+def test_choosing_falls_back_when_nothing_clears_the_floor():
+    explorer = Explorer()
+    import random as _random
+
+    action, value, why = explorer.choose(["open_file", "heat_rod"],
+                                         frozenset(), _random.Random(0))
+    assert action in {"open_file", "heat_rod"}
+    assert value == explore_mod.UNTRIED
+
+
+def test_the_default_policy_is_the_one_that_measured_better():
+    """Adopting the policy I proposed would be the failure this whole
+    apparatus exists to prevent. Paired over forty seeds it came to
+    -0.107 [-0.159, -0.056] on precondition precision, which `classify`
+    puts in WORSE."""
+    assert explore_mod.DEFAULT_POLICY == explore_mod.BY_COVERAGE
+    signature = inspect.signature(Explorer.explore)
+    assert signature.parameters["policy"].default == explore_mod.BY_COVERAGE
+
+
+def test_both_policies_reach_the_same_ceiling():
+    """The rejected policy is not broken -- it is not better. Given
+    enough steps the two models are the same, which is why the finding is
+    WORSE rather than a bug report."""
+    long = 2500
+    by_coverage = grade(Explorer().explore(
+        SmallWorld(seed=4), steps=long, seed=4,
+        policy=explore_mod.BY_COVERAGE).model())
+    by_information = grade(Explorer().explore(
+        SmallWorld(seed=4), steps=long, seed=4,
+        policy=explore_mod.BY_INFORMATION).model())
+    assert by_coverage.precondition_precision == by_information.precondition_precision
+    assert by_coverage.precondition_recall == by_information.precondition_recall
+    assert by_information.wrongly_certain == []
+
+
+def test_neither_policy_drops_the_unfalsifiable_belief():
+    """`request` is credited with needing an up link. It does not -- and
+    no state in this world has a reachable host without one, so nothing
+    an explorer does can refute it. A policy that dropped it would have
+    stopped believing something for no reason, which is not an
+    improvement."""
+    for policy in (explore_mod.BY_COVERAGE, explore_mod.BY_INFORMATION):
+        model = Explorer().explore(SmallWorld(seed=4), steps=2500, seed=4,
+                                   policy=policy).model()
+        assert ("link", "up", True) in model.rules["request"].preconditions
+        assert model.rules["request"].status == BELIEVED

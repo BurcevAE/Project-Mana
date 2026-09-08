@@ -77,6 +77,54 @@ MIN_SITUATIONS_FOR_CANNOT = 8
 #: watching everything fail, and record that as the way the world is.
 EPISODE_STEPS = 25
 
+#: What an attempt would be worth, before it is made. The same three
+#: numbers `cognition/probes.py` puts on an experimental axis, for the
+#: same reason -- this is one fact about evidence, not two.
+#:
+#: Nothing tried yet: anything that happens is news.
+UNTRIED = 1.0
+#: Exactly one candidate precondition is false in this situation. A
+#: failure confirms that one and a success kills it, so both outcomes
+#: conclude something. The only shape where that is true.
+DISCRIMINATING = 0.9
+#: Several candidates are false. A success would kill all of them at
+#: once, which is worth a lot; a failure would explain nothing, which is
+#: worth little. Priced between the two.
+ELIMINATING = 0.6
+#: Never succeeded. Whether this is possible at all is still open, and
+#: that is a bigger question than which conditions it needs.
+POSSIBILITY = 0.7
+#: An effect seen sometimes and not others, with too few opportunities to
+#: read the share. Repetition really does buy something here.
+UNRESOLVED_REGULARITY = 0.5
+#: Every candidate holds; the attempt should work and confirm what is
+#: already confirmed.
+SETTLED = 0.15
+
+#: Below this, an attempt is not worth making for what it would teach --
+#: the same floor `experiments.select` holds everything else to. The
+#: explorer falls back to plain coverage rather than stopping, because a
+#: world it has not finished touching is not a world it has finished
+#: learning.
+MIN_ATTEMPT_VALUE = 0.05
+
+#: Choose by what an attempt would teach, or by whose turn it is.
+#:
+#: Coverage is the default because it measured better, not because it is
+#: older. Paired over forty seeds at 400 steps, the length where the two
+#: differ most: precondition precision under the information policy came
+#: to -0.107 [-0.159, -0.056] against coverage, worse in 24 pairs of 40
+#: and better in 6, with twice as many invented preconditions. The
+#: interval is entirely below zero, so `findings.classify` puts it in
+#: WORSE and it is recorded in the ledger as REJECTED.
+#:
+#: Kept rather than deleted: "we tried this and it did not hold" is one of
+#: the more valuable things a research loop can know, and this is now the
+#: baseline any future policy has to beat.
+BY_INFORMATION = "information"
+BY_COVERAGE = "coverage"
+DEFAULT_POLICY = BY_COVERAGE
+
 
 @dataclass
 class Attempt:
@@ -100,6 +148,15 @@ class Explorer:
         default_factory=lambda: defaultdict(set))
     domains: Dict[str, Set[str]] = field(default_factory=lambda: defaultdict(set))
     observations: int = 0
+    #: How often each exact (action, situation) pair has been run. An
+    #: attempt identical to one already made learns nothing the first one
+    #: did not, and without this a greedy policy repeats it for ever.
+    repeats: Dict[Tuple[str, Situation], int] = field(
+        default_factory=lambda: defaultdict(int))
+    #: Derived facts, thrown away whenever the record grows. Recomputed
+    #: rather than maintained: a summary that drifts from the attempts it
+    #: came from is worse than one that costs a little to rebuild.
+    _cache: Dict[str, Any] = field(default_factory=dict)
 
     # ---------- living in the world ----------
 
@@ -115,17 +172,25 @@ class Explorer:
         self.attempts.append(Attempt(
             action=observation.action, before=observation.before,
             after=observation.after, succeeded=observation.succeeded))
+        self.repeats[(observation.action, observation.before)] += 1
         for entity, attribute, value in observation.after:
             self.seen_values[(entity, attribute)].add(value)
+        self._cache.clear()
 
-    def explore(self, world: Any, steps: int = 400,
-                seed: int = 0, episode_steps: int = EPISODE_STEPS) -> "Explorer":
+    def explore(self, world: Any, steps: int = 400, seed: int = 0,
+                episode_steps: int = EPISODE_STEPS,
+                policy: str = DEFAULT_POLICY) -> "Explorer":
         """Act in the world, spreading attempts evenly over the actions.
 
-        Even coverage rather than a clever policy: with a handful of
-        actions the cheap thing to get right is that nothing is left
-        untried, and an explorer that concentrated on what already worked
-        would never produce the failures a precondition is established by.
+        Even coverage: with a handful of actions the cheap thing to get
+        right is that nothing is left untried. It looks like the policy
+        with no idea what it is doing, and it beat the one that did --
+        see DEFAULT_POLICY above for the number.
+
+        `BY_INFORMATION` prices each attempt by what it would teach in the
+        situation the explorer is actually in. It is available, it is
+        measured, and it is worse; passing it is how the comparison is
+        re-run rather than how the explorer is improved.
         """
         rng = random.Random(seed)
         actions = list(world.actions)
@@ -135,8 +200,11 @@ class Explorer:
             if episode_steps and step and step % episode_steps == 0:
                 world.reset()
                 self.note(world.observe())
-            fewest = min(tried.values())
-            action = rng.choice([a for a in actions if tried[a] == fewest])
+            if policy == BY_COVERAGE:
+                fewest = min(tried.values())
+                action = rng.choice([a for a in actions if tried[a] == fewest])
+            else:
+                action, _, _ = self.choose(actions, world.situation(), rng)
             tried[action] += 1
             self.record(world.act(action))
         self.note(world.observe())
@@ -151,11 +219,87 @@ class Explorer:
         cannot be **established** from this record, which is a different
         statement and the only one the evidence supports.
         """
-        return {key for key, values in self.seen_values.items()
-                if len(values) > 1}
+        cached = self._cache.get("learnable")
+        if cached is None:
+            cached = {key for key, values in self.seen_values.items()
+                      if len(values) > 1}
+            self._cache["learnable"] = cached
+        return cached
 
     def _for(self, action: str) -> List[Attempt]:
-        return [a for a in self.attempts if a.action == action]
+        by_action = self._cache.get("by_action")
+        if by_action is None:
+            by_action = defaultdict(list)
+            for attempt in self.attempts:
+                by_action[attempt.action].append(attempt)
+            self._cache["by_action"] = by_action
+        return by_action[action]
+
+    # ---------- what an attempt would be worth ----------
+
+    def value_of(self, action: str,
+                 situation: Situation) -> Tuple[float, str]:
+        """What attempting this here would teach, and why that much.
+
+        Priced against the situation the explorer is actually in, which is
+        the whole difference from taking turns: the same action is worth a
+        great deal in one state and nothing in another, and a policy that
+        cannot see the difference never visits the state that would settle
+        a question.
+        """
+        attempts = self._for(action)
+        if not attempts:
+            return (UNTRIED, "ещё не пробовали")
+
+        repeated = self.repeats.get((action, situation), 0)
+        damping = 1.0 / (1.0 + repeated)
+
+        successes = [a for a in attempts if a.succeeded]
+        if not successes:
+            # Whether this is possible at all is a bigger question than
+            # which conditions it needs, and it stays open until either a
+            # success or enough failures in enough different situations.
+            return (POSSIBILITY * damping, "ни одной удачи — возможно ли вообще")
+
+        candidates = self._candidates(action)
+        missing = [f for f in candidates if f not in situation]
+        if len(missing) == 1:
+            settled = self._discriminated(action, candidates)
+            if missing[0] in settled:
+                return (SETTLED * damping,
+                        "это условие уже различено отказом")
+            return (DISCRIMINATING * damping,
+                    f"ровно одно условие ложно: {missing[0][0]}."
+                    f"{missing[0][1]} — отказ подтвердит его, удача опровергнет")
+        if len(missing) > 1:
+            return (ELIMINATING * damping,
+                    f"ложных условий {len(missing)}: удача снимет все, "
+                    f"отказ не объяснит ничего")
+
+        _, regularities = self._effects(action)
+        if regularities:
+            return (UNRESOLVED_REGULARITY * damping,
+                    "эффект наступает не всегда — доля ещё не устоялась")
+        return (SETTLED * damping, "все условия выполнены — подтверждать нечего")
+
+    def choose(self, actions: Sequence[str], situation: Situation,
+               rng: random.Random) -> Tuple[str, float, str]:
+        """The attempt worth making here, or the least-tried one.
+
+        The fallback is not a failure of the policy. When nothing on offer
+        clears the floor, what is left to learn is not in this situation,
+        and touching the least-tried action is how the explorer gets out
+        of it.
+        """
+        priced = [(self.value_of(a, situation), a) for a in actions]
+        (best, why), action = max(priced, key=lambda row: (row[0][0], row[1]))
+        if best >= MIN_ATTEMPT_VALUE:
+            top = [a for (v, _), a in priced if v >= best - 1e-9]
+            return (rng.choice(top), best, why)
+        counts = {a: len(self._for(a)) for a in actions}
+        fewest = min(counts.values())
+        return (rng.choice([a for a in actions if counts[a] == fewest]),
+                best, "ничего не проходит порог — беру наименее испробованное")
 
     def _candidates(self, action: str) -> Set[Tuple[str, str, Any]]:
         """Facts that held in every success. Weak on their own."""
