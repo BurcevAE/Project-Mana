@@ -616,3 +616,76 @@ def stats(rows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
                             if thoughts else 0.0),
             "results": results}
     return out
+
+
+def rejudge(depth: int = 0, only: str = "",
+            on_game: Optional[Callable[[str, str, str], None]] = None
+            ) -> Dict[str, Any]:
+    """Judge every recorded game again, without playing anything.
+
+    `chess_judge` promised this and did not provide it: twice the record
+    has needed it -- once because the engine was in the other data root,
+    once because the process holding the old code had been waiting for
+    challenges since before the fix -- and both times it took a script
+    nobody else had.
+
+    Nothing is replayed and nothing is re-decided. The moves are the
+    moves that were played; only the verdict changes, and the record says
+    at what depth it was redone.
+
+    A backup is written first, and a game that finished while this ran is
+    kept rather than overwritten -- the bot appends to the same file.
+    """
+    from . import chess_judge
+
+    path = games_path()
+    rows = recorded()
+    if not rows:
+        return {"games": 0, "judged": 0, "path": str(path)}
+    depth = int(depth) or chess_judge.JUDGE_DEPTH
+    engine = chess_judge.engine_path()
+    if not engine:
+        return {"games": len(rows), "judged": 0, "path": str(path),
+                "error": "Stockfish не найден — пересуживать нечем"}
+
+    backup = path.with_suffix(f".before-depth{depth}.jsonl")
+    backup.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+
+    import chess
+
+    done = 0
+    with chess_judge.Judge(depth=depth) as judge:
+        for row in rows:
+            if only and str(row.get("source", LIVE)) != only:
+                continue
+            was = sorted({str(j.get("judged_by", "?"))
+                          for j in row.get("judged", [])}) or ["-"]
+            us = row.get("us") == "white"
+            start = row.get("initial_fen", "startpos")
+            board = (chess.Board() if start in ("", "startpos")
+                     else chess.Board(start))
+            fresh: List[Dict[str, Any]] = []
+            for ply, uci in enumerate(row.get("moves", []), start=1):
+                try:
+                    move = chess.Move.from_uci(uci)
+                except ValueError:
+                    break
+                if board.turn == us:
+                    fresh.append(judge.judge_move(board, move, ply).as_dict())
+                board.push(move)
+            row["judged"] = fresh
+            row["judged_again_at_depth"] = depth
+            done += 1
+            if on_game is not None:
+                on_game(str(row.get("game", "")), ", ".join(was), "stockfish")
+
+    # A game may have finished while this ran; the bot appends to the same
+    # file, and a whole-file rewrite would drop it.
+    seen = {str(row.get("game", "")) for row in rows}
+    arrived = [row for row in recorded() if str(row.get("game", "")) not in seen]
+    with path.open("w", encoding="utf-8") as handle:
+        for row in rows + arrived:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    return {"games": len(rows), "judged": done, "depth": depth,
+            "kept_arrivals": len(arrived), "path": str(path),
+            "backup": str(backup), "engine": str(engine)}

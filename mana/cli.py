@@ -389,6 +389,34 @@ def _plural(count: int, one: str, few: str, many: str) -> str:
     return one if last == 1 else many
 
 
+def _chess_rejudge(depth: int) -> int:
+    """Judge the record again, deeper, without playing anything.
+
+    Needed twice already, both times because a run had judged with the
+    material fallback and nobody noticed until the record was read. A
+    number whose source cannot be told apart is a number nobody can
+    compare, and `judged_by` is what made both catchable.
+    """
+    from .cognition import chess_bot
+
+    def said(game, was, now):
+        print(f"  {game}: {was} -> {now}")
+
+    print("Пересуживаю записанные партии. Ходы те же — меняется только приговор.")
+    out = chess_bot.rejudge(depth, on_game=said)
+    if out.get("error"):
+        print(out["error"])
+        return 1
+    if not out["games"]:
+        print(f"Записей нет: {out['path']}")
+        return 0
+    print(f"пересужено {out['judged']} из {out['games']} на глубине {out['depth']}")
+    if out["kept_arrivals"]:
+        print(f"партий пришло во время работы и сохранено: {out['kept_arrivals']}")
+    print(f"копия до пересуживания: {out['backup']}")
+    return 0
+
+
 def api_errors():
     """Lichess refusing is a normal outcome with a message, not a crash.
 
@@ -1143,6 +1171,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tried", action="store_true",
                         help="Что уже проверяли и чем это кончилось "
                              "(чтобы не повторять эксперимент заново)")
+    parser.add_argument("--chess-rejudge", nargs="?", const=0, type=int,
+                        metavar="ГЛУБИНА", dest="chess_rejudge",
+                        help="Пересудить записанные партии Stockfish заново, "
+                             "не переигрывая их")
     parser.add_argument("--chess", nargs="?", const=0, type=int, metavar="N",
                         help="Сыграть N партий с собой в окне наблюдения "
                              "(доска, размышления, оценка судьи); "
@@ -1252,6 +1284,8 @@ def main() -> int:
     if args.tried:
         return _show_tried()
 
+    if args.chess_rejudge is not None:
+        return _chess_rejudge(int(args.chess_rejudge))
     if args.chess is not None:
         return _chess(int(args.chess), int(args.watch_port))
     if args.lichess_token:

@@ -14,6 +14,7 @@ disagreeing with the board Lichess believes in.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any, Dict, Iterator, List
 
 import pytest
@@ -585,3 +586,103 @@ def test_no_record_is_an_empty_answer_not_a_crash(tmp_path, monkeypatch):
     monkeypatch.setattr(chess_bot, "games_path", lambda: tmp_path / "nope.jsonl")
     assert chess_bot.recorded() == []
     assert chess_bot.stats()["games"] == 0
+
+
+# --------------------------------------------------------------------------
+# judging the record again, without playing it again
+# --------------------------------------------------------------------------
+
+def _recorded(tmp_path, monkeypatch, rows):
+    import json
+
+    path = tmp_path / "games.jsonl"
+    path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n"
+                            for r in rows), encoding="utf-8")
+    monkeypatch.setattr(chess_bot, "games_path", lambda: path)
+    return path
+
+
+def _played(name="g1", source=chess_bot.LIVE):
+    """1.e4 e5 2.Nf3 Nc6, judged badly on purpose."""
+    return {"game": name, "source": source, "us": "white",
+            "initial_fen": "startpos", "status": "draw", "winner": "",
+            "moves": ["e2e4", "e7e5", "g1f3", "b8c6"],
+            "thoughts": [{"ply": 1, "margin": 0.0, "close_call": True,
+                          "forced": False, "considered": [["e4", 0.0]]}],
+            "judged": [{"ply": 1, "move": "e4", "loss": 0.0,
+                        "judged_by": "material"}]}
+
+
+def test_rejudging_replays_nothing_and_changes_only_the_verdict(tmp_path, monkeypatch):
+    """`chess_judge` promised this in its docstring and provided no way
+    to do it; it has been needed twice, both times because a run had
+    judged with the material fallback."""
+    if not __import__("mana.cognition.chess_judge", fromlist=["x"]).available():
+        pytest.skip("Stockfish не установлен")
+    path = _recorded(tmp_path, monkeypatch, [_played()])
+    out = chess_bot.rejudge(depth=6)
+    assert out["judged"] == 1 and not out.get("error")
+
+    rows = chess_bot.recorded()
+    assert rows[0]["moves"] == ["e2e4", "e7e5", "g1f3", "b8c6"]   # untouched
+    assert rows[0]["judged_again_at_depth"] == 6
+    assert {j["judged_by"] for j in rows[0]["judged"]} == {"stockfish"}
+    assert len(rows[0]["judged"]) == 2          # both of white's moves
+    assert Path(out["backup"]).exists()
+
+
+def test_a_game_that_finishes_mid_rejudge_is_not_lost(tmp_path, monkeypatch):
+    """The bot appends to the same file, and a whole-file rewrite would
+    drop whatever arrived while this ran."""
+    import json
+
+    path = _recorded(tmp_path, monkeypatch, [_played("old")])
+
+    class _Arriving:
+        """A judge that appends a new game the first time it is used."""
+        kind = "stockfish"
+
+        def __init__(self, *a, **k):
+            self.first = True
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+
+        def judge_move(self, board, move, ply=0):
+            if self.first:
+                with path.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(_played("arrived"),
+                                            ensure_ascii=False) + "\n")
+                self.first = False
+            from mana.cognition.chess_judge import Judged
+
+            return Judged(ply=ply, fen="", move=board.san(move), loss=0.0,
+                          judged_by="stockfish")
+
+    from mana.cognition import chess_judge
+
+    monkeypatch.setattr(chess_judge, "Judge", _Arriving)
+    monkeypatch.setattr(chess_judge, "engine_path", lambda: Path("stockfish"))
+    out = chess_bot.rejudge(depth=6)
+    assert out["kept_arrivals"] == 1
+    assert {r["game"] for r in chess_bot.recorded()} == {"old", "arrived"}
+
+
+def test_rejudging_without_an_engine_refuses_instead_of_guessing(tmp_path, monkeypatch):
+    """Silently falling back to material is what produced two records
+    that had to be judged again."""
+    _recorded(tmp_path, monkeypatch, [_played()])
+    from mana.cognition import chess_judge
+
+    monkeypatch.setattr(chess_judge, "engine_path", lambda: None)
+    out = chess_bot.rejudge(depth=6)
+    assert out["judged"] == 0 and "Stockfish не найден" in out["error"]
+    assert chess_bot.recorded()[0]["judged"][0]["judged_by"] == "material"
+
+
+def test_rejudging_an_empty_record_is_an_answer(tmp_path, monkeypatch):
+    monkeypatch.setattr(chess_bot, "games_path", lambda: tmp_path / "none.jsonl")
+    assert chess_bot.rejudge(depth=6)["games"] == 0
