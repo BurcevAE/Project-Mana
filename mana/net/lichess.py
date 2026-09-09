@@ -142,8 +142,18 @@ def upgrade_command() -> str:
     the person whose account it is makes the decision with the command in
     front of them.
     """
-    return ('curl -X POST https://lichess.org/api/bot/account/upgrade '
-            '-H "Authorization: Bearer <ВАШ_ТОКЕН>"')
+    # curl.exe, not curl. In PowerShell `curl` is an alias for
+    # Invoke-WebRequest, which takes a dictionary for -Headers and fails
+    # on a string -- so the plain form is a command that cannot run in
+    # the shell most Windows users are typing into. Found by handing
+    # someone the plain form.
+    #
+    # And no angle brackets around the placeholder: given
+    # "Bearer <ВАШ_ТОКЕН>" the natural substitution replaces the whole
+    # bracketed phrase and drops the word Bearer, which Lichess then
+    # rejects for a reason that looks like a bad token.
+    return ('curl.exe -X POST https://lichess.org/api/bot/account/upgrade '
+            '-H "Authorization: Bearer ВАШ_ТОКЕН"')
 
 
 @dataclass

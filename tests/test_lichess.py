@@ -53,9 +53,18 @@ def test_building_the_upgrade_path_by_hand_is_refused():
 
 
 def test_the_upgrade_command_is_something_a_person_can_run():
+    """Runnable in the shell they are actually in.
+
+    `curl` in PowerShell is an alias for Invoke-WebRequest, which cannot
+    take a string for -Headers: the plain form is a parse error, not a
+    request. And the placeholder carries no angle brackets, because
+    substituting into "Bearer <ВАШ_ТОКЕН>" tends to take the word Bearer
+    with it and produce a 401 that looks like a bad token.
+    """
     text = lichess.upgrade_command()
     assert "POST" in text and lichess.UPGRADE_PATH in text
-    assert "<ВАШ_ТОКЕН>" in text                # never a real token
+    assert "curl.exe" in text
+    assert "Bearer ВАШ_ТОКЕН" in text and "<" not in text
 
 
 # --------------------------------------------------------------------------
