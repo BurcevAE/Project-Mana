@@ -394,12 +394,20 @@ def disagreement(first: Change, second: Change,
 
 def duel(change: Change, games: int = GAMES_PER_EXPERIMENT, depth: int = 2,
          seed: int = 0, on_game: Optional[Callable[[int, str], None]] = None,
-         stop: Any = None) -> Duel:
+         stop: Any = None,
+         control: Optional[Callable[[], Any]] = None) -> Duel:
     """Play the changed player against the unchanged one.
 
     Colours alternate, so the first move is not what is being measured.
     The two differ in exactly one tie-break rule: same depth, same
     evaluation, same shuffle everywhere else.
+
+    `control` builds the player the candidate is measured against. It
+    defaults to the player as written, which is right for the first
+    change and wrong for every one after it -- once something is in
+    force, the question is whether the candidate beats *that*, not what
+    came before it. Passed in rather than looked up, so this module still
+    knows nothing about versions.
     """
     import chess
 
@@ -410,8 +418,9 @@ def duel(change: Change, games: int = GAMES_PER_EXPERIMENT, depth: int = 2,
         if stop is not None and stop.is_set():
             break
         changed_is_white = number % 2 == 0
-        base_white = SearchPlayer(depth=depth, trace=True)
-        base_black = SearchPlayer(depth=depth, trace=True)
+        make = control or (lambda: SearchPlayer(depth=depth, trace=True))
+        base_white = make()
+        base_black = make()
         white = Tuned(base_white, change) if changed_is_white else base_white
         black = base_black if changed_is_white else Tuned(base_black, change)
         rng = random.Random(seed + number)
@@ -466,7 +475,8 @@ def verdict_for(measurement: Dict[str, Any]) -> str:
 
 def record(change: Change, result: Duel, depth: int,
            questions: int = 1, ledger: Optional[Any] = None,
-           reached: Optional[Dict[str, Any]] = None
+           reached: Optional[Dict[str, Any]] = None,
+           control_name: str = "", candidate_name: str = ""
            ) -> ledger_mod.Finding:
     """Write the experiment down, with the finding it came from.
 
@@ -494,6 +504,8 @@ def record(change: Change, result: Duel, depth: int,
         measurement=measurement,
         conditions={"games": result.games, "search_depth": depth,
                     "opponent": "тот же игрок без изменения",
+                    "control": control_name or "v0-base",
+                    "candidate": candidate_name or "v0-base+change",
                     "version": PRODUCT_VERSION, "questions_asked": questions},
         note=_note(change, measurement, reached),
         version=PRODUCT_VERSION)

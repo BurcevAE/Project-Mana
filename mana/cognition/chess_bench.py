@@ -311,6 +311,10 @@ class Bench:
         #: The experiment under way: (change, reach, accumulated Duel).
         #: One at a time -- a budget split between two answers neither.
         self._trying: Optional[Any] = None
+        #: An adoption awaiting its fresh re-test: (adoption, Duel). Its
+        #: duel is a different measurement, run after the adoption, which
+        #: is what makes PROVISIONAL mean anything.
+        self._confirming: Optional[Any] = None
         #: Positions from the record where the search rated moves equal,
         #: and what each lever can move in them. Computed once per run:
         #: it costs a search per position and does not change while the
@@ -652,6 +656,70 @@ class Bench:
             events.emit(events.STATUS, f"вывод: {line}",
                         chess={"kind": "finding", "text": line})
 
+    def _control(self) -> Any:
+        """A fresh instance of the confirmed composition.
+
+        The candidate is measured against what is in force, not against
+        the player as written: after one confirmed change those are two
+        different players, and comparing with the wrong one answers a
+        question nobody asked.
+        """
+        from . import chess_version
+
+        return chess_version.player(chess_bot_default(),
+                                    chess_version.confirmed())
+
+    def _confirm_or_revert(self) -> str:
+        """Re-test a provisional adoption, and decide on the result.
+
+        A separate duel from the one that justified the change: run now,
+        against the same control, and recorded under its own finding. The
+        refusals in `chess_version.confirm` check both -- identity and
+        time -- so this cannot accidentally confirm itself.
+        """
+        from . import chess_action, chess_bot, chess_version
+
+        adoption, sofar = self._confirming
+        change = chess_action.Change(property=adoption.property,
+                                     direction=adoption.direction,
+                                     from_finding=adoption.causal_finding)
+        fresh = chess_action.duel(change, games=DUEL_SLICE,
+                                  seed=int(adoption.at) + sofar.games * 31,
+                                  stop=self._stop, control=self._control)
+        sofar.games += fresh.games
+        sofar.changed_won += fresh.changed_won
+        sofar.unchanged_won += fresh.unchanged_won
+        sofar.drawn += fresh.drawn
+        if (sofar.decided < chess_version.CONFIRM_GAMES
+                and sofar.games < chess_action.GAMES_PER_EXPERIMENT):
+            return (f"перепроверка «{adoption.property}»: {sofar.games} партий, "
+                    f"{sofar.decided} решённых из "
+                    f"{chess_version.CONFIRM_GAMES} нужных")
+        finding = chess_action.record(
+            change, sofar, depth=chess_bot.PLAY_DEPTH,
+            reached={"share": adoption.reach, "ties": 0,
+                     "varies": 1 if adoption.reach else 0},
+            control_name=chess_version.confirmed_fingerprint(),
+            candidate_name=chess_version.fingerprint())
+        self._confirming = None
+        measured = chess_action.measure(sofar)
+        if (finding.verdict == chess_action.ACCEPTED
+                and sofar.decided >= chess_version.CONFIRM_GAMES):
+            chess_version.confirm(adoption, trials=sofar.decided,
+                                  effect=float(measured.get("effect") or 0.0),
+                                  finding_id=finding.finding_id,
+                                  created=finding.created)
+            said = f"подтверждено: {adoption.property}"
+        else:
+            chess_version.revert(
+                adoption,
+                f"перепроверка дала {finding.verdict} на {sofar.decided} "
+                f"решённых: {finding.finding_id}")
+            said = f"откат: {adoption.property} ({finding.verdict})"
+        events.emit(events.STATUS, f"версия: {said}",
+                    chess={"kind": "finding", "text": said})
+        return said
+
     def _experiment(self) -> str:
         """Play a slice of one derived change against the unchanged player.
 
@@ -660,7 +728,20 @@ class Bench:
         first six experiments were spent on levers that could not change a
         move, which is the mistake this ranking exists to avoid.
         """
-        from . import chess_action, chess_bot, chess_outcome
+        from . import chess_action, chess_bot, chess_outcome, chess_version
+
+        # A provisional adoption is re-tested before anything new is
+        # tried: two untested changes measured together answer about
+        # neither, and one of them is already playing.
+        if self._confirming is None:
+            waiting = chess_version.provisional()
+            if waiting:
+                self._confirming = (waiting[0],
+                                    chess_action.Duel(change=chess_action.Change(
+                                        property=waiting[0].property,
+                                        direction=waiting[0].direction)))
+        if self._confirming is not None:
+            return self._confirm_or_revert()
 
         if self._trying is None:
             self._trying = self._pick()
@@ -669,23 +750,62 @@ class Bench:
         change, reached, sofar = self._trying
         slice_result = chess_action.duel(change, games=DUEL_SLICE,
                                          seed=sofar.games * 977,
-                                         stop=self._stop)
+                                         stop=self._stop,
+                                         control=self._control)
         sofar.games += slice_result.games
         sofar.changed_won += slice_result.changed_won
         sofar.unchanged_won += slice_result.unchanged_won
         sofar.drawn += slice_result.drawn
         if (sofar.decided >= chess_action.MIN_PAIRED_TRIALS
                 or sofar.games >= chess_action.GAMES_PER_EXPERIMENT):
-            finding = chess_action.record(change, sofar, depth=chess_bot.PLAY_DEPTH,
-                                          questions=max(1, len(self._reach)),
-                                          reached=reached)
+            finding = chess_action.record(
+                change, sofar, depth=chess_bot.PLAY_DEPTH,
+                questions=max(1, len(self._reach)), reached=reached,
+                control_name=chess_version.confirmed_fingerprint(),
+                candidate_name=f"{chess_version.confirmed_fingerprint()}"
+                               f"+{change.property}")
             self._trying = None
             events.emit(events.STATUS, f"опыт: {finding.verdict}: {finding.note}",
                         chess={"kind": "finding", "text": finding.note})
+            # Where the verdict becomes a decision. Not in `record`: that
+            # stores a finding, and adopting there would be a side effect
+            # of writing to a ledger.
+            if finding.verdict == chess_action.ACCEPTED:
+                return self._adopt(change, reached, sofar, finding)
             return f"опыт закончен: {finding.verdict}"
         return (f"опыт «{change.property}»: {sofar.games} партий, "
                 f"{sofar.decided} решённых из "
                 f"{chess_action.MIN_PAIRED_TRIALS} нужных")
+
+    def _adopt(self, change: Any, reached: Dict[str, Any], result: Any,
+               finding: Any) -> str:
+        """ACCEPTED becomes a provisional version, never a confirmed one.
+
+        The duel that justified it ran before the change existed. What it
+        earns is the right to play and be re-tested, which is the whole
+        of what PROVISIONAL means.
+        """
+        from . import chess_action, chess_version
+
+        measured = chess_action.measure(result)
+        try:
+            adoption = chess_version.adopt({
+                "change": change,
+                "causal_finding": finding.finding_id,
+                "observational_finding": change.from_finding,
+                "reach": reached["share"], "trials": result.decided,
+                "verdict": finding.verdict,
+                "effect": float(measured.get("effect") or 0.0),
+                "note": finding.note})
+        except chess_version.Refused as exc:
+            return f"не принято: {exc}"
+        self._confirming = (adoption, chess_action.Duel(change=change))
+        events.emit(events.WARNING,
+                    f"принято условно: {adoption.describe()}. Играет "
+                    f"следующие партии, база остаётся "
+                    f"{chess_version.confirmed_fingerprint()}",
+                    chess={"kind": "finding", "text": adoption.describe()})
+        return f"принято условно: {adoption.property}"
 
     def _pick(self) -> Optional[Any]:
         """The next experiment, or nothing to try.
@@ -720,6 +840,12 @@ class Bench:
             known = book.already_tried(chess_action.QUESTION,
                                        change.as_dict(), {})
             if known and known["match"] == "exact":
+                continue
+            from . import chess_version
+
+            if any(row.property == change.property
+                   and row.direction == change.direction
+                   for row in chess_version.in_force()):
                 continue
             if best is None or reached["share"] > best[1]["share"]:
                 best = (change, reached)

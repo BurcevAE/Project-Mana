@@ -243,8 +243,20 @@ def test_nothing_about_the_player_changes_between_games():
     # an unmodified player (that is how reach is measured), and it may run
     # a modified one inside an experiment. What it may never do is put a
     # modified player into a game the ladder counts, or adopt anything.
-    for adapting in ("adopt(", "install(", "policy.adopt", "Tuned("):
+    for adapting in ("install(", "policy.adopt", "Tuned("):
         assert adapting not in source
+    # `adopt(` is now legitimate here -- that is the whole of the last
+    # step -- but only through the version store, and only to
+    # PROVISIONAL. The invariant this test has always protected is
+    # narrower than the word: the ladder's baseline must not move
+    # unnoticed. So every adoption goes through `chess_version`, and the
+    # ladder is built on the confirmed composition alone.
+    # `.adopt(` and not `adopt(`: the bench has a method of its own
+    # called `_adopt`, and the invariant is about who is asked, not about
+    # the word.
+    assert source.count(".adopt(") == source.count("chess_version.adopt(") == 1
+    assert "chess_version.confirmed()" in source
+    assert "player=lambda: chess_version.player(" in source
     # And the modified player is built only inside the duel -- twice
     # there, once per colour, so that the change is not itself a colour
     # advantage.
@@ -813,3 +825,208 @@ def test_the_ladder_is_not_reset_while_the_baseline_holds(tmp_path, monkeypatch)
     _win(bench.ladder, 5)
     bench._check_subject()
     assert bench.ladder.wins == 5
+
+
+# --------------------------------------------------------------------------
+# the control is what is in force, and the cycle runs itself
+# --------------------------------------------------------------------------
+
+def _bench_for(tmp_path, monkeypatch):
+    from mana.cognition import chess_version
+
+    monkeypatch.setattr(bench_mod, "state_path", lambda: tmp_path / "bench.json")
+    bot = _Bot([])
+    bench = bench_mod.Bench(client=_Client(bot), bot=bot, ladder=_ladder(),
+                            gap=0.0)
+    return bench, chess_version
+
+
+def _accepted(decided=40, won=34):
+    from mana.cognition import chess_action
+
+    return chess_action.Duel(change=chess_action.Change("pawn_moves",
+                                                        chess_action.LESS),
+                             games=decided + 6, changed_won=won,
+                             unchanged_won=decided - won, drawn=6)
+
+
+def test_the_control_is_the_confirmed_composition_not_the_bare_player(
+        tmp_path, monkeypatch):
+    """After one confirmed change those are two different players, and
+    comparing with the wrong one answers a question nobody asked."""
+    from mana.cognition import chess_action, chess_version
+
+    bench, _ = _bench_for(tmp_path, monkeypatch)
+    first = chess_version.adopt({
+        "change": chess_action.Change("captures", chess_action.MORE),
+        "causal_finding": "c1", "observational_finding": "o1",
+        "reach": 0.5, "trials": 40, "verdict": "ACCEPTED"})
+    chess_version.confirm(first, trials=chess_version.CONFIRM_GAMES,
+                          effect=0.7, finding_id="fresh-1",
+                          created=first.at + 60)
+
+    control = bench._control()
+    assert getattr(control, "change", None) is not None
+    assert control.change.property == "captures"     # not a bare player
+
+
+def test_the_control_does_not_fall_back_to_v0_after_a_second_adoption(
+        tmp_path, monkeypatch):
+    from mana.cognition import chess_action, chess_version
+
+    bench, _ = _bench_for(tmp_path, monkeypatch)
+    first = chess_version.adopt({
+        "change": chess_action.Change("captures", chess_action.MORE),
+        "causal_finding": "c1", "observational_finding": "o1",
+        "reach": 0.5, "trials": 40, "verdict": "ACCEPTED"})
+    chess_version.confirm(first, trials=chess_version.CONFIRM_GAMES,
+                          effect=0.7, finding_id="fresh-1",
+                          created=first.at + 60)
+    settled = chess_version.confirmed_fingerprint()
+
+    chess_version.adopt({
+        "change": chess_action.Change("king_moves", chess_action.LESS),
+        "causal_finding": "c2", "observational_finding": "o2",
+        "reach": 0.4, "trials": 40, "verdict": "ACCEPTED"})
+    assert chess_version.confirmed_fingerprint() == settled
+    assert bench._control().change.property == "captures"
+
+
+def test_an_accepted_experiment_adopts_provisionally(tmp_path, monkeypatch):
+    """ACCEPTED earns the right to play and be re-tested. Nothing more."""
+    from mana.cognition import chess_action, chess_version
+
+    bench, _ = _bench_for(tmp_path, monkeypatch)
+    change = chess_action.Change("pawn_moves", chess_action.LESS,
+                                 from_finding="obs-1")
+    result = _accepted()
+    finding = chess_action.record(change, result, depth=2,
+                                  reached={"share": 0.6, "ties": 400,
+                                           "varies": 240})
+    assert finding.verdict == "ACCEPTED"
+    said = bench._adopt(change, {"share": 0.6, "ties": 400, "varies": 240},
+                        result, finding)
+
+    assert "принято условно" in said
+    assert chess_version.provisional()[0].property == "pawn_moves"
+    assert chess_version.confirmed() == []
+    assert chess_version.confirmed_fingerprint() == "v0-base"
+    assert bench._confirming is not None      # a re-test is queued
+
+
+def test_the_adoption_carries_both_findings(tmp_path, monkeypatch):
+    from mana.cognition import chess_action, chess_version
+
+    bench, _ = _bench_for(tmp_path, monkeypatch)
+    change = chess_action.Change("pawn_moves", chess_action.LESS,
+                                 from_finding="obs-7")
+    result = _accepted()
+    finding = chess_action.record(change, result, depth=2,
+                                  reached={"share": 0.6, "ties": 400,
+                                           "varies": 240})
+    bench._adopt(change, {"share": 0.6, "ties": 400, "varies": 240},
+                 result, finding)
+    adopted = chess_version.provisional()[0]
+    assert adopted.observational_finding == "obs-7"
+    assert adopted.causal_finding == finding.finding_id
+
+
+def test_a_fresh_re_test_confirms(tmp_path, monkeypatch):
+    from mana.cognition import chess_action, chess_version
+
+    bench, _ = _bench_for(tmp_path, monkeypatch)
+    adopted = chess_version.adopt({
+        "change": chess_action.Change("pawn_moves", chess_action.LESS),
+        "causal_finding": "old-duel", "observational_finding": "o1",
+        "reach": 0.6, "trials": 40, "verdict": "ACCEPTED"})
+    bench._confirming = (adopted, chess_action.Duel(
+        change=chess_action.Change("pawn_moves", chess_action.LESS)))
+    monkeypatch.setattr(chess_action, "duel",
+                        lambda *a, **kw: _accepted(decided=40, won=36))
+
+    said = bench._confirm_or_revert()
+    assert "подтверждено" in said
+    assert chess_version.confirmed()[0].property == "pawn_moves"
+    assert chess_version.confirmed_fingerprint() != "v0-base"
+    assert bench._confirming is None
+
+
+def test_a_failed_re_test_reverts_to_the_previous_confirmed(tmp_path, monkeypatch):
+    from mana.cognition import chess_action, chess_version
+
+    bench, _ = _bench_for(tmp_path, monkeypatch)
+    first = chess_version.adopt({
+        "change": chess_action.Change("captures", chess_action.MORE),
+        "causal_finding": "c1", "observational_finding": "o1",
+        "reach": 0.5, "trials": 40, "verdict": "ACCEPTED"})
+    chess_version.confirm(first, trials=chess_version.CONFIRM_GAMES,
+                          effect=0.7, finding_id="fresh-1",
+                          created=first.at + 60)
+    settled = chess_version.confirmed_fingerprint()
+
+    second = chess_version.adopt({
+        "change": chess_action.Change("king_moves", chess_action.LESS),
+        "causal_finding": "c2", "observational_finding": "o2",
+        "reach": 0.4, "trials": 40, "verdict": "ACCEPTED"})
+    bench._confirming = (second, chess_action.Duel(
+        change=chess_action.Change("king_moves", chess_action.LESS)))
+    # a coin toss: no effect
+    monkeypatch.setattr(chess_action, "duel",
+                        lambda *a, **kw: _accepted(decided=40, won=20))
+
+    said = bench._confirm_or_revert()
+    assert "откат" in said
+    assert chess_version.confirmed_fingerprint() == settled
+    assert bench._control().change.property == "captures"
+    assert len(chess_version.history()) == 2      # nothing erased
+
+
+def test_the_old_duel_cannot_confirm_the_change_it_created(tmp_path, monkeypatch):
+    from mana.cognition import chess_action, chess_version
+
+    _bench_for(tmp_path, monkeypatch)
+    adopted = chess_version.adopt({
+        "change": chess_action.Change("pawn_moves", chess_action.LESS),
+        "causal_finding": "old-duel", "observational_finding": "o1",
+        "reach": 0.6, "trials": 40, "verdict": "ACCEPTED"})
+    with pytest.raises(chess_version.Refused):
+        chess_version.confirm(adopted, trials=chess_version.CONFIRM_GAMES,
+                              effect=0.7, finding_id="old-duel",
+                              created=adopted.at + 60)
+    assert chess_version.confirmed() == []
+
+
+def test_a_provisional_adoption_is_re_tested_before_anything_new(
+        tmp_path, monkeypatch):
+    """Two untested changes measured together answer about neither, and
+    one of them is already playing."""
+    from mana.cognition import chess_action, chess_version
+
+    bench, _ = _bench_for(tmp_path, monkeypatch)
+    chess_version.adopt({
+        "change": chess_action.Change("pawn_moves", chess_action.LESS),
+        "causal_finding": "c1", "observational_finding": "o1",
+        "reach": 0.6, "trials": 40, "verdict": "ACCEPTED"})
+    picked = []
+    monkeypatch.setattr(bench, "_pick", lambda: picked.append(1) or None)
+    monkeypatch.setattr(bench, "_confirm_or_revert", lambda: "перепроверка")
+    assert bench._experiment() == "перепроверка"
+    assert picked == []                      # nothing new was proposed
+
+
+def test_a_change_already_in_force_is_not_proposed_again(tmp_path, monkeypatch):
+    from mana.cognition import chess_action, chess_version
+
+    bench, _ = _bench_for(tmp_path, monkeypatch)
+    adopted = chess_version.adopt({
+        "change": chess_action.Change("pawn_moves", chess_action.LESS),
+        "causal_finding": "c1", "observational_finding": "o1",
+        "reach": 0.6, "trials": 40, "verdict": "ACCEPTED"})
+    chess_version.confirm(adopted, trials=chess_version.CONFIRM_GAMES,
+                          effect=0.7, finding_id="f1", created=adopted.at + 60)
+
+    from mana.cognition import chess_outcome
+
+    monkeypatch.setattr(chess_outcome, "look", lambda *a, **kw: [])
+    bench._sides = {"g": object()}
+    assert bench._pick() is None
