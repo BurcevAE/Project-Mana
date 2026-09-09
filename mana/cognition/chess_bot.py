@@ -220,6 +220,7 @@ class Bot:
     def __init__(self, client: Optional[api.Lichess] = None,
                  player: Optional[Callable[[], Any]] = None,
                  policy: Optional[Policy] = None,
+                 composition: Optional[Callable[[], Any]] = None,
                  judge_depth: int = LIVE_JUDGE_DEPTH,
                  record: bool = True) -> None:
         self.client = client or api.Lichess()
@@ -233,6 +234,12 @@ class Bot:
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._player = player or (lambda: _default_player())
+        #: Which composition these games were played by, as (number,
+        #: name). Without it every ladder game reads as the player as
+        #: written, whatever was actually in force, and "which games
+        #: belong to which version" has no answer for the world that
+        #: matters most.
+        self._composition = composition or (lambda: (0, "v0-base"))
 
     # ---------- the outer loop ----------
 
@@ -310,7 +317,9 @@ class Bot:
     # ---------- one game ----------
 
     def _play(self, start: api.GameStart) -> None:
-        seat = Seat(game_id=start.id, opponent=start.opponent)
+        number, name = self._composition()
+        seat = Seat(game_id=start.id, opponent=start.opponent,
+                    player_version=int(number), player_composition=str(name))
         with self._lock:
             self.seats[seat.game_id] = seat
         player = self._player()

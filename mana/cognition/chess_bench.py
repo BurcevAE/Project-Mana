@@ -288,6 +288,9 @@ class Bench:
                               player=lambda: chess_version.player(
                                   chess_bot_default(),
                                   chess_version.confirmed()),
+                              composition=lambda: (
+                                  chess_version.confirmed_version(),
+                                  chess_version.confirmed_fingerprint()),
                               policy=Policy(rated=False, max_games=1,
                                             speeds=("blitz", "rapid",
                                                     "classical",
@@ -656,6 +659,31 @@ class Bench:
             events.emit(events.STATUS, f"вывод: {line}",
                         chess={"kind": "finding", "text": line})
 
+    def _say_version(self, what: str, adoption: Any, text: str,
+                     **extra: Any) -> None:
+        """One structured line per lifecycle step.
+
+        Prose alone left "which fresh check decided this" as a sentence
+        somebody would have to parse. Every field a reader needs is here:
+        the control it was measured against, the candidate it created,
+        the change, when, and what the ladder plays afterwards.
+        """
+        from . import chess_version
+
+        row = {"kind": "version", "step": what,
+               "change": f"{adoption.property}{adoption.direction:+d}",
+               "provisional_version": adoption.version,
+               "state": adoption.state,
+               "adopted_at": adoption.at,
+               "causal_finding": adoption.causal_finding,
+               "observational_finding": adoption.observational_finding,
+               "reach": adoption.reach, "trials": adoption.trials,
+               "control": chess_version.confirmed_fingerprint(),
+               "candidate": chess_version.fingerprint(),
+               "ladder_plays": chess_version.confirmed_fingerprint()}
+        row.update(extra)
+        events.emit(events.WARNING, text, chess=row)
+
     def _control(self) -> Any:
         """A fresh instance of the confirmed composition.
 
@@ -710,14 +738,30 @@ class Bench:
                                   finding_id=finding.finding_id,
                                   created=finding.created)
             said = f"подтверждено: {adoption.property}"
+            self._say_version(
+                "confirmed", chess_version.confirmed()[-1],
+                f"ПОДТВЕРЖДЕНО свежей проверкой {finding.finding_id} "
+                f"({sofar.decided} решённых, "
+                f"{float(measured.get('effect') or 0.0):.0%}): "
+                f"лестница переходит на "
+                f"{chess_version.confirmed_fingerprint()}",
+                fresh_finding=finding.finding_id,
+                fresh_decided=sofar.decided,
+                fresh_effect=measured.get("effect"))
         else:
             chess_version.revert(
                 adoption,
                 f"перепроверка дала {finding.verdict} на {sofar.decided} "
                 f"решённых: {finding.finding_id}")
             said = f"откат: {adoption.property} ({finding.verdict})"
-        events.emit(events.STATUS, f"версия: {said}",
-                    chess={"kind": "finding", "text": said})
+            self._say_version(
+                "reverted", chess_version.history()[-1],
+                f"ОТКАТ по свежей проверке {finding.finding_id} "
+                f"({finding.verdict}, {sofar.decided} решённых): лестница "
+                f"остаётся на {chess_version.confirmed_fingerprint()}",
+                fresh_finding=finding.finding_id,
+                fresh_decided=sofar.decided,
+                fresh_effect=measured.get("effect"))
         return said
 
     def _experiment(self) -> str:
@@ -800,11 +844,15 @@ class Bench:
         except chess_version.Refused as exc:
             return f"не принято: {exc}"
         self._confirming = (adoption, chess_action.Duel(change=change))
-        events.emit(events.WARNING,
-                    f"принято условно: {adoption.describe()}. Играет "
-                    f"следующие партии, база остаётся "
-                    f"{chess_version.confirmed_fingerprint()}",
-                    chess={"kind": "finding", "text": adoption.describe()})
+        self._say_version(
+            "adopted", adoption,
+            f"ПРИНЯТО УСЛОВНО: {adoption.describe()}; control "
+            f"{chess_version.confirmed_fingerprint()} → candidate "
+            f"{chess_version.fingerprint()}; причинная дуэль "
+            f"{finding.finding_id}, наблюдение {change.from_finding}; "
+            f"партии этой версии пишутся как player_version="
+            f"{adoption.version}. Лестница продолжает играть "
+            f"{chess_version.confirmed_fingerprint()}")
         return f"принято условно: {adoption.property}"
 
     def _pick(self) -> Optional[Any]:

@@ -1030,3 +1030,174 @@ def test_a_change_already_in_force_is_not_proposed_again(tmp_path, monkeypatch):
     monkeypatch.setattr(chess_outcome, "look", lambda *a, **kw: [])
     bench._sides = {"g": object()}
     assert bench._pick() is None
+
+
+# --------------------------------------------------------------------------
+# the first real adoption has to be legible without reading the code
+# --------------------------------------------------------------------------
+
+def _versions_said(bench, doing):
+    """Run `doing` and collect the structured version events it emitted."""
+    from mana import events
+
+    rows = []
+    sink = events.subscribe(
+        lambda e: rows.append(((e.data or {}).get("chess") or {}, e.text)))
+    try:
+        doing()
+    finally:
+        events.unsubscribe(sink)
+    return [(row, text) for row, text in rows if row.get("kind") == "version"]
+
+
+def test_an_adoption_says_control_candidate_change_and_time(tmp_path, monkeypatch):
+    """Questions one to four, from one line."""
+    from mana.cognition import chess_action, chess_version
+
+    bench, _ = _bench_for(tmp_path, monkeypatch)
+    change = chess_action.Change("pawn_moves", chess_action.LESS,
+                                 from_finding="obs-9")
+    result = _accepted()
+    finding = chess_action.record(change, result, depth=2,
+                                  reached={"share": 0.6, "ties": 400,
+                                           "varies": 240})
+    said = _versions_said(bench, lambda: bench._adopt(
+        change, {"share": 0.6, "ties": 400, "varies": 240}, result, finding))
+
+    assert len(said) == 1
+    row, text = said[0]
+    assert row["step"] == "adopted" and row["state"] == chess_version.PROVISIONAL
+    assert row["control"] == "v0-base"                       # 1
+    assert row["provisional_version"] == 1                   # 2
+    assert row["candidate"] != row["control"]
+    assert row["change"] == "pawn_moves-1"                   # 3
+    assert row["adopted_at"] > 0                             # 4
+    assert row["causal_finding"] == finding.finding_id       # provenance
+    assert row["observational_finding"] == "obs-9"
+    assert "ПРИНЯТО УСЛОВНО" in text and "player_version=1" in text
+    assert row["ladder_plays"] == "v0-base"                  # 7, before
+
+
+def test_a_ladder_game_records_the_composition_that_played_it(tmp_path, monkeypatch):
+    """Question five for the world that matters most: without this every
+    Lichess game reads as the player as written, whatever was in force."""
+    monkeypatch.setattr(bench_mod, "state_path", lambda: tmp_path / "bench.json")
+    bot = chess_bot.Bot(client=_Fake_for_composition(), judge_depth=0,
+                        record=False,
+                        composition=lambda: (2, "v2-abcd"))
+    bot.username = "manabot"
+    bot._play(lichess.GameStart(id="g1"))
+    seat = bot.finished[0]
+    assert seat.player_version == 2 and seat.player_composition == "v2-abcd"
+    assert seat.as_dict()["player_composition"] == "v2-abcd"
+
+
+class _Fake_for_composition:
+    """A Lichess that hands over one position and stops."""
+
+    def account(self):
+        return {"username": "manabot", "title": "BOT"}
+
+    def stream_game(self, game_id):
+        return iter([{"type": "gameFull", "id": game_id,
+                      "initialFen": "startpos",
+                      "white": {"id": "manabot", "name": "manabot"},
+                      "black": {"id": "rival", "name": "rival"},
+                      "state": {"moves": "", "status": "aborted"}}])
+
+    def move(self, game_id, uci, offering_draw=False):
+        return {"ok": True}
+
+
+def test_a_confirmation_names_the_fresh_check_that_decided_it(tmp_path, monkeypatch):
+    """Question six, and question seven after the decision."""
+    from mana.cognition import chess_action, chess_version
+
+    bench, _ = _bench_for(tmp_path, monkeypatch)
+    adopted = chess_version.adopt({
+        "change": chess_action.Change("pawn_moves", chess_action.LESS),
+        "causal_finding": "old-duel", "observational_finding": "o1",
+        "reach": 0.6, "trials": 40, "verdict": "ACCEPTED"})
+    bench._confirming = (adopted, chess_action.Duel(
+        change=chess_action.Change("pawn_moves", chess_action.LESS)))
+    monkeypatch.setattr(chess_action, "duel",
+                        lambda *a, **kw: _accepted(decided=40, won=36))
+
+    said = _versions_said(bench, bench._confirm_or_revert)
+    row, text = said[-1]
+    assert row["step"] == "confirmed"
+    assert row["fresh_finding"] and row["fresh_finding"] != "old-duel"   # 6
+    assert row["fresh_decided"] == 40
+    assert row["ladder_plays"] == chess_version.confirmed_fingerprint()  # 7
+    assert row["ladder_plays"] != "v0-base"
+    assert "ПОДТВЕРЖДЕНО" in text
+
+
+def test_a_revert_names_the_fresh_check_and_the_version_that_stays(
+        tmp_path, monkeypatch):
+    from mana.cognition import chess_action, chess_version
+
+    bench, _ = _bench_for(tmp_path, monkeypatch)
+    adopted = chess_version.adopt({
+        "change": chess_action.Change("king_moves", chess_action.LESS),
+        "causal_finding": "old-duel", "observational_finding": "o1",
+        "reach": 0.4, "trials": 40, "verdict": "ACCEPTED"})
+    bench._confirming = (adopted, chess_action.Duel(
+        change=chess_action.Change("king_moves", chess_action.LESS)))
+    monkeypatch.setattr(chess_action, "duel",
+                        lambda *a, **kw: _accepted(decided=40, won=20))
+
+    said = _versions_said(bench, bench._confirm_or_revert)
+    row, text = said[-1]
+    assert row["step"] == "reverted" and row["state"] == chess_version.REVERTED
+    assert row["fresh_finding"] and row["fresh_finding"] != "old-duel"
+    assert row["ladder_plays"] == "v0-base"
+    assert "ОТКАТ" in text
+
+
+def test_the_whole_sequence_ends_with_the_next_candidate_facing_v1(
+        tmp_path, monkeypatch):
+    """v0 confirmed → v1 provisional → fresh → v1 confirmed → the next
+    candidate is measured against v1, not v0."""
+    from mana.cognition import chess_action, chess_version
+
+    bench, _ = _bench_for(tmp_path, monkeypatch)
+    assert chess_version.confirmed_fingerprint() == "v0-base"
+
+    first = chess_action.Change("pawn_moves", chess_action.LESS,
+                                from_finding="obs-1")
+    result = _accepted()
+    finding = chess_action.record(first, result, depth=2,
+                                  reached={"share": 0.6, "ties": 400,
+                                           "varies": 240})
+    bench._adopt(first, {"share": 0.6, "ties": 400, "varies": 240},
+                 result, finding)
+    assert chess_version.confirmed_fingerprint() == "v0-base"     # not yet
+
+    monkeypatch.setattr(chess_action, "duel",
+                        lambda *a, **kw: _accepted(decided=40, won=36))
+    bench._confirm_or_revert()
+    v1 = chess_version.confirmed_fingerprint()
+    assert v1 != "v0-base"
+
+    # The next candidate's control is v1: the duel is handed a player
+    # already carrying the confirmed change.
+    control = bench._control()
+    assert getattr(control, "change", None) is not None
+    assert control.change.property == "pawn_moves"
+
+    seen = {}
+
+    def watching(change, **kw):
+        made = kw["control"]()
+        seen["control_has"] = getattr(made, "change", None)
+        return _accepted(decided=4, won=2)
+
+    monkeypatch.setattr(chess_action, "duel", watching)
+    bench._trying = (chess_action.Change("captures", chess_action.MORE),
+                     {"share": 0.5, "ties": 400, "varies": 200},
+                     chess_action.Duel(change=chess_action.Change(
+                         "captures", chess_action.MORE)))
+    bench._experiment()
+    assert seen["control_has"] is not None
+    assert seen["control_has"].property == "pawn_moves"
