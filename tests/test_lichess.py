@@ -14,6 +14,7 @@ disagreeing with the board Lichess believes in.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any, Dict, Iterator, List
 
@@ -150,14 +151,79 @@ def test_a_keep_alive_line_is_not_the_end_of_the_stream():
     assert [row["type"] for row in got] == ["challenge", "gameStart"]
 
 
-def test_rate_limiting_is_waited_out_once_not_retried_in_a_loop(monkeypatch):
+def test_a_429_is_not_retried_at_all(monkeypatch):
+    """The earlier version waited a minute and tried again, which is
+    probing the window from the inside. Lichess asks for the full minute
+    and its limits are composite rather than a fixed public window, so an
+    early second attempt can only make things worse."""
     slept: List[float] = []
     monkeypatch.setattr(lichess.time, "sleep", lambda s: slept.append(s))
-    session = _Session([_Response(status=429), _Response(payload={"ok": 1})])
+    session = _Session([_Response(status=429)])
     client = lichess.Lichess(bearer="x", session=session)
-    assert client._request("GET", "/api/account") == {"ok": 1}
-    assert len(session.calls) == 2                  # one retry, not a loop
-    assert slept and slept[0] > 0
+
+    with pytest.raises(lichess.RateLimited) as raised:
+        client._request("GET", "/api/account")
+    assert len(session.calls) == 1                  # asked once
+    assert slept == []                              # and did not sleep on it
+    assert raised.value.retry_after > 0
+
+
+def test_nothing_is_sent_while_cooling_down():
+    """And the seconds left are counted here: asking Lichess how long is
+    left would be a request against the limit that is already tripped."""
+    session = _Session([_Response(status=429)])
+    client = lichess.Lichess(bearer="x", session=session)
+    with pytest.raises(lichess.RateLimited):
+        client._request("GET", "/api/account")
+
+    left = client.cooldown_left()
+    assert 0 < left <= lichess.RATE_LIMIT_WAIT
+    with pytest.raises(lichess.RateLimited):
+        client._request("GET", "/api/account")
+    assert len(session.calls) == 1                  # nothing new was sent
+
+
+def test_a_hold_is_never_shortened():
+    """A caller that knows less than the server must not be able to talk
+    the client into asking sooner."""
+    client = lichess.Lichess(bearer="x", session=_Session([]))
+    client.hold(300.0)
+    client.hold(1.0)
+    assert client.cooldown_left() > 100.0
+
+
+def test_a_game_stream_is_not_blocked_by_the_cooldown():
+    """A stream is how a game is played, not a REST call against the
+    limit that refuses new games. Blocking it would abandon a game in
+    progress to a rate limit on starting the next one."""
+    lines = [json.dumps({"type": "gameState"}).encode()]
+    client = lichess.Lichess(bearer="x", session=_Session([_Response(lines=lines)]))
+    client.hold(600.0)
+    assert [row["type"] for row in client._stream("/api/bot/game/stream/x")] \
+        == ["gameState"]
+
+
+def test_only_one_request_goes_out_at_a_time():
+    """Lichess asks for this directly."""
+    import threading
+
+    seen = []
+
+    class _Watching(_Session):
+        def request(self, method, url, **kwargs):
+            seen.append("in")
+            time.sleep(0.05)
+            seen.append("out")
+            return _Response(payload={"ok": 1})
+
+    client = lichess.Lichess(bearer="x", session=_Watching([]))
+    threads = [threading.Thread(target=lambda: client._request("GET", "/api/account"))
+               for _ in range(3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert seen == ["in", "out"] * 3            # never two inside at once
 
 
 def test_a_rejected_token_names_the_scopes_it_needs():

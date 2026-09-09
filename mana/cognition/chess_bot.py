@@ -642,7 +642,8 @@ def stats(rows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     return out
 
 
-def rejudge(depth: int = 0, only: str = "",
+def rejudge(depth: int = 0, only: str = "", limit: int = 0,
+            stale_only: bool = True,
             on_game: Optional[Callable[[str, str, str], None]] = None
             ) -> Dict[str, Any]:
     """Judge every recorded game again, without playing anything.
@@ -672,6 +673,26 @@ def rejudge(depth: int = 0, only: str = "",
         return {"games": len(rows), "judged": 0, "path": str(path),
                 "error": "Stockfish не найден — пересуживать нечем"}
 
+    wanted = [row for row in rows
+              if (not only or str(row.get("source", LIVE)) == only)
+              and (not stale_only
+                   or any(j.get("judged_by") == chess_judge.BY_MATERIAL
+                          for j in row.get("judged", [])))]
+    # Said before the record is touched. A rewrite that leaves no line
+    # anywhere is one nobody can attribute afterwards -- which is the
+    # position this was written from, after a full re-judge appeared in
+    # the record with no caller anybody could name.
+    events.emit(events.STATUS,
+                f"пересуживаю {min(len(wanted), limit) if limit else len(wanted)}"
+                f" из {len(rows)} партий на глубине {depth}: {path}",
+                chess={"kind": "rejudge", "path": str(path),
+                       "candidates": len(wanted), "limit": limit,
+                       "depth": depth, "stale_only": stale_only})
+    if not wanted:
+        return {"games": len(rows), "judged": 0, "depth": depth,
+                "kept_arrivals": 0, "path": str(path), "backup": "",
+                "engine": str(engine)}
+
     backup = path.with_suffix(f".before-depth{depth}.jsonl")
     backup.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
 
@@ -684,6 +705,15 @@ def rejudge(depth: int = 0, only: str = "",
                 continue
             was = sorted({str(j.get("judged_by", "?"))
                           for j in row.get("judged", [])}) or ["-"]
+            # `limit` and `stale_only` exist for the bench, which does this
+            # in the gaps between games: a whole-record pass would hold a
+            # cooldown open long after it ended, and re-judging a game the
+            # engine already judged at this depth spends the time for
+            # nothing.
+            if stale_only and chess_judge.BY_MATERIAL not in was:
+                continue
+            if limit and done >= limit:
+                continue
             us = row.get("us") == "white"
             start = row.get("initial_fen", "startpos")
             board = (chess.Board() if start in ("", "startpos")

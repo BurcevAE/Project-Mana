@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterator, List, Optional
@@ -82,6 +83,17 @@ STREAM_TIMEOUT = 20.0
 class LichessError(RuntimeError):
     """Lichess refused or failed. Distinct from a missing token, which is
     a fact about this machine rather than about the server."""
+
+
+class RateLimited(LichessError):
+    """Lichess is not taking requests yet. A state with a known end, not
+    a failure: `retry_after` says how many seconds are left, counted on
+    the local clock because asking Lichess would itself be a request
+    against the limit that is already tripped."""
+
+    def __init__(self, message: str, retry_after: float = 0.0) -> None:
+        super().__init__(message)
+        self.retry_after = float(retry_after)
 
 
 class NoToken(LichessError):
@@ -236,7 +248,30 @@ class Lichess:
         self.base = base.rstrip("/")
         self.bearer = bearer or token()
         self._session = session
+        #: When the next request may be made, on the local clock.
         self._blocked_until = 0.0
+        #: Lichess asks for one request at a time. Held only around the
+        #: short REST calls -- a game stream is a long-lived GET, and
+        #: holding this for the length of a game would serialise the bot
+        #: behind itself.
+        self._one_at_a_time = threading.Lock()
+
+    # ---------- cooldown, counted here ----------
+
+    def cooldown_left(self) -> float:
+        """Seconds until a request is allowed. Zero means now.
+
+        Local arithmetic on purpose: asking Lichess how long is left
+        would be a request against the limit that is already tripped.
+        """
+        return max(0.0, self._blocked_until - time.time())
+
+    def hold(self, seconds: float) -> float:
+        """Refuse to make requests for this long. Never shortens an
+        existing hold -- a caller that knows less than the server should
+        not be able to talk the client into asking sooner."""
+        self._blocked_until = max(self._blocked_until, time.time() + float(seconds))
+        return self.cooldown_left()
 
     # ---------- transport ----------
 
@@ -271,36 +306,41 @@ class Lichess:
             raise LichessError(wrong)
 
     def _request(self, method: str, path: str, **kwargs: Any) -> Any:
-        """One call, with the documented pause after a 429.
+        """One call. No retry, and nothing is sent while cooling down.
 
-        Waits once and retries once. A loop here would be a client that
-        answers rate limiting by producing more of what caused it.
+        The earlier version answered 429 by sleeping a minute and trying
+        again, which is probing the window from the inside. Lichess asks
+        for the full minute and its limits are composite rather than a
+        fixed public window, so an early second attempt can only make
+        things worse. A 429 sets the local cooldown and raises; deciding
+        what to do with the wait belongs to the caller, which may well
+        have something better to do than sleep.
         """
         self._require_token()
+        left = self.cooldown_left()
+        if left > 0:
+            raise RateLimited(
+                f"Lichess на охлаждении ещё {left:.0f}с ({method} {path})", left)
         url = self._url(path)
-        for attempt in (1, 2):
-            wait = self._blocked_until - time.time()
-            if wait > 0:
-                time.sleep(min(wait, RATE_LIMIT_WAIT))
+        with self._one_at_a_time:
             response = self.session.request(method, url, timeout=30, **kwargs)
-            if response.status_code == 429 and attempt == 1:
-                self._blocked_until = time.time() + RATE_LIMIT_WAIT
-                events.emit(events.WARNING,
-                            f"Lichess просит подождать {RATE_LIMIT_WAIT:.0f}с "
-                            f"({method} {path})", lichess={"rate_limited": path})
-                continue
-            if response.status_code == 401:
-                raise LichessError(
-                    "Lichess не принял токен (401). Проверьте, что у токена "
-                    f"есть права {', '.join(SCOPES)} и что аккаунт — бот")
-            if response.status_code >= 400:
-                raise LichessError(f"{method} {path} → {response.status_code}: "
-                                   f"{response.text[:200]}")
-            try:
-                return response.json()
-            except ValueError:
-                return {"ok": True}
-        raise LichessError(f"{method} {path}: ограничение частоты не снялось")
+        if response.status_code == 429:
+            left = self.hold(RATE_LIMIT_WAIT)
+            events.emit(events.WARNING,
+                        f"Lichess ответил 429 — не трогаю сеть {left:.0f}с "
+                        f"({method} {path})", lichess={"rate_limited": path})
+            raise RateLimited(f"{method} {path} → 429", left)
+        if response.status_code == 401:
+            raise LichessError(
+                "Lichess не принял токен (401). Проверьте, что у токена "
+                f"есть права {', '.join(SCOPES)} и что аккаунт — бот")
+        if response.status_code >= 400:
+            raise LichessError(f"{method} {path} → {response.status_code}: "
+                               f"{response.text[:200]}")
+        try:
+            return response.json()
+        except ValueError:
+            return {"ok": True}
 
     def _stream(self, path: str) -> Iterator[Dict[str, Any]]:
         """NDJSON, one object per line.
@@ -309,6 +349,11 @@ class Lichess:
         than treated as the end -- a reader that stops on one disconnects
         every few seconds and looks like a network fault.
         """
+        # Deliberately outside the cooldown and outside the one-at-a-time
+        # lock: a game stream is how a game is played, not a REST call
+        # against the limit that refuses new games. Blocking it during a
+        # cooldown would abandon a game in progress to a rate limit on
+        # starting the next one.
         self._require_token()
         response = self.session.get(self._url(path), stream=True,
                                     timeout=(10, STREAM_TIMEOUT))

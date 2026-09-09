@@ -94,6 +94,15 @@ START_LIMIT = 90.0
 REFUSED_WAIT = 60.0
 REFUSED_WAIT_MAX = 900.0
 
+#: How often the run wakes during a cooldown: to report the time left and
+#: to do one unit of local work. Short enough that a cooldown ending is
+#: noticed promptly, long enough not to be a spin loop.
+TICK = 5.0
+
+#: Games re-judged in one unit of local work. Bounded so a cooldown that
+#: ends is not held open by work that could have waited.
+REJUDGE_PER_TICK = 2
+
 #: What happened on the last game, in the ladder's own terms.
 ADVANCED = "advanced"
 FINISHED = "finished"
@@ -251,6 +260,14 @@ class Bench:
             while not self._stop.is_set() and not self.ladder.done:
                 if limit and played >= limit:
                     break
+                left = self._cooldown_left()
+                if left > 0:
+                    # The network is the one thing that may not be touched
+                    # now, and it is exactly when there is most to do
+                    # locally. Lichess is a slow external sensor, not a
+                    # lock on MANA.
+                    self._while_waiting(left)
+                    continue
                 seat = self._one_game()
                 played += 1
                 if seat is None:
@@ -278,13 +295,23 @@ class Bench:
             self.client.challenge_ai(level=self.ladder.level,
                                      clock_limit=CLOCK_LIMIT,
                                      clock_increment=CLOCK_INCREMENT)
-        except api.LichessError as exc:
+        except api.RateLimited:
+            # The client has already set its own cooldown; the bench adds
+            # its escalation on top. Lichess warns that the limits are
+            # composite, so a second refusal after a full minute is not an
+            # error to retry through -- it is a longer wait.
             self._refused += 1
             wait = min(REFUSED_WAIT * (2 ** (self._refused - 1)), REFUSED_WAIT_MAX)
+            left = self._hold(wait)
             events.emit(events.WARNING,
-                        f"вызов не принят ({exc}). Отказ подряд "
-                        f"{self._refused}, жду {wait:.0f}с")
-            self._sleep(wait)
+                        f"Lichess не даёт начать партию. Отказ подряд "
+                        f"{self._refused}, сеть не трогаю {left:.0f}с")
+            return None
+        except api.LichessError as exc:
+            self._refused += 1
+            left = self._hold(REFUSED_WAIT)
+            events.emit(events.WARNING,
+                        f"вызов не принят ({exc}); сеть не трогаю {left:.0f}с")
             return None
         self._refused = 0
         events.emit(events.STATUS,
@@ -320,6 +347,68 @@ class Bench:
         can stop, which is one of the two ways this was asked to end.
         """
         self._stop.wait(seconds)
+
+    def _cooldown_left(self) -> float:
+        """Seconds before the network may be touched. Local arithmetic."""
+        left = getattr(self.client, "cooldown_left", None)
+        return float(left()) if callable(left) else 0.0
+
+    def _hold(self, seconds: float) -> float:
+        hold = getattr(self.client, "hold", None)
+        return float(hold(seconds)) if callable(hold) else float(seconds)
+
+    def _while_waiting(self, left: float) -> None:
+        """Report the wait, do one unit of local work, then wake early.
+
+        Not a sleep: a cooldown spent idle is a network limit turned into
+        a stop for everything MANA could be doing with the games it has
+        already played.
+        """
+        did = self.think()
+        events.emit(events.STATUS,
+                    f"Lichess: охлаждение, ещё {left:.0f}с. MANA: {did}",
+                    chess={"kind": "bench", "ladder": self.ladder.as_dict(),
+                           "cooldown": round(left, 1), "doing": did})
+        self._stop.wait(min(TICK, max(0.5, left)))
+
+    def think(self) -> str:
+        """One bounded unit of work on the record. Never touches the network.
+
+        Chosen by what the record needs rather than by a schedule: games
+        judged by the fallback are worth less than nothing until they are
+        re-judged, since their losses are on a different scale from the
+        rest; after that, the reader is what turns games into findings.
+        """
+        from . import chess_bot, chess_findings, chess_judge
+
+        try:
+            rows = chess_bot.recorded()
+        except Exception as exc:                       # a half-written file
+            return f"записи не прочитались ({type(exc).__name__})"
+        if not rows:
+            return "записей пока нет"
+
+        stale = [row for row in rows
+                 if any(j.get("judged_by") == chess_judge.BY_MATERIAL
+                        for j in row.get("judged", []))]
+        if stale and chess_judge.engine_path():
+            done = chess_bot.rejudge(depth=chess_judge.JUDGE_DEPTH,
+                                     limit=REJUDGE_PER_TICK)
+            if done.get("judged"):
+                return (f"пересудила {done['judged']} "
+                        f"(осталось {max(0, len(stale) - done['judged'])})")
+
+        found = chess_findings.look(rows)
+        settled = [f for f in found if f.verdict != "NOT_EVALUATED"]
+        if settled:
+            accepted = [f for f in settled if f.verdict == "ACCEPTED"]
+            return (f"прочитала {len(rows)} партий: "
+                    f"{len(accepted)} классов дороже остальных, "
+                    f"{len(settled)} вопросов закрыто")
+        short = chess_findings.MIN_PAIRED_TRIALS - max(
+            (f.measurement["trials"] for f in found), default=0)
+        return (f"прочитала {len(rows)} партий: до вывода не хватает "
+                f"{max(0, short)}")
 
     def _fold(self, seat: Any) -> None:
         # A game that never reached a result is not a drawn game -- it is

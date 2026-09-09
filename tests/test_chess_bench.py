@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -234,9 +235,14 @@ def test_nothing_about_the_player_changes_between_games():
     measured while it measures is how a bench stops being one."""
     import inspect
 
-    source = inspect.getsource(bench_mod)
-    for adapting in ("adopt(", "install(", "PLAY_DEPTH =", "depth="):
-        assert adapting not in source.split("class Bench")[1]
+    source = inspect.getsource(bench_mod).split("class Bench")[1]
+    # The player is never built or altered here: the bench decides only
+    # who to play. Re-judging in the gaps changes verdicts on games
+    # already played, which is a fact about the record, not about how the
+    # next move will be chosen.
+    for adapting in ("adopt(", "install(", "SearchPlayer", "PLAY_DEPTH",
+                     "evaluate=", "policy.adopt"):
+        assert adapting not in source
 
 
 # --------------------------------------------------------------------------
@@ -266,22 +272,25 @@ def test_a_game_without_a_result_is_not_a_draw(tmp_path, monkeypatch):
 
 
 def test_the_wait_after_a_refusal_grows(tmp_path, monkeypatch):
-    """Ten seconds and two requests per attempt is answering rate
-    limiting by producing more of what caused it."""
+    """Not a sleep: a held state. Lichess warns that the limits are
+    composite, so a second refusal after a full minute is not an error to
+    retry through -- it is a longer wait."""
     monkeypatch.setattr(bench_mod, "state_path", lambda: tmp_path / "bench.json")
     bot = _Bot([])
     bench = bench_mod.Bench(client=_Client(bot), bot=bot, ladder=_ladder(), gap=0.0)
 
+    held = []
+    bench.client.hold = lambda seconds: held.append(seconds) or seconds
+    bench.client.cooldown_left = lambda: 0.0
+
     def refuse(level=1, **kw):
-        raise lichess.LichessError("429")
+        raise lichess.RateLimited("429", 60.0)
 
     bench.client.challenge_ai = refuse
-    waited = []
-    monkeypatch.setattr(bench, "_sleep", lambda s: waited.append(s))
     for _ in range(4):
         bench._one_game()
-    assert waited == [60.0, 120.0, 240.0, 480.0]
-    assert max(waited) <= bench_mod.REFUSED_WAIT_MAX
+    assert held == [60.0, 120.0, 240.0, 480.0]
+    assert max(held) <= bench_mod.REFUSED_WAIT_MAX
 
 
 def test_the_wait_is_capped_and_a_success_clears_it(tmp_path, monkeypatch):
@@ -289,17 +298,18 @@ def test_the_wait_is_capped_and_a_success_clears_it(tmp_path, monkeypatch):
     bot = _Bot([True])
     bench = bench_mod.Bench(client=_Client(bot), bot=bot, ladder=_ladder(), gap=0.0)
     bench._refused = 20
-    monkeypatch.setattr(bench, "_sleep", lambda s: None)
-
-    def refuse(level=1, **kw):
-        raise lichess.LichessError("429")
+    held = []
+    bench.client.hold = lambda seconds: held.append(seconds) or seconds
+    bench.client.cooldown_left = lambda: 0.0
 
     real = bench.client.challenge_ai
+
+    def refuse(level=1, **kw):
+        raise lichess.RateLimited("429", 60.0)
+
     bench.client.challenge_ai = refuse
-    waited = []
-    monkeypatch.setattr(bench, "_sleep", lambda s: waited.append(s))
     bench._one_game()
-    assert waited == [bench_mod.REFUSED_WAIT_MAX]
+    assert held == [bench_mod.REFUSED_WAIT_MAX]
 
     bench.client.challenge_ai = real
     bench._one_game()
@@ -327,3 +337,106 @@ def test_asking_for_the_console_twice_does_not_double_the_output():
     events.install_console_sink()
     assert sum(1 for sink in events.BUS.sinks()
                if sink is events.console_sink) == 1
+
+
+# --------------------------------------------------------------------------
+# the cooldown is worked through, not slept through
+# --------------------------------------------------------------------------
+
+def test_a_cooldown_is_spent_on_the_record_not_on_sleeping(tmp_path, monkeypatch):
+    """Lichess is a slow external sensor, not a lock on MANA."""
+    monkeypatch.setattr(bench_mod, "state_path", lambda: tmp_path / "bench.json")
+    bot = _Bot([True])
+    bench = bench_mod.Bench(client=_Client(bot), bot=bot, ladder=_ladder(), gap=0.0)
+    bench.client.cooldown_left = lambda: 30.0
+    bench.client.hold = lambda seconds: seconds
+
+    thought = []
+    monkeypatch.setattr(bench, "think", lambda: thought.append(1) or "думала")
+    monkeypatch.setattr(bench_mod, "TICK", 0.01)
+    threading.Timer(0.2, bench.stop).start()
+    bench.run()
+    assert thought                            # it worked while it waited
+    assert bench.client.levels == []           # and asked Lichess nothing
+
+
+def test_the_remaining_time_is_reported_without_asking_lichess(tmp_path, monkeypatch):
+    monkeypatch.setattr(bench_mod, "state_path", lambda: tmp_path / "bench.json")
+    bot = _Bot([])
+    bench = bench_mod.Bench(client=_Client(bot), bot=bot, ladder=_ladder(), gap=0.0)
+    monkeypatch.setattr(bench, "think", lambda: "читала записи")
+
+    from mana import events
+
+    said = []
+    sink = events.subscribe(lambda e: said.append((e.text, e.data.get("chess"))))
+    try:
+        monkeypatch.setattr(bench_mod, "TICK", 0.01)
+        bench._while_waiting(37.0)
+    finally:
+        events.unsubscribe(sink)
+    text, payload = said[-1]
+    assert "охлаждение" in text and "37" in text and "читала записи" in text
+    assert payload["cooldown"] == 37.0 and payload["doing"] == "читала записи"
+
+
+def test_thinking_never_touches_the_network(tmp_path, monkeypatch):
+    """The cooldown is the one time nothing may be asked of Lichess, and
+    exactly when there is most to do locally."""
+    import inspect
+
+    body = inspect.getsource(bench_mod.Bench.think)
+    for reaching in ("self.client", "challenge", "requests", "api."):
+        assert reaching not in body
+
+
+def test_thinking_rejudges_the_games_the_fallback_judged(tmp_path, monkeypatch):
+    """Games judged by the fallback are worth less than nothing until
+    they are re-judged: their losses are on a different scale."""
+    monkeypatch.setattr(bench_mod, "state_path", lambda: tmp_path / "bench.json")
+    bot = _Bot([])
+    bench = bench_mod.Bench(client=_Client(bot), bot=bot, ladder=_ladder(), gap=0.0)
+
+    from mana.cognition import chess_bot as bot_mod
+    from mana.cognition import chess_judge
+
+    calls = {}
+
+    def fake_rejudge(depth=0, only="", limit=0, stale_only=True, on_game=None):
+        calls.update({"depth": depth, "limit": limit, "stale_only": stale_only})
+        return {"judged": 2, "games": 5}
+
+    monkeypatch.setattr(bot_mod, "recorded", lambda: [
+        {"game": "a", "judged": [{"judged_by": "material"}], "thoughts": []},
+        {"game": "b", "judged": [{"judged_by": "stockfish"}], "thoughts": []}])
+    monkeypatch.setattr(bot_mod, "rejudge", fake_rejudge)
+    monkeypatch.setattr(chess_judge, "engine_path", lambda: Path("stockfish"))
+
+    said = bench.think()
+    assert "пересудила 2" in said
+    assert calls["limit"] == bench_mod.REJUDGE_PER_TICK and calls["stale_only"] is True
+
+
+def test_with_a_clean_record_it_reads_instead(tmp_path, monkeypatch):
+    monkeypatch.setattr(bench_mod, "state_path", lambda: tmp_path / "bench.json")
+    bot = _Bot([])
+    bench = bench_mod.Bench(client=_Client(bot), bot=bot, ladder=_ladder(), gap=0.0)
+
+    from mana.cognition import chess_bot as bot_mod
+
+    monkeypatch.setattr(bot_mod, "recorded", lambda: [
+        {"game": "b", "source": "lichess", "judged": [{"judged_by": "stockfish"}],
+         "thoughts": []}])
+    said = bench.think()
+    assert "прочитала 1" in said and "не хватает" in said
+
+
+def test_an_empty_record_is_an_answer(tmp_path, monkeypatch):
+    monkeypatch.setattr(bench_mod, "state_path", lambda: tmp_path / "bench.json")
+    bot = _Bot([])
+    bench = bench_mod.Bench(client=_Client(bot), bot=bot, ladder=_ladder(), gap=0.0)
+
+    from mana.cognition import chess_bot as bot_mod
+
+    monkeypatch.setattr(bot_mod, "recorded", lambda: [])
+    assert "записей пока нет" in bench.think()

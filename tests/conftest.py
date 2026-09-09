@@ -172,3 +172,24 @@ def isolated_agent_exec_enabled(isolated_config: Config):
         agent.experience.close()
     except Exception:
         pass
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_game_record(tmp_path_factory, monkeypatch):
+    """Point the chess record at a temporary file for every test.
+
+    The same reason the policy overlay and the installed rules are
+    isolated: a test that forgets writes to the machine's real state. It
+    was not hypothetical -- a full re-judge rewrote the real record during
+    a suite run and could not afterwards be attributed to a test, which
+    is worse than a wrong write, because a wrong write can at least be
+    found.
+    """
+    from mana.cognition import chess_bench, chess_bot
+
+    # Its own directory, not the test's `tmp_path`: a fixture that adds
+    # a folder there changes what every test listing that directory sees,
+    # and one of them counts the files it wrote.
+    root = tmp_path_factory.mktemp("chess-record")
+    monkeypatch.setattr(chess_bot, "games_path", lambda: root / "games.jsonl")
+    monkeypatch.setattr(chess_bench, "state_path", lambda: root / "bench.json")
