@@ -595,10 +595,10 @@ def test_a_quiet_self_play_game_does_not_flood_the_console():
     finally:
         events.unsubscribe(sink)
     spoken = [line for line in text if line.strip()]
-    # Exactly one line: the judge saying it is switched off. A degraded
-    # judge speaks even in quiet mode -- that one is worth repeating --
-    # and nothing else does.
-    assert len(spoken) == 1 and "судья" in spoken[0]
+    # Nothing at all: the judge is off on purpose, which is the normal
+    # state now, and a quiet game says nothing to the console. Only the
+    # fallback -- a judge asked for and quietly replaced -- still speaks.
+    assert spoken == []
     assert len(text) > 10                      # the window still got the moves
 
 
@@ -638,3 +638,39 @@ def test_a_recorded_seed_replays_the_same_game():
                                    record=False, quiet=True, seed=first.seed)[0]
     assert again.moves == first.moves
     assert first.as_dict()["seed"] == first.seed
+
+
+def test_an_unjudged_game_reports_no_count_rather_than_zero():
+    """"зевков 0" for a game no judge looked at is unmeasured dressed as
+    measured. It went out in a status line the moment the judge was
+    switched off, which is how it was found."""
+    seat = chess_bot.Seat(game_id="g", source=chess_bot.LOCAL)
+    seat.thoughts = [{"close_call": True}, {"close_call": False}]
+    seat.judged = []
+    row = chess_bot.summarise(seat)
+    assert row["blunders"] is None and row["mistakes"] is None
+    assert row["mean_loss"] is None
+    assert row["moves"] == 2 and row["close_share"] == 0.5
+
+    seat.judged = [{"loss": 400.0, "mistake": True, "blunder": True},
+                   {"loss": 0.0, "mistake": False, "blunder": False}]
+    counted = chess_bot.summarise(seat)
+    assert counted["blunders"] == 1 and counted["mean_loss"] == 200.0
+
+
+def test_a_cooldown_tick_is_spent_not_slept_through(tmp_path, monkeypatch):
+    """A self-play game costs half a second now that no engine is asked;
+    waiting five seconds between them would spend a fifteen-minute
+    cooldown on a fraction of the games it could hold."""
+    monkeypatch.setattr(bench_mod, "state_path", lambda: tmp_path / "bench.json")
+    bot = _Bot([])
+    bench = bench_mod.Bench(client=_Client(bot), bot=bot, ladder=_ladder(), gap=0.0)
+    bench.client.cooldown_left = lambda: 300.0
+    bench.client.hold = lambda seconds: seconds
+
+    done = []
+    monkeypatch.setattr(bench, "think",
+                        lambda budget=0.0: done.append(1) or f"партия {len(done)}")
+    monkeypatch.setattr(bench_mod, "TICK", 0.2)
+    bench._while_waiting(300.0)
+    assert len(done) > 1                    # more than one unit inside a tick

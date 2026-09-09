@@ -405,7 +405,16 @@ class Bench:
         to be progress, so an unchanged answer is emitted for the window
         and kept off the console.
         """
+        # As much work as the tick allows, not one unit per tick. A
+        # self-play game costs half a second now that no engine is asked,
+        # and waiting five seconds between them would spend a
+        # fifteen-minute cooldown on a fraction of the games it could hold
+        # -- which is the whole reason the judge was switched off.
+        until = time.time() + min(TICK, max(0.5, left))
         did = self.think(budget=left)
+        while (time.time() < until and not self._stop.is_set()
+               and self._cooldown_left() > 0):
+            did = self.think(budget=self._cooldown_left())
         fresh = did != self._said
         self._said = did
         events.emit(events.STATUS,
@@ -413,7 +422,7 @@ class Bench:
                     if fresh else "",
                     chess={"kind": "bench", "ladder": self.ladder.as_dict(),
                            "cooldown": round(left, 1), "doing": did})
-        self._stop.wait(min(TICK, max(0.5, left)))
+        self._stop.wait(max(0.0, until - time.time()))
 
     def think(self, budget: float = 0.0) -> str:
         """One bounded unit of work on the record. Never touches the network.
@@ -459,9 +468,12 @@ class Bench:
                 local = sum(1 for row in rows
                             if str(row.get("source", "")) == chess_bot.LOCAL) + 1
                 row = chess_bot.summarise(played[0])
-                return (f"сыграла с собой: {row['moves']} ходов, "
-                        f"зевков {row['blunders']}, жребием "
-                        f"{row['close_share']:.0%} (партий с собой {local})")
+                judged = ("" if row["blunders"] is None
+                          else f", зевков {row['blunders']}")
+                return (f"сыграла с собой: {row['moves']} ходов{judged}, "
+                        f"жребием {row['close_share']:.0%}, исход "
+                        f"{played[0].status} {played[0].winner}".rstrip()
+                        + f" (партий с собой {local})")
 
         if not rows:
             return "записей пока нет"

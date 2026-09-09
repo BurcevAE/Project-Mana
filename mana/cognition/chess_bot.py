@@ -435,7 +435,12 @@ def judge_note(depth: int) -> str:
     from . import chess_judge
 
     if not depth:
-        return "судья выключен — потери не измеряются"
+        # Not a degraded state any more: the analysis reads the result of
+        # the game, so an engine's opinion per move is a number nothing
+        # reads. Worded as the normal state it now is -- a warning that
+        # fires when nothing is wrong is one nobody reads.
+        return ("анализ по исходу партии — судья не вызывается "
+                "(включить: --chess-rejudge)")
     if chess_judge.engine_path():
         return f"судья: Stockfish, глубина {depth}"
     where = "\n".join(f"    {row['where']} — {row['why']}"
@@ -491,11 +496,18 @@ def summarise(seat: Seat) -> Dict[str, Any]:
     """
     losses = [row.get("loss", 0.0) for row in seat.judged]
     close = [row for row in seat.thoughts if row.get("close_call")]
+    # None, not zero, where nothing judged. "зевков 0" for a game no judge
+    # looked at is unmeasured dressed as measured -- the one thing this
+    # project refuses everywhere else, and it went out in a status line
+    # the moment the judge was switched off.
+    counted = bool(seat.judged)
     return {"moves": len(seat.thoughts),
             "judged": len(seat.judged),
-            "mistakes": sum(1 for row in seat.judged if row.get("mistake")),
-            "blunders": sum(1 for row in seat.judged if row.get("blunder")),
-            "mean_loss": round(sum(losses) / len(losses), 1) if losses else 0.0,
+            "mistakes": (sum(1 for row in seat.judged if row.get("mistake"))
+                         if counted else None),
+            "blunders": (sum(1 for row in seat.judged if row.get("blunder"))
+                         if counted else None),
+            "mean_loss": round(sum(losses) / len(losses), 1) if losses else None,
             "close_calls": len(close),
             "close_share": (round(len(close) / len(seat.thoughts), 2)
                             if seat.thoughts else 0.0)}
@@ -532,7 +544,9 @@ def play_locally(games: int = 1, depth: int = PLAY_DEPTH,
 
         judge = chess_judge.Judge(depth=judge_depth)
     note = judge_note(judge_depth)
-    degraded = "запасной" in note or "выключен" in note
+    # Only the fallback is worth repeating: a judge asked for and quietly
+    # replaced is a defect, a judge deliberately not asked for is not.
+    degraded = "запасной" in note
     # In quiet mode a working judge says nothing: this runs once per game
     # in the gaps between challenges, and the same sentence every minute
     # is noise. A degraded judge still speaks, every time -- that one is
