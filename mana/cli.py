@@ -398,6 +398,7 @@ def _chess_stats() -> int:
     about nothing.
     """
     from .cognition import chess_bot, chess_judge
+    from .core.gates import NOT_EVALUATED
 
     rows = chess_bot.recorded()
     path = chess_bot.games_path()
@@ -427,6 +428,21 @@ def _chess_stats() -> int:
               f"({row['close_share']:.0%}) — выбор решил жребий")
         print(f"  исходы:             {row['results']}")
         print()
+
+    # And what MANA concluded from it, which is the half that was missing:
+    # everything was recorded and nothing was read back, so a person had
+    # to open the file to learn anything. A ledger nobody consults is a
+    # diary.
+    from .cognition import chess_findings
+
+    out = chess_findings.look(rows)
+    print(chess_findings.describe(out))
+    settled = [f for f in out if f.verdict != NOT_EVALUATED]
+    if not settled:
+        need = chess_findings.MIN_PAIRED_TRIALS
+        print(f"\nНи один класс пока не измерен: наблюдение — это партия, "
+              f"а не ход, и нужно {need}.")
+        print(f"Сыграть:  mana.cmd --chess {need}")
     return 0
 
 
