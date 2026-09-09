@@ -239,13 +239,51 @@ def test_nothing_about_the_player_changes_between_games():
     import inspect
 
     source = inspect.getsource(bench_mod).split("class Bench")[1]
-    # The player is never built or altered here: the bench decides only
-    # who to play. Re-judging in the gaps changes verdicts on games
-    # already played, which is a fact about the record, not about how the
-    # next move will be chosen.
-    for adapting in ("adopt(", "install(", "SearchPlayer", "PLAY_DEPTH",
-                     "evaluate=", "policy.adopt"):
+    # Not a banned word -- an invariant. The bench may read the past with
+    # an unmodified player (that is how reach is measured), and it may run
+    # a modified one inside an experiment. What it may never do is put a
+    # modified player into a game the ladder counts, or adopt anything.
+    for adapting in ("adopt(", "install(", "policy.adopt", "Tuned("):
         assert adapting not in source
+    # And the modified player is built only inside the duel -- twice
+    # there, once per colour, so that the change is not itself a colour
+    # advantage.
+    from mana.cognition import chess_action
+
+    whole = inspect.getsource(chess_action)
+    inside = inspect.getsource(chess_action.duel)
+    assert inside.count("Tuned(") == whole.count("Tuned(") == 2
+
+
+def test_a_duel_game_can_never_be_counted_as_an_observation():
+    """A duel is played by a modified player and the findings are about
+    the unmodified one. Without this boundary a hundred experiments would
+    turn the corpus into a blend of players that nothing afterwards could
+    separate."""
+    from mana.cognition import chess_outcome
+
+    assert chess_bot.DUEL not in chess_bot.OBSERVATIONAL
+    duel_game = chess_outcome.Sides(game="d1", source=chess_bot.DUEL,
+                                    we_won=True)
+    real = chess_outcome.Sides(game="g1", source=chess_bot.LOCAL, we_won=True)
+    out = chess_outcome.look([duel_game, real], record=False)
+    assert {f.conditions["worlds"][0] for f in out} == {chess_bot.LOCAL}
+
+
+def test_the_ladder_plays_with_the_unmodified_player(tmp_path, monkeypatch):
+    """The experiment lives in the cooldown; the games the ladder counts
+    are played by the player the ladder is measuring."""
+    monkeypatch.setattr(bench_mod, "state_path", lambda: tmp_path / "bench.json")
+    bot = _Bot([True])
+    bench = bench_mod.Bench(client=_Client(bot), bot=bot, ladder=_ladder(),
+                            gap=0.0)
+    from mana.cognition import chess_action
+
+    made = []
+    monkeypatch.setattr(chess_action, "Tuned",
+                        lambda player, change: made.append(change) or player)
+    bench._one_game()
+    assert made == []                       # no modified player in a real game
 
 
 # --------------------------------------------------------------------------

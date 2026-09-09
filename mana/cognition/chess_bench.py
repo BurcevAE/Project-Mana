@@ -111,6 +111,10 @@ TICK = 5.0
 #: ends is not held open by work that could have waited.
 REJUDGE_PER_TICK = 2
 
+#: Duel games played in one unit of local work. Small, so a cooldown that
+#: ends is not held open, and an experiment spans several ticks.
+DUEL_SLICE = 4
+
 #: A self-play game is only started when at least this much cooldown is
 #: left. Starting one with ten seconds to go would hold the next
 #: challenge back for the sake of work that had no deadline.
@@ -283,6 +287,15 @@ class Bench:
         self._sides: Dict[str, Any] = {}
         #: The verdicts as of the last pass, so only what moved is said.
         self._verdicts: Dict[str, str] = {}
+        #: The experiment under way: (change, reach, accumulated Duel).
+        #: One at a time -- a budget split between two answers neither.
+        self._trying: Optional[Any] = None
+        #: Positions from the record where the search rated moves equal,
+        #: and what each lever can move in them. Computed once per run:
+        #: it costs a search per position and does not change while the
+        #: player does not.
+        self._ties: Optional[List[Any]] = None
+        self._reach: Dict[str, Any] = {}
 
     def stop(self) -> None:
         self._stop.set()
@@ -499,6 +512,14 @@ class Bench:
                 return (f"пересудила {done['judged']} "
                         f"(осталось {max(0, len(stale) - done['judged'])})")
 
+        # An experiment first: the ladder is not measuring during a
+        # cooldown, and a question that can be answered is worth more than
+        # another game of the same kind.
+        if budget >= SELF_PLAY_FLOOR:
+            said = self._experiment()
+            if said:
+                return said
+
         if budget >= SELF_PLAY_FLOOR:
             played = chess_bot.play_locally(games=1,
                                             judge_depth=chess_bot.LIVE_JUDGE_DEPTH,
@@ -578,6 +599,91 @@ class Bench:
         for line in lines:
             events.emit(events.STATUS, f"вывод: {line}",
                         chess={"kind": "finding", "text": line})
+
+    def _experiment(self) -> str:
+        """Play a slice of one derived change against the unchanged player.
+
+        Chosen by reach: what a lever can move at all, measured from
+        positions already recorded and costing no games. Three of the
+        first six experiments were spent on levers that could not change a
+        move, which is the mistake this ranking exists to avoid.
+        """
+        from . import chess_action, chess_bot, chess_outcome
+
+        if self._trying is None:
+            self._trying = self._pick()
+            if self._trying is None:
+                return ""
+        change, reached, sofar = self._trying
+        slice_result = chess_action.duel(change, games=DUEL_SLICE,
+                                         seed=sofar.games * 977,
+                                         stop=self._stop)
+        sofar.games += slice_result.games
+        sofar.changed_won += slice_result.changed_won
+        sofar.unchanged_won += slice_result.unchanged_won
+        sofar.drawn += slice_result.drawn
+        if (sofar.decided >= chess_action.MIN_PAIRED_TRIALS
+                or sofar.games >= chess_action.GAMES_PER_EXPERIMENT):
+            finding = chess_action.record(change, sofar, depth=chess_bot.PLAY_DEPTH,
+                                          questions=max(1, len(self._reach)),
+                                          reached=reached)
+            self._trying = None
+            events.emit(events.STATUS, f"опыт: {finding.verdict}: {finding.note}",
+                        chess={"kind": "finding", "text": finding.note})
+            return f"опыт закончен: {finding.verdict}"
+        return (f"опыт «{change.property}»: {sofar.games} партий, "
+                f"{sofar.decided} решённых из "
+                f"{chess_action.MIN_PAIRED_TRIALS} нужных")
+
+    def _pick(self) -> Optional[Any]:
+        """The next experiment, or nothing to try.
+
+        Not asked more than once per run when there is nothing: proposing
+        needs the findings, and re-deriving them every few seconds to be
+        told the same thing is the kind of busywork a cooldown is not for.
+        """
+        from . import chess_action, chess_bot, chess_outcome
+        from .chess_arena import SearchPlayer
+
+        if not self._sides:
+            return None
+        found = chess_outcome.look(list(self._sides.values()), record=False)
+        changes, _ = chess_action.propose(found)
+        if not changes:
+            return None
+        if self._ties is None:
+            played = [row for row in chess_bot.recorded()
+                      if str(row.get("source", "")) == chess_bot.LOCAL][:60]
+            self._ties = chess_action.ties_in(
+                played, SearchPlayer(depth=chess_bot.PLAY_DEPTH, trace=True))
+        book = self._book()
+        best = None
+        for change in changes:
+            if change.property not in self._reach:
+                self._reach[change.property] = chess_action.reach(change,
+                                                                  self._ties)
+            reached = self._reach[change.property]
+            if not reached["varies"]:
+                continue                    # cannot move anything; no games
+            known = book.already_tried(chess_action.QUESTION,
+                                       change.as_dict(), {})
+            if known and known["match"] == "exact":
+                continue
+            if best is None or reached["share"] > best[1]["share"]:
+                best = (change, reached)
+        if best is None:
+            return None
+        events.emit(events.STATUS,
+                    f"беру опыт «{best[0].property}»: рычаг работает в "
+                    f"{best[1]['share']:.0%} ничьих",
+                    chess={"kind": "finding",
+                           "text": f"опыт: {best[0].describe()}"})
+        return (best[0], best[1], chess_action.Duel(change=best[0]))
+
+    def _book(self) -> Any:
+        from . import findings as ledger_mod
+
+        return ledger_mod.Ledger()
 
     def _fold(self, seat: Any) -> None:
         # A game that never reached a result is not a drawn game -- it is

@@ -286,10 +286,24 @@ def look(games: Sequence[Sides], ledger: Optional[Any] = None,
     Every property every pass: measuring thirteen and reporting the one
     that came out is how a coincidence becomes a finding.
     """
+    from . import chess_bot
+
     book = ledger if ledger is not None else ledger_mod.Ledger()
+    # A game played by a modified player is not an observation about the
+    # unmodified one. Dropped here rather than filtered by whoever calls,
+    # because a guard that depends on being remembered is not a guard.
+    outside = [row for row in games
+               if row.source not in chess_bot.OBSERVATIONAL]
+    if outside:
+        from .. import events
+
+        events.emit(events.WARNING,
+                    f"не наблюдения, в счёт не идут: {len(outside)} партий "
+                    f"из миров {sorted({row.source for row in outside})}")
     worlds: Dict[str, List[Sides]] = {}
     for row in games:
-        worlds.setdefault(row.source or "?", []).append(row)
+        if row.source in chess_bot.OBSERVATIONAL:
+            worlds.setdefault(row.source, []).append(row)
 
     out: List[ledger_mod.Finding] = []
     for world in sorted(worlds):

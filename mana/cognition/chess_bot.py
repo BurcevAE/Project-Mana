@@ -76,6 +76,15 @@ GAMES_DIRNAME = "lichess"
 LOCAL = "local"
 LIVE = "lichess"
 
+#: Games played by a modified player, during an experiment. Kept apart
+#: from the two above because the findings are about the unmodified
+#: player: mixing them in would turn the corpus into a blend of players
+#: that nothing afterwards could separate.
+DUEL = "duel"
+
+#: The worlds an observation may come from.
+OBSERVATIONAL = (LOCAL, LIVE)
+
 #: Search depth for play. Two is what Stage 0 was measured at; raising it
 #: silently would make the next measurement a comparison against nothing.
 PLAY_DEPTH = 2

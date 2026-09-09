@@ -60,6 +60,26 @@ def _no_ambient_api_keys(monkeypatch, request):
         monkeypatch.delenv(name, raising=False)
 
 
+#: One directory for the whole session, and a counter for the names
+#: inside it. `tmp_path_factory.mktemp` scans its parent for the next free
+#: number on every call, which is fine once and quadratic when two
+#: autouse fixtures do it for every test in a suite of eighteen hundred.
+_ISOLATION_COUNTER = [0]
+
+
+def _next_id() -> int:
+    _ISOLATION_COUNTER[0] += 1
+    return _ISOLATION_COUNTER[0]
+
+
+def _isolation_dir(tmp_path_factory):
+    root = getattr(_isolation_dir, "_root", None)
+    if root is None:
+        root = tmp_path_factory.mktemp("isolation", numbered=False)
+        _isolation_dir._root = root
+    return root
+
+
 @pytest.fixture(autouse=True)
 def _no_ambient_adoption(tmp_path_factory, monkeypatch):
     """No test reads or writes the machine's adopted policy.
@@ -75,14 +95,21 @@ def _no_ambient_adoption(tmp_path_factory, monkeypatch):
 
     from mana.cognition import rules as rules_mod
 
-    root = tmp_path_factory.mktemp("adopted")
-    monkeypatch.setattr(policy_mod, "_overlay_path", lambda: root / "adopted.json")
+    # One directory and a name, not a directory per test: `mktemp` scans
+    # its parent for the next free number, so with a fixture on every test
+    # the scan grows with the suite. Same fix as the chess fixtures below,
+    # and the same reason the whole suite crawled while every file alone
+    # was fast.
+    root = _isolation_dir(tmp_path_factory)
+    mark = _next_id()
+    monkeypatch.setattr(policy_mod, "_overlay_path",
+                        lambda: root / f"adopted-{mark}.json")
     monkeypatch.setattr(policy_mod, "_adopted_cache", None, raising=False)
     # Rules MANA wrote are the same kind of state as a setting it adopted,
     # and a test reading them would pass or fail by what this machine had
     # installed. Found that way: a knob test came back clean because a
     # rule installed by an earlier run was still deciding.
-    monkeypatch.setattr(rules_mod, "_path", lambda: root / "rules.json")
+    monkeypatch.setattr(rules_mod, "_path", lambda: root / f"rules-{mark}.json")
     rules_mod._reset_for_tests()
     yield
     monkeypatch.setattr(policy_mod, "_adopted_cache", None, raising=False)
@@ -174,26 +201,6 @@ def isolated_agent_exec_enabled(isolated_config: Config):
         pass
 
 
-#: One directory for the whole session, and a counter for the names
-#: inside it. `tmp_path_factory.mktemp` scans its parent for the next free
-#: number on every call, which is fine once and quadratic when two
-#: autouse fixtures do it for every test in a suite of eighteen hundred.
-_ISOLATION_COUNTER = [0]
-
-
-def _next_id() -> int:
-    _ISOLATION_COUNTER[0] += 1
-    return _ISOLATION_COUNTER[0]
-
-
-def _isolation_dir(tmp_path_factory):
-    root = getattr(_isolation_dir, "_root", None)
-    if root is None:
-        root = tmp_path_factory.mktemp("isolation", numbered=False)
-        _isolation_dir._root = root
-    return root
-
-
 @pytest.fixture(autouse=True)
 def _no_ambient_game_record(tmp_path_factory, monkeypatch):
     """Point the chess record at a temporary file for every test.
@@ -213,10 +220,16 @@ def _no_ambient_game_record(tmp_path_factory, monkeypatch):
     # that scans its parent for the next free number, so the scan grows
     # with the number of tests and cost eight seconds of setup each by
     # the end of a suite.
-    root = _isolation_dir(tmp_path_factory) / f"record-{_next_id()}"
-    root.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(chess_bot, "games_path", lambda: root / "games.jsonl")
-    monkeypatch.setattr(chess_bench, "state_path", lambda: root / "bench.json")
+    # File names, not directories. Creating a folder for every test made
+    # nearly four thousand of them in one place, and NTFS degrades as that
+    # grows -- which is why the files run fast one at a time and the whole
+    # suite crawled. Nothing is created unless a test actually writes.
+    root = _isolation_dir(tmp_path_factory)
+    mark = _next_id()
+    monkeypatch.setattr(chess_bot, "games_path",
+                        lambda: root / f"games-{mark}.jsonl")
+    monkeypatch.setattr(chess_bench, "state_path",
+                        lambda: root / f"bench-{mark}.json")
 
 
 @pytest.fixture(autouse=True)
@@ -231,7 +244,7 @@ def _no_ambient_findings(tmp_path_factory, monkeypatch):
     """
     from mana.cognition import findings
 
-    root = _isolation_dir(tmp_path_factory) / f"ledger-{_next_id()}"
-    root.mkdir(parents=True, exist_ok=True)
+    root = _isolation_dir(tmp_path_factory)
+    mark = _next_id()
     monkeypatch.setattr(findings, "ledger_path",
-                        lambda: root / "findings.jsonl")
+                        lambda: root / f"findings-{mark}.jsonl")
