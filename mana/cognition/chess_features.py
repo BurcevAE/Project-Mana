@@ -61,7 +61,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 #: Standard piece values, for counting material. Not a judgement about
 #: how to play: it is how the record's own evaluation counts, and a count
@@ -84,11 +84,21 @@ class Move:
 
     Every field is a count, a name or a score that the position or the
     record supplies. None of them says whether anything was good.
+
+    Everything is from the point of view of whoever moved. That is what
+    makes the two sides interchangeable rather than one being described
+    in the other's terms, and a game is two-sided by definition: the
+    position I face next is the product of both players' choices.
     """
     game: str
     ply: int
     source: str = ""
     level: int = 0
+    #: Which side moved, and whether it was MANA's. A fact about the row,
+    #: recorded so an analysis can condition on it -- not an instruction
+    #: to treat the two differently.
+    mover: str = "white"
+    ours: bool = True
     #: Facts about the position before the move.
     legal_moves: int = 0
     material: int = 0
@@ -119,7 +129,8 @@ class Move:
 
     def as_dict(self) -> Dict[str, Any]:
         row = {name: getattr(self, name) for name in (
-            "game", "ply", "source", "level", "legal_moves", "material",
+            "game", "ply", "source", "level", "mover", "ours",
+            "legal_moves", "material",
             "our_pieces", "their_pieces", "in_check", "piece", "is_capture",
             "captured", "is_promotion", "gives_check", "considered",
             "tied_at_top", "margin", "nodes", "depth", "score_before",
@@ -154,6 +165,16 @@ def _outcome(game: Dict[str, Any]) -> str:
     return WON if winner == str(game.get("us", "")) else LOST
 
 
+def _from(outcome: str, ours: bool) -> str:
+    """The result as the mover saw it. A game MANA lost is one the
+    opponent won, and describing both rows in MANA's terms would make the
+    two sides incomparable in exactly the field an analysis cares most
+    about."""
+    if ours or outcome in (DRAWN, UNFINISHED):
+        return outcome
+    return LOST if outcome == WON else WON
+
+
 def observe(game: Dict[str, Any]) -> List[Move]:
     """Replay one recorded game and report what was true at each of its moves.
 
@@ -177,14 +198,12 @@ def observe(game: Dict[str, Any]) -> List[Move]:
             move = chess.Move.from_uci(uci)
         except ValueError:
             break
-        if board.turn != us or move not in board.legal_moves:
-            if move in board.legal_moves:
-                board.push(move)
-                continue
+        if move not in board.legal_moves:
             break
+        mover = board.turn
         piece = board.piece_at(move.from_square)
         taken = board.piece_at(move.to_square)
-        ours, theirs = _counts(board, us)
+        ours, theirs = _counts(board, mover)
         verdict = judged.get(index, {})
         trace = traced.get(index, {})
         scores = [score for _, score in trace.get("considered", [])]
@@ -192,8 +211,10 @@ def observe(game: Dict[str, Any]) -> List[Move]:
         row = Move(
             game=str(game.get("game", "")), ply=index,
             source=str(game.get("source", "")), level=int(game.get("level", 0) or 0),
+            mover="white" if mover else "black", ours=bool(mover == us),
             legal_moves=board.legal_moves.count(),
-            material=_material(board, us), our_pieces=ours, their_pieces=theirs,
+            material=_material(board, mover), our_pieces=ours,
+            their_pieces=theirs,
             in_check=board.is_check(),
             piece=piece.symbol().upper() if piece else "",
             is_capture=board.is_capture(move),
@@ -207,7 +228,7 @@ def observe(game: Dict[str, Any]) -> List[Move]:
             score_after=verdict.get("score_after"),
             loss=verdict.get("loss"),
             judged_by=str(verdict.get("judged_by", "")),
-            outcome=outcome)
+            outcome=_from(outcome, mover == us))
         board.push(move)
         row.gives_check = board.is_check()
         out.append(row)
@@ -224,16 +245,21 @@ def _fill_horizons(moves: Sequence[Move]) -> None:
     zero where the game ended first: an unmeasured horizon is not a
     horizon at which nothing changed.
     """
-    scores = [row.score_after for row in moves]
-    for index, row in enumerate(moves):
-        if row.score_after is None:
-            row.later = {n: None for n in HORIZONS}
-            continue
-        for n in HORIZONS:
-            ahead = index + n
-            later = scores[ahead] if ahead < len(scores) else None
-            row.later[n] = (None if later is None
-                            else float(later - row.score_after))
+    # Per side. With both players in one list, "n moves later" has to mean
+    # n moves by the same player, or a horizon would compare a position to
+    # one the other side was looking at.
+    for side in (True, False):
+        mine = [row for row in moves if row.ours is side]
+        scores = [row.score_after for row in mine]
+        for index, row in enumerate(mine):
+            if row.score_after is None:
+                row.later = {n: None for n in HORIZONS}
+                continue
+            for n in HORIZONS:
+                ahead = index + n
+                later = scores[ahead] if ahead < len(scores) else None
+                row.later[n] = (None if later is None
+                                else float(later - row.score_after))
 
 
 def observe_all(games: Sequence[Dict[str, Any]]) -> List[Move]:
@@ -256,7 +282,11 @@ def describe(moves: Sequence[Move]) -> str:
     if not moves:
         return "наблюдений нет"
     judged = [row for row in moves if row.loss is not None]
-    lines = [f"ходов MANA: {len(moves)}, из них судимых: {len(judged)}",
+    ours = [row for row in moves if row.ours]
+    lines = [f"ходов всего: {len(moves)} (из них MANA {len(ours)}, "
+             f"соперника {len(moves) - len(ours)}), судимых: {len(judged)}",
+             f"  судимых у MANA: {sum(1 for r in ours if r.loss is not None)}, "
+             f"у соперника: {sum(1 for r in moves if not r.ours and r.loss is not None)}",
              f"партий: {len({row.game for row in moves})}"]
     for name in ("legal_moves", "material", "our_pieces", "considered",
                  "tied_at_top"):

@@ -670,7 +670,7 @@ def stats(rows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
 
 
 def rejudge(depth: int = 0, only: str = "", limit: int = 0,
-            stale_only: bool = True,
+            stale_only: bool = True, both_sides: bool = False,
             on_game: Optional[Callable[[str, str, str], None]] = None
             ) -> Dict[str, Any]:
     """Judge every recorded game again, without playing anything.
@@ -702,9 +702,10 @@ def rejudge(depth: int = 0, only: str = "", limit: int = 0,
 
     wanted = [row for row in rows
               if (not only or str(row.get("source", LIVE)) == only)
-              and (not stale_only
-                   or any(j.get("judged_by") == chess_judge.BY_MATERIAL
-                          for j in row.get("judged", [])))]
+              and (row.get("judged_both_sides") is not True if both_sides
+                   else (not stale_only
+                         or any(j.get("judged_by") == chess_judge.BY_MATERIAL
+                                for j in row.get("judged", []))))]
     # Said before the record is touched. A rewrite that leaves no line
     # anywhere is one nobody can attribute afterwards -- which is the
     # position this was written from, after a full re-judge appeared in
@@ -737,7 +738,14 @@ def rejudge(depth: int = 0, only: str = "", limit: int = 0,
             # cooldown open long after it ended, and re-judging a game the
             # engine already judged at this depth spends the time for
             # nothing.
-            if stale_only and chess_judge.BY_MATERIAL not in was:
+            # Two different backlogs, and a run picks one. `both_sides`
+            # is a back-fill: it wants games nobody has judged on both
+            # sides yet, and skipping the ones already done makes it
+            # resumable over an evening instead of all-or-nothing.
+            if both_sides:
+                if row.get("judged_both_sides"):
+                    continue
+            elif stale_only and chess_judge.BY_MATERIAL not in was:
                 continue
             if limit and done >= limit:
                 continue
@@ -751,11 +759,18 @@ def rejudge(depth: int = 0, only: str = "", limit: int = 0,
                     move = chess.Move.from_uci(uci)
                 except ValueError:
                     break
-                if board.turn == us:
-                    fresh.append(judge.judge_move(board, move, ply).as_dict())
+                # `both_sides` is how a stored game becomes symmetric. Live
+                # judging stays one-sided because it runs against a clock
+                # and the opponent's move would be judged on MANA's own
+                # time; here nothing is running, so both cost nothing.
+                if both_sides or board.turn == us:
+                    scored = judge.judge_move(board, move, ply).as_dict()
+                    scored["ours"] = bool(board.turn == us)
+                    fresh.append(scored)
                 board.push(move)
             row["judged"] = fresh
             row["judged_again_at_depth"] = depth
+            row["judged_both_sides"] = bool(both_sides)
             done += 1
             if on_game is not None:
                 on_game(str(row.get("game", "")), ", ".join(was), "stockfish")

@@ -457,7 +457,7 @@ def _bench(from_level: int, port: int = 0) -> int:
     return 0
 
 
-def _chess_rejudge(depth: int) -> int:
+def _chess_rejudge(depth: int, both_sides: bool = False) -> int:
     """Judge the record again, deeper, without playing anything.
 
     Needed twice already, both times because a run had judged with the
@@ -471,7 +471,7 @@ def _chess_rejudge(depth: int) -> int:
         print(f"  {game}: {was} -> {now}")
 
     print("Пересуживаю записанные партии. Ходы те же — меняется только приговор.")
-    out = chess_bot.rejudge(depth, on_game=said)
+    out = chess_bot.rejudge(depth, both_sides=both_sides, on_game=said)
     if out.get("error"):
         print(out["error"])
         return 1
@@ -1263,6 +1263,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Стенд: сама вызывает Stockfish на lichess, "
                              "10 побед подряд — следующий уровень, 30 подряд "
                              "на 8-м — конец; без числа продолжает с прошлого")
+    parser.add_argument("--both-sides", action="store_true", dest="both_sides",
+                        help="Судить обе стороны, а не только ходы MANA "
+                             "(с --chess-rejudge; возобновляемо)")
     parser.add_argument("--chess-rejudge", nargs="?", const=0, type=int,
                         metavar="ГЛУБИНА", dest="chess_rejudge",
                         help="Пересудить записанные партии Stockfish заново, "
@@ -1379,7 +1382,7 @@ def main() -> int:
     if args.bench is not None:
         return _bench(int(args.bench), int(args.watch_port))
     if args.chess_rejudge is not None:
-        return _chess_rejudge(int(args.chess_rejudge))
+        return _chess_rejudge(int(args.chess_rejudge), bool(args.both_sides))
     if args.chess is not None:
         return _chess(int(args.chess), int(args.watch_port))
     if args.lichess_token:

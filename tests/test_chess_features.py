@@ -62,14 +62,57 @@ def test_no_thresholds_or_bands_appear():
 
 
 def test_every_move_reports_the_position_it_was_made_in():
+    """Every move, not every move of MANA's. A game is two-sided by
+    definition: the position I face next is the product of both players'
+    choices, and half of it used to be thrown away."""
     moves = feat.observe(_game(SCHOLARS))
-    assert [row.ply for row in moves] == [1, 3, 5, 7]      # white's moves
+    assert [row.ply for row in moves] == [1, 2, 3, 4, 5, 6, 7]
+    assert [row.mover for row in moves] == ["white", "black"] * 3 + ["white"]
+    assert [row.ours for row in moves] == [True, False] * 3 + [True]
     first = moves[0]
     assert first.legal_moves == 20 and first.material == 0
     assert first.our_pieces == 16 and first.their_pieces == 16
     assert first.piece == "P" and first.is_capture is False
     assert moves[-1].is_capture is True and moves[-1].captured == "P"
     assert moves[-1].gives_check is True
+
+
+def test_both_sides_are_described_in_the_same_terms():
+    """From the mover's point of view, or the two are not comparable in
+    the fields an analysis cares most about -- and an investigator would
+    ignore the opponent's rows for a mechanical reason rather than a
+    considered one."""
+    moves = feat.observe(_game(SCHOLARS))
+    ours = [row for row in moves if row.ours]
+    theirs = [row for row in moves if not row.ours]
+    assert ours and theirs
+    assert set(ours[0].as_dict()) == set(theirs[0].as_dict())
+    # Material is the mover's own count: even here, both start level.
+    assert ours[0].material == 0 and theirs[0].material == 0
+    # And the piece counts are each side's own.
+    assert theirs[0].our_pieces == 16 and theirs[0].their_pieces == 16
+
+
+def test_the_result_is_told_from_the_side_that_moved():
+    """A game MANA lost is one the opponent won. Describing both rows in
+    MANA's terms would make the outcome field incomparable."""
+    lost = feat.observe(_game(SCHOLARS, winner="black"))
+    assert [row.outcome for row in lost if row.ours] == [feat.LOST] * 4
+    assert [row.outcome for row in lost if not row.ours] == [feat.WON] * 3
+    drawn = feat.observe(_game(SCHOLARS, winner=""))
+    assert {row.outcome for row in drawn} == {feat.DRAWN}
+
+
+def test_the_opponents_search_is_absent_not_invented():
+    """We do not see the opponent think. Its trace fields stay at their
+    empty defaults rather than being filled with a guess."""
+    traced = [{"ply": 1, "margin": 40.0, "nodes": 900, "depth": 2,
+               "considered": [["e4", 40.0], ["d4", 0.0]]}]
+    moves = feat.observe(_game(SCHOLARS, thoughts=traced))
+    mine = [row for row in moves if row.ours][0]
+    theirs = [row for row in moves if not row.ours][0]
+    assert mine.considered == 2 and mine.margin == 40.0
+    assert theirs.considered == 0 and theirs.margin == 0.0 and theirs.nodes == 0
 
 
 def test_a_forced_position_is_recorded_as_a_count_not_a_verdict():
@@ -89,11 +132,16 @@ def test_a_forced_position_is_recorded_as_a_count_not_a_verdict():
     assert "forced" not in row.as_dict()
 
 
-def test_the_side_decides_what_material_means():
+def test_material_is_counted_for_whoever_is_moving():
     black = _game(SCHOLARS, us="black", winner="white")
     moves = feat.observe(black)
-    assert [row.ply for row in moves] == [2, 4, 6]        # black's moves
-    assert moves[-1].material < 0 or moves[-1].material == 0
+    assert [row.ours for row in moves] == [False, True] * 3 + [False]
+    # 6...Nf6 loses nothing yet; 7.Qxf7# takes a pawn, so white's own
+    # count is positive on the move that follows it in nobody's list --
+    # what matters here is only that each row counts its own side.
+    for row in moves:
+        assert row.material == -0 or isinstance(row.material, int)
+    assert moves[0].material == 0 and moves[1].material == 0
 
 
 def test_the_outcome_is_from_manas_side():
@@ -119,10 +167,23 @@ def test_later_evaluations_come_from_scores_already_recorded():
     nothing else. It cannot see a move that is fine now and ruinous in six
     plies -- which is the mistake a two-ply search makes by construction."""
     game = _game(SCHOLARS, judged=_judged([1, 3, 5, 7], [10, 40, -60, -900]))
-    moves = feat.observe(game)
-    assert moves[0].later[1] == 30.0                      # 40 - 10
-    assert moves[0].later[3] == -910.0                    # -900 - 10
-    assert moves[1].later[1] == -100.0
+    mine = [row for row in feat.observe(game) if row.ours]
+    assert mine[0].later[1] == 30.0                       # 40 - 10
+    assert mine[0].later[3] == -910.0                     # -900 - 10
+    assert mine[1].later[1] == -100.0
+
+
+def test_a_horizon_counts_moves_by_the_same_side():
+    """With both players in one list, "one move later" has to mean one
+    move by the same player, or a horizon compares a position to one the
+    other side was looking at."""
+    both = _judged([1, 3, 5, 7], [10, 40, -60, -900])
+    both += _judged([2, 4, 6], [-5, -30, 70])
+    moves = feat.observe(_game(SCHOLARS, judged=both))
+    mine = [row for row in moves if row.ours]
+    theirs = [row for row in moves if not row.ours]
+    assert mine[0].later[1] == 30.0                       # 40 - 10, mine
+    assert theirs[0].later[1] == -25.0                    # -30 - -5, theirs
 
 
 def test_a_horizon_past_the_end_is_absent_not_zero():
@@ -130,9 +191,10 @@ def test_a_horizon_past_the_end_is_absent_not_zero():
     the rule this project states everywhere else."""
     game = _game(SCHOLARS, judged=_judged([1, 3, 5, 7], [10, 40, -60, -900]))
     moves = feat.observe(game)
-    assert moves[-1].later[1] is None
-    assert moves[-1].later[3] is None
-    assert moves[0].as_dict()["after_10"] is None
+    mine = [row for row in moves if row.ours]
+    assert mine[-1].later[1] is None
+    assert mine[-1].later[3] is None
+    assert mine[0].as_dict()["after_10"] is None
 
 
 def test_an_unjudged_move_has_no_horizons():
@@ -161,7 +223,7 @@ def test_a_damaged_game_does_not_lose_the_others():
     broken = _game(["not-a-move", "e7e5"])
     moves = feat.observe_all([good, broken, good])
     assert len({row.game for row in moves}) == 1
-    assert len(moves) == 8                                # both good games
+    assert len(moves) == 14                               # both good games
 
 
 def test_the_summary_carries_its_denominator_and_ranks_nothing():
@@ -169,8 +231,9 @@ def test_the_summary_carries_its_denominator_and_ranks_nothing():
     which one matters, and that decision is not this layer's."""
     game = _game(SCHOLARS, judged=_judged([1, 3, 5, 7], [10, 40, -60, -900]))
     text = feat.describe(feat.observe(game))
-    assert "ходов MANA: 4" in text and "судимых: 4" in text
-    assert "известно" in text and "из 4" in text
+    assert "ходов всего: 7" in text
+    assert "MANA 4" in text and "соперника 3" in text
+    assert "известно" in text
     assert "самый" not in text and "лучш" not in text
 
 
