@@ -457,6 +457,52 @@ def _bench(from_level: int, port: int = 0) -> int:
     return 0
 
 
+def _aichess(name: str = "") -> int:
+    """Register on AI Chess Arena, or report what this machine can do there.
+
+    Registration is separate and explicit: it puts a name on somebody
+    else's service and returns a permanent key, and both are the user's
+    decision. The key goes straight to the credential store -- never to a
+    file, never to the repository, and never printed.
+    """
+    from .net import aichess
+
+    arena = aichess.Arena()
+    if name:
+        if arena.bearer:
+            print("ключ уже есть — повторная регистрация создаст второго "
+                  f"игрока. Удалить старый: задайте {aichess.TOKEN_ENV} пустым")
+            return 1
+        try:
+            row = arena.register(name)
+        except aichess.ArenaError as exc:
+            print(f"регистрация не удалась: {exc}")
+            return 1
+        stored = aichess.save_token(str(row.get("token", "")))
+        if not stored["ok"]:
+            print(stored["error"])
+            return 1
+        print(f"зарегистрирован: {row.get('name', name)}, "
+              f"рейтинг {row.get('elo', '?')}")
+        print(f"ключ сохранён в диспетчере учётных данных ({aichess.TOKEN_ENV}), "
+              f"в файлы не записан")
+        return 0
+
+    state = arena.describe()
+    print(f"мир: {state['environment']}, правило окончания: "
+          f"{state['termination_rule']}")
+    print(f"ключ: {'есть' if state['token'] else 'нет'} ({state['env']})")
+    if state.get("note"):
+        print(state["note"])
+    if state.get("error"):
+        print(state["error"])
+        return 1
+    if state["token"]:
+        print(f"в очереди: {'да' if state.get('in_queue') else 'нет'}"
+              + (f", партия {state['game']}" if state.get("game") else ""))
+    return 0
+
+
 def _chess_experiment(games: int) -> int:
     """Derive changes from what has been found, and test each by playing.
 
@@ -1341,6 +1387,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Стенд: сама вызывает Stockfish на lichess, "
                              "10 побед подряд — следующий уровень, 30 подряд "
                              "на 8-м — конец; без числа продолжает с прошлого")
+    parser.add_argument("--aichess", nargs="?", const="", metavar="ИМЯ",
+                        help="AI Chess Arena: без имени — что доступно; "
+                             "с именем — разовая регистрация агента")
     parser.add_argument("--chess-experiment", nargs="?", const=0, type=int,
                         metavar="N", dest="chess_experiment",
                         help="Вывести изменения из находок и проверить каждое "
@@ -1463,6 +1512,8 @@ def main() -> int:
 
     if args.bench is not None:
         return _bench(int(args.bench), int(args.watch_port))
+    if args.aichess is not None:
+        return _aichess(str(args.aichess))
     if args.chess_experiment is not None:
         return _chess_experiment(int(args.chess_experiment))
     if args.chess_rejudge is not None:
