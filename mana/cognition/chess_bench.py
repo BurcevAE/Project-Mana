@@ -127,6 +127,21 @@ BROKEN = "broken"
 CLIMBING = "climbing"
 
 
+def _improved(measurement: Dict[str, Any]) -> bool:
+    """Did the change win more often than the player it replaced?
+
+    The verdict says an effect was measured; this says which way. Nothing
+    else in the loop looked at the sign, so a change proven harmful was
+    accepted on the strength of having been measured at all.
+    """
+    effect = (measurement or {}).get("effect")
+    if effect is None:
+        return False
+    from . import chess_action
+
+    return float(effect) > chess_action.NO_EFFECT
+
+
 def chess_bot_default() -> Any:
     """The player as written. Named here so the bench composes versions
     without building a player itself."""
@@ -818,7 +833,12 @@ class Bench:
             # Where the verdict becomes a decision. Not in `record`: that
             # stores a finding, and adopting there would be a side effect
             # of writing to a ledger.
-            if finding.verdict == chess_action.ACCEPTED:
+            # ACCEPTED means the change moved the result, in either
+            # direction. Adopting on the verdict alone would take on a
+            # change proven harmful -- the sign of the effect is the only
+            # thing the experiment was run for.
+            if (finding.verdict == chess_action.ACCEPTED
+                    and _improved(finding.measurement)):
                 return self._adopt(change, reached, sofar, finding)
             return f"опыт закончен: {finding.verdict}"
         return (f"опыт «{change.property}»: {sofar.games} партий, "
@@ -943,9 +963,17 @@ class Bench:
         for finding in book.latest():
             if finding.question != wanted or finding.approach != probe:
                 continue
-            if finding.verdict != chess_action.REJECTED:
+            if str(finding.conditions.get("control", "v0-base")) != control:
                 continue
-            if str(finding.conditions.get("control", "v0-base")) == control:
+            # A finished experiment closes the question unless it ended in
+            # a proven improvement. REJECTED is a causal refutation;
+            # ACCEPTED with a negative effect is a causal refutation of
+            # the opposite kind; NOT_EVALUATED is not a refutation at all
+            # but it is a practical failure -- the action did not reach
+            # the goal, and repeating it unchanged spends the same games
+            # for the same answer.
+            if not (finding.verdict == chess_action.ACCEPTED
+                    and _improved(finding.measurement)):
                 return True
         return False
 

@@ -1275,14 +1275,50 @@ def test_the_same_intervention_is_open_again_on_a_new_control(
     assert picked is not None and picked[0].property == "pawn_moves"
 
 
-def test_not_evaluated_does_not_close_the_question(tmp_path, monkeypatch):
-    """The experiment ran out of decided games. That is not an answer."""
+def test_not_evaluated_is_a_practical_failure_not_a_refutation(
+        tmp_path, monkeypatch):
+    """Two different things, and the code keeps them apart.
+
+    The verdict stays NOT_EVALUATED -- nobody may say the hypothesis was
+    refuted, and the ledger says so. But the action did not reach the
+    goal, and repeating it unchanged spends the same games for the same
+    answer, so it does not come round again on this control.
+    """
+    from mana.cognition import chess_version
+
     bench, _ = _bench_for(tmp_path, monkeypatch)
     _, finding = _answered(bench, "pawn_moves", "NOT_EVALUATED")
-    assert finding.verdict == "NOT_EVALUATED"
+    assert finding.verdict == "NOT_EVALUATED"        # not a refutation
+    assert finding.failure.failure == "NOT_MEASURED"
+
     _picking(bench, monkeypatch, ["pawn_moves"])
+    assert bench._pick() is None                     # but not repeated
+
+    # A different baseline is a different experiment, as the contract says.
+    monkeypatch.setattr(chess_version, "confirmed_fingerprint",
+                        lambda: "v1-abcd")
     picked = bench._pick()
     assert picked is not None and picked[0].property == "pawn_moves"
+
+
+def test_a_change_proven_harmful_is_not_adopted(tmp_path, monkeypatch):
+    """ACCEPTED means an effect was measured, in either direction. The
+    sign is the only thing the experiment was run for."""
+    from mana.cognition import chess_action, chess_version
+
+    bench, _ = _bench_for(tmp_path, monkeypatch)
+    change = chess_action.Change("pawn_moves", chess_action.LESS,
+                                 from_finding="obs-1")
+    worse = chess_action.Duel(change=change, games=46, changed_won=6,
+                              unchanged_won=34, drawn=6)
+    bench._trying = (change, {"share": 0.6, "ties": 400, "varies": 240}, worse)
+    monkeypatch.setattr(chess_action, "duel",
+                        lambda *a, **kw: chess_action.Duel(change=change))
+    said = bench._experiment()
+
+    assert "ACCEPTED" in said and "принято" not in said
+    assert chess_version.provisional() == []
+    assert bench._settled(change, bench._book()) is True
 
 
 def test_choosing_settles_rather_than_looping(tmp_path, monkeypatch):
