@@ -86,6 +86,14 @@ GAME_LIMIT = 1200.0
 #: How long to wait for a challenge to turn into a game.
 START_LIMIT = 90.0
 
+#: What to do when Lichess refuses to start another game. It limits how
+#: often a client may create one, and each attempt costs two requests to
+#: the endpoint that just refused -- so the wait grows instead of being a
+#: fixed ten seconds, which was answering rate limiting by producing more
+#: of what caused it.
+REFUSED_WAIT = 60.0
+REFUSED_WAIT_MAX = 900.0
+
 #: What happened on the last game, in the ladder's own terms.
 ADVANCED = "advanced"
 FINISHED = "finished"
@@ -213,6 +221,8 @@ class Bench:
         self.client = client or api.Lichess()
         self.ladder = ladder if ladder is not None else Ladder.load()
         self.gap = float(gap)
+        #: Consecutive refusals, so the wait can grow with them.
+        self._refused = 0
         self.bot = bot or Bot(client=self.client,
                               policy=Policy(rated=False, max_games=1,
                                             speeds=("blitz", "rapid",
@@ -247,7 +257,7 @@ class Bench:
                     continue
                 self._fold(seat)
                 if self.gap and not self._stop.is_set():
-                    time.sleep(self.gap)
+                    self._sleep(self.gap)
         finally:
             self.bot.stop()
             self.ladder.save()
@@ -269,9 +279,14 @@ class Bench:
                                      clock_limit=CLOCK_LIMIT,
                                      clock_increment=CLOCK_INCREMENT)
         except api.LichessError as exc:
-            events.emit(events.WARNING, f"вызов не принят: {exc}")
-            time.sleep(max(self.gap, 10.0))
+            self._refused += 1
+            wait = min(REFUSED_WAIT * (2 ** (self._refused - 1)), REFUSED_WAIT_MAX)
+            events.emit(events.WARNING,
+                        f"вызов не принят ({exc}). Отказ подряд "
+                        f"{self._refused}, жду {wait:.0f}с")
+            self._sleep(wait)
             return None
+        self._refused = 0
         events.emit(events.STATUS,
                     f"вызвала Stockfish уровня {self.ladder.level} "
                     f"({self.ladder.describe()})",
@@ -298,7 +313,24 @@ class Bench:
                         f"партия не кончилась за {GAME_LIMIT:.0f}с — бросаю ждать")
         return None
 
+    def _sleep(self, seconds: float) -> None:
+        """Wait, but wake at once if the run is stopped.
+
+        A fifteen-minute backoff that ignores Ctrl+C is a bench nobody
+        can stop, which is one of the two ways this was asked to end.
+        """
+        self._stop.wait(seconds)
+
     def _fold(self, seat: Any) -> None:
+        # A game that never reached a result is not a drawn game -- it is
+        # no evidence at all, and folding it in as a draw broke a real
+        # streak. "Unmeasured is not zero" is the rule everywhere else in
+        # this project; the ladder had been the exception.
+        if seat.status in ("started", "created", ""):
+            events.emit(events.WARNING,
+                        f"партия {seat.game_id} без результата "
+                        f"({seat.status or 'нет статуса'}) — в счёт не идёт")
+            return
         won = bool(seat.winner) and seat.winner == ("white" if seat.us else "black")
         drawn = not seat.winner
         what = self.ladder.note(won, drawn)

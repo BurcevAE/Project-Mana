@@ -221,7 +221,10 @@ def test_a_refused_challenge_does_not_break_the_ladder(tmp_path, monkeypatch):
         raise lichess.LichessError("429")
 
     bench.client.challenge_ai = refuse
-    monkeypatch.setattr(bench_mod.time, "sleep", lambda s: None)
+    # `_sleep` waits on the stop event, not on time.sleep -- patching the
+    # module clock left this test waiting the real backoff, three minutes
+    # of a suite that has to stay fast enough to be run.
+    monkeypatch.setattr(bench, "_sleep", lambda seconds: None)
     bench.run(limit=2)
     assert bench.ladder.games == 0 and bench.ladder.level == 1
 
@@ -234,3 +237,93 @@ def test_nothing_about_the_player_changes_between_games():
     source = inspect.getsource(bench_mod)
     for adapting in ("adopt(", "install(", "PLAY_DEPTH =", "depth="):
         assert adapting not in source.split("class Bench")[1]
+
+
+# --------------------------------------------------------------------------
+# what the rate limit exposed
+# --------------------------------------------------------------------------
+
+def test_a_game_without_a_result_is_not_a_draw(tmp_path, monkeypatch):
+    """It is no evidence at all. Folding one in as a draw broke a real
+    streak -- one such game is in the record, status "started" after 19
+    moves. "Unmeasured is not zero" is the rule everywhere else here."""
+    monkeypatch.setattr(bench_mod, "state_path", lambda: tmp_path / "bench.json")
+    bench = bench_mod.Bench(client=object(), bot=_Bot([]), ladder=_ladder())
+    _win(bench.ladder, 4)
+
+    unfinished = chess_bot.Seat(game_id="g", us=True, source=chess_bot.LIVE)
+    unfinished.status = "started"
+    unfinished.winner = ""
+    bench._fold(unfinished)
+    assert bench.ladder.streak == 4          # untouched
+    assert bench.ladder.games == 4           # and not counted
+
+    real_draw = chess_bot.Seat(game_id="g2", us=True, source=chess_bot.LIVE)
+    real_draw.status = "draw"
+    real_draw.winner = ""
+    bench._fold(real_draw)
+    assert bench.ladder.streak == 0 and bench.ladder.games == 5
+
+
+def test_the_wait_after_a_refusal_grows(tmp_path, monkeypatch):
+    """Ten seconds and two requests per attempt is answering rate
+    limiting by producing more of what caused it."""
+    monkeypatch.setattr(bench_mod, "state_path", lambda: tmp_path / "bench.json")
+    bot = _Bot([])
+    bench = bench_mod.Bench(client=_Client(bot), bot=bot, ladder=_ladder(), gap=0.0)
+
+    def refuse(level=1, **kw):
+        raise lichess.LichessError("429")
+
+    bench.client.challenge_ai = refuse
+    waited = []
+    monkeypatch.setattr(bench, "_sleep", lambda s: waited.append(s))
+    for _ in range(4):
+        bench._one_game()
+    assert waited == [60.0, 120.0, 240.0, 480.0]
+    assert max(waited) <= bench_mod.REFUSED_WAIT_MAX
+
+
+def test_the_wait_is_capped_and_a_success_clears_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(bench_mod, "state_path", lambda: tmp_path / "bench.json")
+    bot = _Bot([True])
+    bench = bench_mod.Bench(client=_Client(bot), bot=bot, ladder=_ladder(), gap=0.0)
+    bench._refused = 20
+    monkeypatch.setattr(bench, "_sleep", lambda s: None)
+
+    def refuse(level=1, **kw):
+        raise lichess.LichessError("429")
+
+    real = bench.client.challenge_ai
+    bench.client.challenge_ai = refuse
+    waited = []
+    monkeypatch.setattr(bench, "_sleep", lambda s: waited.append(s))
+    bench._one_game()
+    assert waited == [bench_mod.REFUSED_WAIT_MAX]
+
+    bench.client.challenge_ai = real
+    bench._one_game()
+    assert bench._refused == 0               # a game started; the wait resets
+
+
+def test_a_long_backoff_still_answers_ctrl_c(tmp_path, monkeypatch):
+    """A fifteen-minute wait that ignores a stop is a bench nobody can
+    stop, which is one of the two ways this was asked to end."""
+    monkeypatch.setattr(bench_mod, "state_path", lambda: tmp_path / "bench.json")
+    bench = bench_mod.Bench(client=object(), bot=_Bot([]), ladder=_ladder())
+    bench.stop()
+    started = time.time()
+    bench._sleep(30.0)
+    assert time.time() - started < 1.0
+
+
+def test_asking_for_the_console_twice_does_not_double_the_output():
+    """One event became two lines, which reads as two processes running
+    rather than as one sink registered twice."""
+    from mana import events
+
+    events.install_console_sink()
+    events.install_console_sink()
+    events.install_console_sink()
+    assert sum(1 for sink in events.BUS.sinks()
+               if sink is events.console_sink) == 1

@@ -83,6 +83,12 @@ class EventBus:
         self._history: List[Event] = []
         self._history_limit = 500
 
+    def sinks(self) -> List[Sink]:
+        """Who is listening. Read-only copy: a caller iterating this while
+        another thread subscribes would otherwise see the list change."""
+        with self._lock:
+            return list(self._sinks)
+
     def subscribe(self, sink: Sink, replay: bool = False) -> Sink:
         """Add a sink. `replay=True` hands it the events already emitted --
         the desktop window opens after the agent has started, and the
@@ -183,5 +189,14 @@ def console_sink(event: Event) -> None:
 
 
 def install_console_sink() -> Sink:
-    """Called by cli.main() so command-line runs look exactly as before."""
+    """Called by cli.main() so command-line runs look exactly as before.
+
+    Idempotent. `main()` installs it and several commands install it
+    again for their own long-running work; the bus took both and every
+    event printed twice, which reads as two processes running rather than
+    as one sink registered twice. Asking for the console twice is a
+    reasonable thing for a caller to do, so the answer belongs here.
+    """
+    if console_sink in BUS.sinks():
+        return console_sink
     return subscribe(console_sink)
