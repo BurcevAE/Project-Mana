@@ -223,3 +223,87 @@ def test_the_correction_counts_the_experiments_run_together():
     assert among["alpha"] < alone["alpha"]
     width = lambda m: m["interval"][1] - m["interval"][0]
     assert width(among) > width(alone)
+
+
+# --------------------------------------------------------------------------
+# what a lever can move, asked before games are spent
+# --------------------------------------------------------------------------
+
+def _ties(count=3):
+    """Positions where several moves are tied, built by hand."""
+    board = chess.Board()
+    board.push_san("e4")
+    board.push_san("d5")
+    all_san = [board.san(m) for m in board.legal_moves]
+    return [(board.copy(), all_san) for _ in range(count)]
+
+
+def test_a_lever_that_cannot_change_a_move_is_measured_as_such():
+    """Three of the first six experiments were run on levers that could
+    not change a move. `pieces` differed in none of four hundred ties, and
+    seventy games bought a verdict about the shuffle."""
+    board = chess.Board()                       # no promotions available
+    ties = [(board.copy(), [board.san(m) for m in board.legal_moves])]
+    inert = act.reach(act.Change("promotions", act.MORE), ties)
+    assert inert["varies"] == 0 and inert["share"] == 0.0
+
+    lively = act.reach(act.Change("pawn_moves", act.MORE), ties)
+    assert lively["varies"] == 1 and lively["share"] == 1.0
+
+
+def test_an_inert_lever_is_not_evaluated_rather_than_rejected():
+    """REJECTED reads as "the finding was tested and failed". What failed
+    was the experiment's ability to differ from doing nothing, and
+    telling those apart is what the gates in this project are for."""
+    change = act.Change("pieces", act.MORE)
+    result = act.Duel(change=change, games=70, changed_won=30,
+                      unchanged_won=30, drawn=10)
+    finding = act.record(change, result, depth=2,
+                         reached={"share": 0.0, "ties": 400, "varies": 0},
+                         ledger=_nowhere())
+    assert finding.verdict == NOT_EVALUATED
+    assert "не двигает ничего" in finding.note
+    assert "жребии" in finding.note or "жребий" in finding.note
+
+
+def test_reach_travels_with_a_measured_experiment():
+    change = act.Change("pawn_moves", act.LESS)
+    result = act.Duel(change=change, games=70, changed_won=40,
+                      unchanged_won=20, drawn=10)
+    finding = act.record(change, result, depth=2,
+                         reached={"share": 0.6, "ties": 400, "varies": 240},
+                         ledger=_nowhere())
+    assert finding.measurement["reach"] == 0.6
+    assert "рычаг работал в 60%" in finding.note
+
+
+def test_two_levers_that_pick_the_same_move_are_one_experiment():
+    """`material`, `pieces` and `captures` disagree with each other in
+    nought to one per cent of ties: three experiments, one answer."""
+    ties = _ties()
+    same = act.disagreement(act.Change("captures", act.MORE),
+                            act.Change("captures", act.MORE), ties)
+    assert same == 0.0
+    apart = act.disagreement(act.Change("pawn_moves", act.MORE),
+                             act.Change("pawn_moves", act.LESS), ties)
+    assert apart > 0.0
+
+
+def test_ties_are_taken_from_games_actually_played():
+    """The question is what a lever would do in the positions this player
+    reaches, and a position sampled from nowhere answers a different
+    one."""
+    from mana.cognition.chess_arena import SearchPlayer
+
+    game = {"moves": ["e2e4", "e7e5", "g1f3", "b8c6", "f1c4", "g8f6"]}
+    ties = act.ties_in([game], SearchPlayer(depth=1, trace=True), limit=5)
+    assert ties and all(len(tied) > 1 for _, tied in ties)
+
+
+def _nowhere():
+    """A ledger that keeps nothing: these tests are about the verdict."""
+    class _Void:
+        def record(self, finding):
+            return True
+
+    return _Void()

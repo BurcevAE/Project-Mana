@@ -34,6 +34,22 @@ overriding anything the search actually decided, and it is large enough
 for a change there to matter. A tie-break replaces a coin toss, not a
 judgement.
 
+Reach comes before the experiment
+----------------------------------
+Executable is not the same as able to change anything. A tie-break moves a
+move only where the property differs among the moves the search rated
+equally, and for a search that evaluates by material, the material after
+a tied move is almost always equal too. Measured on three hundred real
+ties: `pieces` differed in none of them, `material` and `captures` in one
+per cent, `pawn_moves` in fifty-nine.
+
+Seventy games each were spent on the first three before anybody asked.
+Their verdict was REJECTED, which reads as "the finding was tested and
+failed" and meant "the lever never moved". Reach is measured first now,
+from positions already recorded, costs no games, and travels with the
+experiment: a lever that cannot move anything is NOT_EVALUATED with the
+reason, never REJECTED.
+
 Executability comes before the experiment
 ------------------------------------------
 A property is only a candidate if it can be computed for a move *before
@@ -286,9 +302,94 @@ class Duel:
                 f"за прежнего, {self.drawn} ничьих")
 
 
+#: How many recorded positions are examined when measuring reach. Enough
+#: for a share to mean something, small enough that the check stays free
+#: compared with playing even one game.
+POSITIONS_FOR_REACH = 400
+
+
 #: Games per experiment. Forty left 27 to 34 decided once draws were
 #: dropped, which is under the threshold -- measured, then raised.
 GAMES_PER_EXPERIMENT = 70
+
+
+def ties_in(games: Sequence[Dict[str, Any]], player: Any,
+            limit: int = POSITIONS_FOR_REACH,
+            every: int = 7) -> List[Tuple[Any, List[str]]]:
+    """Positions from the record where the search rated several moves equal.
+
+    Taken from games already played rather than generated: the question is
+    what a lever would do in the positions this player actually reaches,
+    and a sampled-from-nowhere position answers a different one.
+    """
+    import chess
+
+    out: List[Tuple[Any, List[str]]] = []
+    for game in games:
+        board = chess.Board()
+        for index, uci in enumerate(game.get("moves", [])):
+            if len(out) >= limit:
+                return out
+            try:
+                move = chess.Move.from_uci(uci)
+            except ValueError:
+                break
+            if move not in board.legal_moves:
+                break
+            if index % every == 0 and not board.is_game_over():
+                player.choose(board, random.Random(1))
+                scores = getattr(player, "_root_scores", None) or []
+                if scores:
+                    top = max(score for _, score in scores)
+                    tied = [san for san, score in scores if score == top]
+                    if len(tied) > 1:
+                        out.append((board.copy(), tied))
+            board.push(move)
+    return out
+
+
+def reach(change: Change, ties: Sequence[Tuple[Any, List[str]]]
+          ) -> Dict[str, Any]:
+    """How often this lever could change the move at all.
+
+    Zero means the experiment is decided before it starts: the changed
+    player and the unchanged one would play identically, and the result
+    would be a report about the shuffle. Costs no games.
+    """
+    if change.property not in SCORERS:
+        return {"share": 0.0, "ties": len(ties), "varies": 0}
+    score = SCORERS[change.property]
+    varies = 0
+    for board, tied_san in ties:
+        moves = [move for move in board.legal_moves
+                 if board.san(move) in tied_san]
+        if len({score(board, move) for move in moves}) > 1:
+            varies += 1
+    return {"share": round(varies / len(ties), 3) if ties else 0.0,
+            "ties": len(ties), "varies": varies}
+
+
+def disagreement(first: Change, second: Change,
+                 ties: Sequence[Tuple[Any, List[str]]]) -> float:
+    """How often two levers would pick different moves.
+
+    Two that agree everywhere are one experiment, not two. Computed
+    without playing anything, which is what makes it worth asking before
+    a budget is committed rather than after.
+    """
+    if first.property not in SCORERS or second.property not in SCORERS:
+        return 0.0
+    rng = random.Random(0)
+    differed = 0
+    for board, tied_san in ties:
+        moves = [move for move in board.legal_moves
+                 if board.san(move) in tied_san]
+        if not moves:
+            continue
+        if first.choose(board, moves, random.Random(1)) != \
+                second.choose(board, moves, random.Random(1)):
+            differed += 1
+    return round(differed / len(ties), 3) if ties else 0.0
 
 
 def duel(change: Change, games: int = GAMES_PER_EXPERIMENT, depth: int = 2,
@@ -364,7 +465,8 @@ def verdict_for(measurement: Dict[str, Any]) -> str:
 
 
 def record(change: Change, result: Duel, depth: int,
-           questions: int = 1, ledger: Optional[Any] = None
+           questions: int = 1, ledger: Optional[Any] = None,
+           reached: Optional[Dict[str, Any]] = None
            ) -> ledger_mod.Finding:
     """Write the experiment down, with the finding it came from.
 
@@ -375,22 +477,37 @@ def record(change: Change, result: Duel, depth: int,
     from ..version import PRODUCT_VERSION
 
     measurement = measure(result, questions)
+    if reached is not None:
+        measurement["reach"] = reached["share"]
+        measurement["reach_ties"] = reached["ties"]
+    verdict = verdict_for(measurement)
+    # An inert lever is not a tested claim. Calling it REJECTED says the
+    # finding failed, when what failed was the experiment's ability to
+    # differ from doing nothing -- and "tested and false" against "never
+    # tested" is the distinction the gates in this project exist for.
+    if reached is not None and not reached["varies"]:
+        verdict = NOT_EVALUATED
     finding = ledger_mod.Finding(
         question=QUESTION,
         approach=change.as_dict(),
-        verdict=verdict_for(measurement),
+        verdict=verdict,
         measurement=measurement,
         conditions={"games": result.games, "search_depth": depth,
                     "opponent": "тот же игрок без изменения",
                     "version": PRODUCT_VERSION, "questions_asked": questions},
-        note=_note(change, measurement),
+        note=_note(change, measurement, reached),
         version=PRODUCT_VERSION)
     book = ledger if ledger is not None else ledger_mod.Ledger()
     book.record(finding)
     return finding
 
 
-def _note(change: Change, measurement: Dict[str, Any]) -> str:
+def _note(change: Change, measurement: Dict[str, Any],
+          reached: Optional[Dict[str, Any]] = None) -> str:
+    if reached is not None and not reached["varies"]:
+        return (f"{change.describe()}: рычаг не двигает ничего — свойство "
+                f"одинаково у всех равных ходов в {reached['ties']} ничьих. "
+                f"Эксперимент не о находке, а о жребии.")
     trials = int(measurement["trials"])
     if trials < MIN_PAIRED_TRIALS:
         return (f"{change.describe()}: решённых партий {trials}, нужно "
@@ -403,5 +520,7 @@ def _note(change: Change, measurement: Dict[str, Any]) -> str:
         said = "изменение проигрывает чаще"
     else:
         said = "исход не изменился"
+    seen = ("" if reached is None
+            else f", рычаг работал в {reached['share']:.0%} ничьих")
     return (f"{change.describe()}: {said} ({share:.0%} из {trials} решённых, "
-            f"интервал {low:.0%}…{high:.0%})")
+            f"интервал {low:.0%}…{high:.0%}{seen})")

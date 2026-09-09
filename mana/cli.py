@@ -483,14 +483,52 @@ def _chess_experiment(games: int) -> int:
         print("Ни одна находка не даёт исполнимого изменения.")
         return 0
 
+    # What can each lever move at all? Asked before a single game is
+    # spent, from positions already in the record. Three of the first six
+    # experiments were run on levers that could not change a move, and
+    # their REJECTED verdicts were reports about the shuffle.
+    from .cognition.chess_arena import SearchPlayer
+
+    played = [row for row in chess_bot.recorded()
+              if str(row.get("source", "")) == chess_bot.LOCAL][:60]
+    ties = chess_action.ties_in(played, SearchPlayer(depth=2, trace=True))
+    print(f"\nничьих оценки в записи: {len(ties)} — на них видно, "
+          f"что рычаг может сдвинуть")
+    reached = {}
+    for change in changes:
+        reached[change.property] = chess_action.reach(change, ties)
+        print(f"  {change.property:<15} работает в "
+              f"{reached[change.property]['share']:.0%} ничьих")
+
+    same = []
+    for index, first in enumerate(changes):
+        for second in changes[index + 1:]:
+            apart = chess_action.disagreement(first, second, ties)
+            if apart < 0.05:
+                same.append(f"{first.property} и {second.property} "
+                            f"({apart:.0%} расхождения)")
+    for pair in same:
+        print(f"  почти один опыт: {pair}")
+
+    inert = [c for c in changes if not reached[c.property]["varies"]]
+    for change in inert:
+        finding = chess_action.record(
+            change, chess_action.Duel(change=change), depth=2,
+            questions=len(changes), reached=reached[change.property])
+        print(f"  пропускаю: {finding.note}")
+    changes = [c for c in changes if reached[c.property]["varies"]]
+    changes.sort(key=lambda c: -reached[c.property]["share"])
+
     games = games or chess_action.GAMES_PER_EXPERIMENT
     print(f"\nпроверяю {len(changes)} изменений по {games} партий против "
-          f"неизменённого игрока (цвета чередуются)")
+          f"неизменённого игрока (цвета чередуются), сильный рычаг первым")
     for number, change in enumerate(changes, 1):
-        print(f"  {number}/{len(changes)}: {change.describe()}", flush=True)
+        print(f"  {number}/{len(changes)}: {change.describe()} "
+              f"[рычаг {reached[change.property]['share']:.0%}]", flush=True)
         result = chess_action.duel(change, games=games)
         finding = chess_action.record(change, result, depth=2,
-                                      questions=len(changes))
+                                      questions=len(changes),
+                                      reached=reached[change.property])
         print(f"    {finding.verdict}: {finding.note}")
     print("\nПринятое здесь — причинное утверждение: изменение сдвинуло "
           "исход. Отклонённое — что связь не пережила вмешательства.")
