@@ -495,13 +495,17 @@ def summarise(seat: Seat) -> Dict[str, Any]:
     for moves.
     """
     losses = [row.get("loss", 0.0) for row in seat.judged]
-    close = [row for row in seat.thoughts if row.get("close_call")]
+    # Only MANA's own moves: a self-play record now holds both sides'
+    # traces, and counting them together would double every number in a
+    # line that says "мои ходы".
+    mine = [row for row in seat.thoughts if row.get("ours", True)]
+    close = [row for row in mine if row.get("close_call")]
     # None, not zero, where nothing judged. "зевков 0" for a game no judge
     # looked at is unmeasured dressed as measured -- the one thing this
     # project refuses everywhere else, and it went out in a status line
     # the moment the judge was switched off.
     counted = bool(seat.judged)
-    return {"moves": len(seat.thoughts),
+    return {"moves": len(mine),
             "judged": len(seat.judged),
             "mistakes": (sum(1 for row in seat.judged if row.get("mistake"))
                          if counted else None),
@@ -509,8 +513,8 @@ def summarise(seat: Seat) -> Dict[str, Any]:
                          if counted else None),
             "mean_loss": round(sum(losses) / len(losses), 1) if losses else None,
             "close_calls": len(close),
-            "close_share": (round(len(close) / len(seat.thoughts), 2)
-                            if seat.thoughts else 0.0)}
+            "close_share": (round(len(close) / len(mine), 2)
+                            if mine else 0.0)}
 
 
 def _default_player() -> Any:
@@ -586,10 +590,17 @@ def play_locally(games: int = 1, depth: int = PLAY_DEPTH,
                 # White is MANA's judged side, the same convention the
                 # baseline was measured under. Both sides are the same
                 # player; judging both would double-count one search.
+                # Both sides. Two searches run and only one was written
+                # down, so every property about the search had zero
+                # measurable games in the one world where both players
+                # are MANA and the comparison means something.
                 thought, judged = {}, {}
+                trace = player.thoughts[-1].as_dict() if player.thoughts else {}
+                if trace:
+                    trace["ours"] = bool(board.turn)
+                    seat.thoughts.append(trace)
                 if board.turn:
-                    thought = player.thoughts[-1].as_dict()
-                    seat.thoughts.append(thought)
+                    thought = trace
                     if judge is not None:
                         judged = judge.judge_move(board, move, ply).as_dict()
                         seat.judged.append(judged)

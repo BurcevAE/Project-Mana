@@ -277,6 +277,8 @@ PAGE = """<!doctype html>
     <h2>Ход размышлений</h2>
     <div id="why" class="dim">Первый ход ещё не сделан.</div>
     <table id="lines"></table>
+    <h2 style="margin-top:16px">Что изменилось в выводах</h2>
+    <div class="log" id="findings" hidden></div>
     <h2 style="margin-top:16px">Партия</h2>
     <div class="log" id="log"></div>
   </section>
@@ -368,6 +370,15 @@ function apply(f){
     document.getElementById("who").textContent=
       (f.user?("аккаунт "+f.user+", ждём вызова"):"готова");
     if(f.judge) document.getElementById("judge").textContent=f.judge;
+    return;
+  }
+  if(f.kind==="finding"){
+    var box=document.getElementById("findings");
+    box.hidden=false;
+    var row=document.createElement("div");
+    row.textContent=f.text;
+    box.insertBefore(row, box.firstChild);
+    while(box.childNodes.length>24) box.removeChild(box.lastChild);
     return;
   }
   if(f.kind==="bench"){

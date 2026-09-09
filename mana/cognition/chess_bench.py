@@ -269,6 +269,12 @@ class Bench:
         #: repeated every tick. Twelve identical lines is noise pretending
         #: to be progress.
         self._said = ""
+        #: Games already reduced to two rows, by id. Reducing costs a board
+        #: replay; measuring the reduced rows is arithmetic, so a
+        #: conclusion after every game is affordable only with this.
+        self._sides: Dict[str, Any] = {}
+        #: The verdicts as of the last pass, so only what moved is said.
+        self._verdicts: Dict[str, str] = {}
 
     def stop(self) -> None:
         self._stop.set()
@@ -467,6 +473,7 @@ class Bench:
             if played:
                 local = sum(1 for row in rows
                             if str(row.get("source", "")) == chess_bot.LOCAL) + 1
+                self._report_conclusions()
                 row = chess_bot.summarise(played[0])
                 judged = ("" if row["blunders"] is None
                           else f", зевков {row['blunders']}")
@@ -488,6 +495,55 @@ class Bench:
             (f.measurement["trials"] for f in found), default=0)
         return (f"прочитала {len(rows)} партий: до вывода не хватает "
                 f"{max(0, short)}")
+
+    def conclude(self) -> List[str]:
+        """Re-measure what the record says, and report only what moved.
+
+        Findings, not laws. Everything here is a regularity in what has
+        already happened; a law is earned by changing something and
+        measuring the change, and calling a correlation one would be the
+        most expensive lie this system could tell itself.
+        """
+        from . import chess_bot, chess_outcome
+
+        try:
+            games = chess_bot.recorded()
+        except Exception:
+            return []
+        fresh = 0
+        for game in games:
+            key = str(game.get("game", ""))
+            if not key or key in self._sides:
+                continue
+            reduced = chess_outcome.reduce_game(game)
+            if reduced is not None:
+                self._sides[key] = reduced
+                fresh += 1
+        if not self._sides:
+            return []
+        out = chess_outcome.look(list(self._sides.values()))
+        said = chess_outcome.changes(self._verdicts, out)
+        self._verdicts = chess_outcome.state(out)
+        return said
+
+    def _report_conclusions(self) -> None:
+        """Say what moved, and on the first pass say only what is settled.
+
+        A fresh run has every verdict as "new", and fifty-two lines of
+        mostly "не измерено" buries the two that carry a result. After
+        that every line is a change, and a change is always worth saying.
+        """
+        first = not self._verdicts
+        lines = self.conclude()
+        if first:
+            unmeasured = [line for line in lines if "NOT_EVALUATED" in line]
+            lines = [line for line in lines if "NOT_EVALUATED" not in line]
+            if unmeasured:
+                lines.append(f"ещё не измерено: {len(unmeasured)} "
+                             f"(наблюдение — это партия, а не ход)")
+        for line in lines:
+            events.emit(events.STATUS, f"вывод: {line}",
+                        chess={"kind": "finding", "text": line})
 
     def _fold(self, seat: Any) -> None:
         # A game that never reached a result is not a drawn game -- it is
@@ -512,6 +568,7 @@ class Bench:
                     f"{outcome}. {self.ladder.describe()} {said}".strip(),
                     chess={"kind": "bench", "ladder": self.ladder.as_dict(),
                            "outcome": outcome, "event": what})
+        self._report_conclusions()
 
     def _announce(self, when: str) -> None:
         events.emit(events.STATUS,
