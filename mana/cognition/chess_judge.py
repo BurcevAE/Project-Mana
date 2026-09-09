@@ -83,6 +83,12 @@ BY_ENGINE = "stockfish"
 BY_MATERIAL = "material"
 
 
+#: Name the engine outright, when the search is wrong for a reason nobody
+#: has found yet. Checked before anything else: a person who can see the
+#: file should be able to say where it is.
+ENGINE_ENV = "MANA_STOCKFISH"
+
+
 def engine_path() -> Optional[Path]:
     """The engine, if this installation has one.
 
@@ -90,14 +96,65 @@ def engine_path() -> Optional[Path]:
     than raising: an absent engine is a normal state with a working
     fallback, not an error.
     """
+    named = os.environ.get(ENGINE_ENV, "").strip().strip('"')
+    if named and Path(named).is_file():
+        return Path(named)
     for root in searched():
-        if not root.is_dir():
-            continue
-        for found in sorted(root.glob("stockfish*.exe")) + sorted(root.glob("stockfish*")):
-            if found.is_file():
-                return found
+        for found in _engines_in(root):
+            return found
     found = shutil.which("stockfish")
     return Path(found) if found else None
+
+
+def _engines_in(root: Path) -> List[Path]:
+    """Engines in one directory, or an empty list and no exception.
+
+    A directory that cannot be read is a normal state here -- a different
+    account, a policy, a drive that went away -- and it must not stop the
+    search of the remaining places.
+    """
+    try:
+        if not root.is_dir():
+            return []
+        found = sorted(root.glob("stockfish*.exe")) + sorted(root.glob("stockfish*"))
+        return [path for path in found if path.is_file()]
+    except OSError:
+        return []
+
+
+def diagnose() -> List[Dict[str, Any]]:
+    """Every place looked at, and what was actually wrong with it.
+
+    "Не найден" plus a list of paths still leaves the reader to guess
+    which of four things happened, and the four have different remedies:
+    the directory is absent, it is not a directory, the operating system
+    refused it, or it is there and holds nothing matching. Written after
+    the same command found the engine from one shell and not from another
+    on the same machine, where a better message was worth more than
+    another guess.
+    """
+    rows: List[Dict[str, Any]] = []
+    named = os.environ.get(ENGINE_ENV, "").strip().strip('"')
+    if named:
+        rows.append({"where": named, "why": (
+            "указан в " + ENGINE_ENV + ", файл есть" if Path(named).is_file()
+            else "указан в " + ENGINE_ENV + ", но файла нет")})
+    for root in searched():
+        try:
+            if not root.exists():
+                why = "каталога нет"
+            elif not root.is_dir():
+                why = "это не каталог"
+            elif _engines_in(root):
+                why = "движок здесь"
+            else:
+                why = f"каталог есть, файлов stockfish* нет ({len(list(root.iterdir()))} записей)"
+        except OSError as exc:
+            why = f"система отказала: {type(exc).__name__} {exc.errno}"
+        rows.append({"where": str(root), "why": why})
+    found = shutil.which("stockfish")
+    rows.append({"where": "PATH", "why": f"найден: {found}" if found else "в PATH нет"})
+    return rows
 
 
 def searched() -> List[Path]:

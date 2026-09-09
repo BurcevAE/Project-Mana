@@ -431,10 +431,13 @@ def judge_note(depth: int) -> str:
         return "судья выключен — потери не измеряются"
     if chess_judge.engine_path():
         return f"судья: Stockfish, глубина {depth}"
-    where = "; ".join(str(root) for root in chess_judge.searched())
+    where = "\n".join(f"    {row['where']} — {row['why']}"
+                      for row in chess_judge.diagnose())
     return ("судья: материальный запасной — Stockfish не найден, "
             "потери сравнимы только между собой.\n"
-            f"  искала в: {where}")
+            f"  искала:\n{where}\n"
+            f"  можно указать прямо: задайте {chess_judge.ENGINE_ENV} "
+            f"с полным путём к stockfish.exe")
 
 
 def frame(seat: Seat, kind: str, san: str = "",

@@ -198,6 +198,54 @@ def test_the_places_looked_in_are_listed_without_repeats(monkeypatch, tmp_path):
     assert tmp_path / judge.ENGINE_DIRNAME in roots
 
 
+def test_an_explicit_path_wins_over_the_search(monkeypatch, tmp_path):
+    """An escape hatch for a search that is wrong for a reason nobody has
+    found yet: the same command found the engine from one shell and not
+    from another on the same machine."""
+    named = tmp_path / "my-stockfish.exe"
+    named.write_bytes(b"")
+    monkeypatch.setenv(judge.ENGINE_ENV, str(named))
+    assert judge.engine_path() == named
+    assert judge.available() is True
+
+
+def test_a_named_path_that_is_not_there_is_reported_not_ignored(monkeypatch, tmp_path):
+    monkeypatch.setenv(judge.ENGINE_ENV, str(tmp_path / "absent.exe"))
+    rows = judge.diagnose()
+    assert rows[0]["why"].endswith("но файла нет")
+
+
+def test_each_place_says_what_was_wrong_with_it(monkeypatch, tmp_path):
+    """"Не найден" plus a list of paths leaves the reader to guess which
+    of four things happened, and the four have different remedies."""
+    a_file = tmp_path / "not-a-dir"
+    a_file.write_text("", encoding="utf-8")
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.setattr(judge, "searched",
+                        lambda: [tmp_path / "absent", a_file, empty])
+    reasons = [row["why"] for row in judge.diagnose()]
+    assert "каталога нет" in reasons[0]
+    assert "это не каталог" in reasons[1]
+    assert "файлов stockfish* нет" in reasons[2]
+
+
+def test_a_directory_that_cannot_be_read_does_not_stop_the_search(monkeypatch, tmp_path):
+    """A different account, a policy, a drive that went away -- normal
+    states here, and none of them may hide a working engine elsewhere."""
+    engine = tmp_path / "good"
+    engine.mkdir()
+    (engine / "stockfish.exe").write_bytes(b"")
+
+    class _Refusing(type(tmp_path)):
+        def is_dir(self):
+            raise PermissionError(13, "refused")
+
+    monkeypatch.setattr(judge, "searched",
+                        lambda: [_Refusing(tmp_path / "denied"), engine])
+    assert judge.engine_path() == engine / "stockfish.exe"
+
+
 def test_a_missing_engine_says_where_it_looked():
     """"Stockfish не найден" names nothing that can be checked, and it was
     read three times in one day without telling anyone where to look."""
@@ -210,5 +258,6 @@ def test_a_missing_engine_says_where_it_looked():
         note = chess_bot.judge_note(8)
     finally:
         judging.engine_path = original
-    assert "искала в:" in note
+    assert "искала:" in note
     assert judge.ENGINE_DIRNAME.replace("/", os.sep) in note
+    assert judge.ENGINE_ENV in note              # and how to answer it
