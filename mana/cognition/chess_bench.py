@@ -103,6 +103,11 @@ TICK = 5.0
 #: ends is not held open by work that could have waited.
 REJUDGE_PER_TICK = 2
 
+#: A self-play game is only started when at least this much cooldown is
+#: left. Starting one with ten seconds to go would hold the next
+#: challenge back for the sake of work that had no deadline.
+SELF_PLAY_FLOOR = 25.0
+
 #: What happened on the last game, in the ladder's own terms.
 ADVANCED = "advanced"
 FINISHED = "finished"
@@ -135,6 +140,16 @@ class Ladder:
     best_streak: Dict[str, int] = field(default_factory=dict)
     started: float = field(default_factory=time.time)
     done: bool = False
+    #: When Lichess may next be asked for a game, on the local clock, and
+    #: how many refusals in a row led here. Saved because a cooldown that
+    #: lives only in a process is not a cooldown: restarting reset both,
+    #: so every restart asked again at once and began the escalation
+    #: afresh -- the very behaviour the escalation exists to prevent.
+    next_request_at: float = 0.0
+    refused: int = 0
+
+    def cooldown_left(self) -> float:
+        return max(0.0, self.next_request_at - time.time())
 
     def needed(self) -> int:
         return WINS_TO_FINISH if self.level >= LAST_LEVEL else WINS_TO_ADVANCE
@@ -175,7 +190,10 @@ class Ladder:
         return {"level": self.level, "streak": self.streak, "games": self.games,
                 "wins": self.wins, "by_level": self.by_level,
                 "best_streak": self.best_streak, "started": self.started,
-                "done": self.done, "needed": self.needed()}
+                "done": self.done, "needed": self.needed(),
+                "next_request_at": self.next_request_at,
+                "refused": self.refused,
+                "cooldown_left": round(self.cooldown_left(), 1)}
 
     @classmethod
     def from_dict(cls, row: Dict[str, Any]) -> "Ladder":
@@ -186,7 +204,9 @@ class Ladder:
                    by_level=dict(row.get("by_level", {})),
                    best_streak=dict(row.get("best_streak", {})),
                    started=float(row.get("started", time.time())),
-                   done=bool(row.get("done", False)))
+                   done=bool(row.get("done", False)),
+                   next_request_at=float(row.get("next_request_at", 0.0)),
+                   refused=int(row.get("refused", 0)))
 
     def save(self) -> None:
         try:
@@ -230,14 +250,25 @@ class Bench:
         self.client = client or api.Lichess()
         self.ladder = ladder if ladder is not None else Ladder.load()
         self.gap = float(gap)
-        #: Consecutive refusals, so the wait can grow with them.
-        self._refused = 0
+        #: Consecutive refusals, so the wait can grow with them. Restored
+        #: from the saved state, so a restart continues the escalation
+        #: rather than beginning it again at sixty seconds.
+        self._refused = self.ladder.refused
         self.bot = bot or Bot(client=self.client,
                               policy=Policy(rated=False, max_games=1,
                                             speeds=("blitz", "rapid",
                                                     "classical",
                                                     "correspondence")))
         self._stop = threading.Event()
+        #: A wait carried over from a previous run is applied before
+        #: anything is asked of Lichess.
+        left = self.ladder.cooldown_left()
+        if left > 0:
+            self._hold(left)
+        #: What `think()` said last time, so an unchanged answer is not
+        #: repeated every tick. Twelve identical lines is noise pretending
+        #: to be progress.
+        self._said = ""
 
     def stop(self) -> None:
         self._stop.set()
@@ -314,6 +345,9 @@ class Bench:
                         f"вызов не принят ({exc}); сеть не трогаю {left:.0f}с")
             return None
         self._refused = 0
+        self.ladder.next_request_at = 0.0
+        self.ladder.refused = 0
+        self.ladder.save()
         events.emit(events.STATUS,
                     f"вызвала Stockfish уровня {self.ladder.level} "
                     f"({self.ladder.describe()})",
@@ -353,31 +387,51 @@ class Bench:
         left = getattr(self.client, "cooldown_left", None)
         return float(left()) if callable(left) else 0.0
 
-    def _hold(self, seconds: float) -> float:
+    def _hold(self, seconds: float, remember: bool = True) -> float:
         hold = getattr(self.client, "hold", None)
-        return float(hold(seconds)) if callable(hold) else float(seconds)
+        left = float(hold(seconds)) if callable(hold) else float(seconds)
+        if remember:
+            self.ladder.next_request_at = time.time() + left
+            self.ladder.refused = self._refused
+            self.ladder.save()
+        return left
 
     def _while_waiting(self, left: float) -> None:
-        """Report the wait, do one unit of local work, then wake early.
+        """Do one unit of local work, report it if it is new, wake early.
 
         Not a sleep: a cooldown spent idle is a network limit turned into
-        a stop for everything MANA could be doing with the games it has
-        already played.
+        a stop for everything MANA could be doing. And not a broadcast
+        either -- the same sentence every five seconds is noise pretending
+        to be progress, so an unchanged answer is emitted for the window
+        and kept off the console.
         """
-        did = self.think()
+        did = self.think(budget=left)
+        fresh = did != self._said
+        self._said = did
         events.emit(events.STATUS,
-                    f"Lichess: охлаждение, ещё {left:.0f}с. MANA: {did}",
+                    f"Lichess: охлаждение, ещё {left:.0f}с. MANA: {did}"
+                    if fresh else "",
                     chess={"kind": "bench", "ladder": self.ladder.as_dict(),
                            "cooldown": round(left, 1), "doing": did})
         self._stop.wait(min(TICK, max(0.5, left)))
 
-    def think(self) -> str:
+    def think(self, budget: float = 0.0) -> str:
         """One bounded unit of work on the record. Never touches the network.
 
-        Chosen by what the record needs rather than by a schedule: games
-        judged by the fallback are worth less than nothing until they are
-        re-judged, since their losses are on a different scale from the
-        rest; after that, the reader is what turns games into findings.
+        Ordered by what the record needs, not by a schedule:
+
+            судимые запасным   → пересудить (их потери в другой шкале)
+            хватает времени    → сыграть партию с собой (новое наблюдение)
+            иначе              → перечитать записи
+
+        Re-reading an unchanged corpus is not work: the same sixty-three
+        games cannot say anything on the second pass that they did not say
+        on the first. What is short is games, and a self-play game adds
+        one observation to the local world every time.
+
+        The player is not touched. The ladder is a number about *this*
+        player, and two copies of a player that changed mid-run measure
+        something nobody can name.
         """
         from . import chess_bot, chess_findings, chess_judge
 
@@ -385,8 +439,6 @@ class Bench:
             rows = chess_bot.recorded()
         except Exception as exc:                       # a half-written file
             return f"записи не прочитались ({type(exc).__name__})"
-        if not rows:
-            return "записей пока нет"
 
         stale = [row for row in rows
                  if any(j.get("judged_by") == chess_judge.BY_MATERIAL
@@ -398,6 +450,21 @@ class Bench:
                 return (f"пересудила {done['judged']} "
                         f"(осталось {max(0, len(stale) - done['judged'])})")
 
+        if budget >= SELF_PLAY_FLOOR:
+            played = chess_bot.play_locally(games=1,
+                                            judge_depth=chess_bot.LIVE_JUDGE_DEPTH,
+                                            pause=0.0, quiet=True,
+                                            stop=self._stop)
+            if played:
+                local = sum(1 for row in rows
+                            if str(row.get("source", "")) == chess_bot.LOCAL) + 1
+                row = chess_bot.summarise(played[0])
+                return (f"сыграла с собой: {row['moves']} ходов, "
+                        f"зевков {row['blunders']}, жребием "
+                        f"{row['close_share']:.0%} (партий с собой {local})")
+
+        if not rows:
+            return "записей пока нет"
         found = chess_findings.look(rows)
         settled = [f for f in found if f.verdict != "NOT_EVALUATED"]
         if settled:
@@ -452,6 +519,14 @@ def summarise(ladder: Ladder) -> str:
         need = WINS_TO_FINISH if int(level) >= LAST_LEVEL else WINS_TO_ADVANCE
         lines.append(f"  уровень {level}: {row['wins']} из {row['games']}"
                      f", лучшая серия {best} из нужных {need}")
+    left = ladder.cooldown_left()
+    if left > 0:
+        when = time.strftime("%H:%M:%S", time.localtime(ladder.next_request_at))
+        lines.append(f"Lichess: следующий запрос не раньше {when} "
+                     f"(через {left:.0f}с), отказов подряд {ladder.refused}")
+        lines.append("  перезапуск не сбрасывает это ожидание")
+    else:
+        lines.append("Lichess: можно запускать")
     if ladder.done:
         lines.append("лестница пройдена целиком")
     return "\n".join(lines)

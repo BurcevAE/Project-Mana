@@ -262,6 +262,34 @@ def verdict_for(measurement: Dict[str, Any]) -> str:
     return ACCEPTED if high < 0.0 else REJECTED
 
 
+def without_repeats(games: Sequence[Dict[str, Any]]
+                    ) -> Tuple[List[Dict[str, Any]], int]:
+    """Drop games that are move-for-move copies of an earlier one.
+
+    A repeated game is never evidence: this reader counts games as
+    independent observations, and the same 167 moves counted three times
+    would move a NOT_EVALUATED towards a verdict on nothing. Written after
+    exactly that -- a self-play seed that did not vary wrote three
+    identical games in three cooldowns.
+
+    Here rather than at the point of writing, because a guard that lives
+    where the mistake was made catches only the mistake that was made.
+    This one catches the shape.
+    """
+    seen = set()
+    kept: List[Dict[str, Any]] = []
+    dropped = 0
+    for game in games:
+        key = tuple(game.get("moves", []))
+        if key and key in seen:
+            dropped += 1
+            continue
+        if key:
+            seen.add(key)
+        kept.append(game)
+    return kept, dropped
+
+
 def conditions(games: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     """What would make one of these findings stale.
 
@@ -298,7 +326,13 @@ def look(games: Optional[Sequence[Dict[str, Any]]] = None,
     """
     from . import chess_bot
 
-    games = list(chess_bot.recorded()) if games is None else list(games)
+    games, repeats = without_repeats(
+        list(chess_bot.recorded()) if games is None else list(games))
+    if repeats:
+        from .. import events
+
+        events.emit(events.WARNING,
+                    f"в записи {repeats} повторов партий — в счёт не идут")
     book = ledger if ledger is not None else ledger_mod.Ledger()
     # One pass per world, never across them. A game against itself has an
     # opponent that shares MANA's evaluation and its blind spots, and a

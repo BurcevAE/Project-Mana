@@ -179,7 +179,14 @@ def write_console(text: str) -> None:
 
 def console_sink(event: Event) -> None:
     """Default sink for terminal runs: warnings and errors get a marker,
-    everything else prints as-is so existing CLI output is unchanged."""
+    everything else prints as-is so existing CLI output is unchanged.
+
+    An event with no text is for a window, not for a console -- the board
+    frames carry their whole content in `data`. Printing a blank line for
+    each one filled a terminal with nothing during self-play.
+    """
+    if not str(event.text).strip() and event.kind not in (WARNING, ERROR):
+        return
     if event.kind == WARNING:
         write_console(f"[!] {event.text}")
     elif event.kind == ERROR:

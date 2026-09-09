@@ -183,6 +183,9 @@ class _Client:
         return {"id": "x"}
 
 
+_Client_base = _Client
+
+
 def _bench(results, tmp_path, monkeypatch):
     monkeypatch.setattr(bench_mod, "state_path", lambda: tmp_path / "bench.json")
     bot = _Bot(results)
@@ -352,7 +355,7 @@ def test_a_cooldown_is_spent_on_the_record_not_on_sleeping(tmp_path, monkeypatch
     bench.client.hold = lambda seconds: seconds
 
     thought = []
-    monkeypatch.setattr(bench, "think", lambda: thought.append(1) or "думала")
+    monkeypatch.setattr(bench, "think", lambda budget=0.0: thought.append(1) or "думала")
     monkeypatch.setattr(bench_mod, "TICK", 0.01)
     threading.Timer(0.2, bench.stop).start()
     bench.run()
@@ -364,7 +367,7 @@ def test_the_remaining_time_is_reported_without_asking_lichess(tmp_path, monkeyp
     monkeypatch.setattr(bench_mod, "state_path", lambda: tmp_path / "bench.json")
     bot = _Bot([])
     bench = bench_mod.Bench(client=_Client(bot), bot=bot, ladder=_ladder(), gap=0.0)
-    monkeypatch.setattr(bench, "think", lambda: "читала записи")
+    monkeypatch.setattr(bench, "think", lambda budget=0.0: "читала записи")
 
     from mana import events
 
@@ -440,3 +443,198 @@ def test_an_empty_record_is_an_answer(tmp_path, monkeypatch):
 
     monkeypatch.setattr(bot_mod, "recorded", lambda: [])
     assert "записей пока нет" in bench.think()
+
+
+# --------------------------------------------------------------------------
+# the wait outlives the process
+# --------------------------------------------------------------------------
+
+def test_a_cooldown_survives_a_restart(tmp_path, monkeypatch):
+    """A cooldown that lives only in a process is not a cooldown.
+    Restarting reset the timer and the streak, so every restart asked
+    Lichess again at once and began the escalation afresh -- the very
+    behaviour the escalation exists to prevent, performed by the person
+    trying to avoid it."""
+    monkeypatch.setattr(bench_mod, "state_path", lambda: tmp_path / "bench.json")
+
+    held = []
+
+    class _Client(_Client_base):
+        def hold(self, seconds):
+            held.append(seconds)
+            return seconds
+
+        def cooldown_left(self):
+            return 0.0
+
+    bot = _Bot([])
+    first = bench_mod.Bench(client=_Client(bot), bot=bot, ladder=_ladder(), gap=0.0)
+
+    def refuse(level=1, **kw):
+        raise lichess.RateLimited("429", 60.0)
+
+    first.client.challenge_ai = refuse
+    first._one_game()
+    assert first.ladder.refused == 1
+    assert first.ladder.cooldown_left() > 0
+
+    # A new process reads the same file.
+    again = bench_mod.Ladder.load()
+    assert again.refused == 1
+    assert again.cooldown_left() > 0
+
+    bot2 = _Bot([])
+    second = bench_mod.Bench(client=_Client(bot2), bot=bot2, ladder=again, gap=0.0)
+    assert second._refused == 1                  # the streak continues
+    assert held[-1] > 0                          # and the wait was re-applied
+
+    second.client.challenge_ai = refuse
+    second._one_game()
+    assert second.ladder.refused == 2            # 60 -> 120, not 60 again
+
+
+def test_a_started_game_clears_the_saved_wait(tmp_path, monkeypatch):
+    monkeypatch.setattr(bench_mod, "state_path", lambda: tmp_path / "bench.json")
+    bot = _Bot([True])
+    bench = bench_mod.Bench(client=_Client(bot), bot=bot, ladder=_ladder(), gap=0.0)
+    bench.ladder.next_request_at = 9e9
+    bench.ladder.refused = 4
+    bench._one_game()
+    assert bench.ladder.next_request_at == 0.0 and bench.ladder.refused == 0
+
+
+def test_the_summary_says_when_lichess_may_be_asked_again():
+    """There was no way to find out when it was safe to start, short of
+    starting."""
+    ladder = _ladder()
+    ladder.next_request_at = time.time() + 90
+    ladder.refused = 2
+    text = bench_mod.summarise(ladder)
+    assert "следующий запрос не раньше" in text and "отказов подряд 2" in text
+    assert "перезапуск не сбрасывает" in text
+
+    ladder.next_request_at = 0.0
+    assert "можно запускать" in bench_mod.summarise(ladder)
+
+
+# --------------------------------------------------------------------------
+# the wait produces evidence
+# --------------------------------------------------------------------------
+
+def test_a_long_enough_wait_is_spent_playing(tmp_path, monkeypatch):
+    """Re-reading an unchanged corpus is not work: the same games cannot
+    say anything on the second pass. What is short is games."""
+    monkeypatch.setattr(bench_mod, "state_path", lambda: tmp_path / "bench.json")
+    bot = _Bot([])
+    bench = bench_mod.Bench(client=_Client(bot), bot=bot, ladder=_ladder(), gap=0.0)
+
+    from mana.cognition import chess_bot as bot_mod
+
+    asked = {}
+
+    def fake_play(games=1, judge_depth=0, pause=0.0, quiet=False, stop=None, **kw):
+        asked.update({"games": games, "quiet": quiet, "pause": pause})
+        seat = chess_bot.Seat(game_id="local-x", source=chess_bot.LOCAL)
+        seat.thoughts = [{"close_call": True}, {"close_call": False}]
+        seat.judged = [{"loss": 0.0}, {"loss": 400.0, "blunder": True}]
+        return [seat]
+
+    monkeypatch.setattr(bot_mod, "recorded", lambda: [])
+    monkeypatch.setattr(bot_mod, "play_locally", fake_play)
+    said = bench.think(budget=60.0)
+    assert "сыграла с собой" in said and "2 ходов" in said
+    assert asked == {"games": 1, "quiet": True, "pause": 0.0}
+
+
+def test_a_short_wait_does_not_start_a_game(tmp_path, monkeypatch):
+    """Starting one with ten seconds to go would hold the next challenge
+    back for work that had no deadline."""
+    monkeypatch.setattr(bench_mod, "state_path", lambda: tmp_path / "bench.json")
+    bot = _Bot([])
+    bench = bench_mod.Bench(client=_Client(bot), bot=bot, ladder=_ladder(), gap=0.0)
+
+    from mana.cognition import chess_bot as bot_mod
+
+    monkeypatch.setattr(bot_mod, "recorded", lambda: [])
+    monkeypatch.setattr(bot_mod, "play_locally",
+                        lambda **kw: pytest.fail("не должна была играть"))
+    assert bench.think(budget=5.0) == "записей пока нет"
+
+
+def test_the_same_answer_is_not_repeated_every_tick(tmp_path, monkeypatch):
+    """Twelve identical lines is noise pretending to be progress."""
+    monkeypatch.setattr(bench_mod, "state_path", lambda: tmp_path / "bench.json")
+    bot = _Bot([])
+    bench = bench_mod.Bench(client=_Client(bot), bot=bot, ladder=_ladder(), gap=0.0)
+    monkeypatch.setattr(bench, "think", lambda budget=0.0: "то же самое")
+    monkeypatch.setattr(bench_mod, "TICK", 0.01)
+
+    from mana import events
+
+    spoken = []
+    sink = events.subscribe(lambda e: spoken.append(e.text))
+    try:
+        bench._while_waiting(30.0)
+        bench._while_waiting(25.0)
+        bench._while_waiting(20.0)
+    finally:
+        events.unsubscribe(sink)
+    assert len([text for text in spoken if text]) == 1
+    assert len(spoken) == 3               # the window still gets every frame
+
+
+def test_a_quiet_self_play_game_does_not_flood_the_console():
+    """Eighty move lines per game would bury the one line that matters."""
+    from mana import events
+
+    text = []
+    sink = events.subscribe(lambda e: text.append(e.text))
+    try:
+        chess_bot.play_locally(games=1, depth=1, judge_depth=0, pause=0.0,
+                               record=False, quiet=True)
+    finally:
+        events.unsubscribe(sink)
+    spoken = [line for line in text if line.strip()]
+    # Exactly one line: the judge saying it is switched off. A degraded
+    # judge speaks even in quiet mode -- that one is worth repeating --
+    # and nothing else does.
+    assert len(spoken) == 1 and "судья" in spoken[0]
+    assert len(text) > 10                      # the window still got the moves
+
+
+def test_an_event_with_no_text_prints_nothing():
+    from mana import events
+
+    printed = []
+    original = events.write_console
+    events.write_console = lambda line: printed.append(line)
+    try:
+        events.console_sink(events.Event(kind=events.STATUS, text=""))
+        events.console_sink(events.Event(kind=events.STATUS, text="есть что сказать"))
+    finally:
+        events.write_console = original
+    assert printed == ["есть что сказать"]
+
+
+def test_two_self_play_games_in_a_row_are_not_the_same_game():
+    """The seed used to be the index inside the batch, so a batch of one
+    produced game zero every time -- three cooldowns wrote three
+    byte-identical games into a record that counts games."""
+    first = chess_bot.play_locally(games=1, depth=1, judge_depth=0, pause=0.0,
+                                   record=False, quiet=True)[0]
+    second = chess_bot.play_locally(games=1, depth=1, judge_depth=0, pause=0.0,
+                                    record=False, quiet=True)[0]
+    assert first.seed != second.seed
+    assert first.moves != second.moves
+
+
+def test_a_recorded_seed_replays_the_same_game():
+    """Varying the seed is only safe because the seed is written down: a
+    game that cannot be reproduced is one whose bugs cannot be examined
+    after the fact, which is how the repeated games were found at all."""
+    first = chess_bot.play_locally(games=1, depth=1, judge_depth=0, pause=0.0,
+                                   record=False, quiet=True)[0]
+    again = chess_bot.play_locally(games=1, depth=1, judge_depth=0, pause=0.0,
+                                   record=False, quiet=True, seed=first.seed)[0]
+    assert again.moves == first.moves
+    assert first.as_dict()["seed"] == first.seed

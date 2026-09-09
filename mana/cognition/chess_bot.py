@@ -146,6 +146,10 @@ class Seat:
     status: str = "started"
     winner: str = ""
     source: str = LIVE
+    #: The shuffle's seed, for a self-play game. Written down so a game
+    #: can be replayed exactly, which is the only thing that made the
+    #: repeated-game bug findable after the fact.
+    seed: int = 0
     #: Stockfish's level when the opponent is Lichess's own engine, 0 for
     #: a human. A condition of every measurement taken from the game, not
     #: a label on it.
@@ -182,6 +186,7 @@ class Seat:
                 "us": "white" if self.us else "black",
                 "opponent": self.opponent, "initial_fen": self.initial_fen,
                 "moves": list(self.moves), "status": self.status,
+                "seed": self.seed,
                 "winner": self.winner, "thoughts": self.thoughts,
                 "judged": self.judged, "started": self.started}
 
@@ -502,7 +507,8 @@ def _default_player() -> Any:
 
 def play_locally(games: int = 1, depth: int = PLAY_DEPTH,
                  judge_depth: int = LIVE_JUDGE_DEPTH, pause: float = 0.35,
-                 record: bool = True, stop: Any = None) -> List[Seat]:
+                 record: bool = True, stop: Any = None,
+                 quiet: bool = False, seed: Optional[int] = None) -> List[Seat]:
     """MANA against itself, through the same frames the live bot emits.
 
     Here so that the board, the reasoning panel and the judge can be
@@ -523,20 +529,36 @@ def play_locally(games: int = 1, depth: int = PLAY_DEPTH,
         from . import chess_judge
 
         judge = chess_judge.Judge(depth=judge_depth)
-    events.emit(events.STATUS, judge_note(judge_depth),
-                chess={"kind": "ready", "judge": judge_note(judge_depth)})
+    note = judge_note(judge_depth)
+    degraded = "запасной" in note or "выключен" in note
+    # In quiet mode a working judge says nothing: this runs once per game
+    # in the gaps between challenges, and the same sentence every minute
+    # is noise. A degraded judge still speaks, every time -- that one is
+    # worth repeating.
+    events.emit(events.WARNING if degraded else events.STATUS,
+                "" if (quiet and not degraded) else note,
+                chess={"kind": "ready", "judge": note})
     played: List[Seat] = []
     try:
         for number in range(games):
             if stop is not None and stop.is_set():
                 break
+            # The seed used to be the index inside the batch, so a batch
+            # of forty gave forty different games and a batch of one gave
+            # game zero every single time. Three cooldowns in a row wrote
+            # three byte-identical games into a record whose reader counts
+            # games as independent observations.
+            this_seed = (number if seed is None and games > 1
+                         else (seed + number if seed is not None
+                               else random.SystemRandom().randrange(2 ** 31)))
             seat = Seat(game_id=f"local-{int(time.time())}-{number + 1}",
-                        source=LOCAL, opponent="сама с собой")
+                        source=LOCAL, opponent="сама с собой", seed=this_seed)
             white = SearchPlayer(depth=depth, trace=True)
             black = SearchPlayer(depth=depth, trace=True)
-            rng = random.Random(number)
+            rng = random.Random(this_seed)
             board = chess.Board()
-            events.emit(events.STATUS, f"партия {number + 1}/{games}",
+            events.emit(events.STATUS,
+                        "" if quiet else f"партия {number + 1}/{games}",
                         chess=frame(seat, kind="position"))
             while not board.is_game_over() and board.ply() < 200:
                 if stop is not None and stop.is_set():
@@ -565,9 +587,13 @@ def play_locally(games: int = 1, depth: int = PLAY_DEPTH,
                 # other side's reply, which is what `position` is for --
                 # and it makes the window identical in both worlds,
                 # where the live bot never sees the opponent think.
-                events.emit(events.STATUS,
-                            f"{san}" + (f" (потеря {judged['loss']:.0f})"
-                                        if judged else ""),
+                # `quiet` keeps the board updating in the window while the
+                # console stays readable: during a cooldown these games are
+                # background work, and eighty move lines per game would bury
+                # the one line that matters.
+                said = "" if quiet else (
+                    f"{san}" + (f" (потеря {judged['loss']:.0f})" if judged else ""))
+                events.emit(events.STATUS, said,
                             chess=frame(seat,
                                         kind="move" if judged_side else "position",
                                         san=san, thought=thought, judged=judged))
@@ -581,6 +607,7 @@ def play_locally(games: int = 1, depth: int = PLAY_DEPTH,
             if record:
                 write(seat)
             events.emit(events.STATUS,
+                        "" if quiet else
                         f"партия {number + 1}: {seat.status} {seat.winner}".strip(),
                         chess=frame(seat, kind="over"))
     finally:

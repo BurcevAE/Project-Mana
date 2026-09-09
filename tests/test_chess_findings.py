@@ -234,3 +234,36 @@ def test_the_same_games_measured_twice_are_not_two_observations(tmp_path):
     # But more games is a new point, and still lands.
     reader.look(games=_many(MIN_PAIRED_TRIALS + 9), ledger=book)
     assert len(book.findings()) > first
+
+
+def test_the_same_game_twice_is_one_observation():
+    """A repeated game is never evidence: this reader counts games as
+    independent observations. A self-play seed that did not vary wrote
+    three byte-identical games into the record in three cooldowns, and
+    three copies of one game would move a NOT_EVALUATED towards a verdict
+    on nothing."""
+    one = _game(1, (600, 700), (0, 10))
+    one["moves"] = ["e2e4", "e7e5", "g1f3"]
+    twin = dict(one, game="different-id")
+    other = dict(one, game="other", moves=["d2d4", "d7d5"])
+
+    kept, dropped = reader.without_repeats([one, twin, other])
+    assert dropped == 1
+    assert [row["game"] for row in kept] == ["g1", "other"]
+
+
+def test_a_repeat_cannot_inflate_a_measurement():
+    games = _many(MIN_PAIRED_TRIALS + 2)
+    for i, game in enumerate(games):
+        game["moves"] = ["e2e4", "e7e5"] if i % 2 else ["d2d4", "d7d5"]
+    out = reader.look(games=games, record=False)
+    # Thirty-two games, two distinct move sequences: two observations.
+    assert out[0].measurement["trials"] <= 2
+    assert out[0].verdict == NOT_EVALUATED
+
+
+def test_games_without_moves_are_not_treated_as_copies_of_each_other():
+    """The synthetic records in these tests carry no move list, and
+    collapsing them all into one would silently empty every measurement."""
+    kept, dropped = reader.without_repeats(_many(5))
+    assert dropped == 0 and len(kept) == 5
