@@ -389,6 +389,58 @@ def _plural(count: int, one: str, few: str, many: str) -> str:
     return one if last == 1 else many
 
 
+def api_errors():
+    """Lichess refusing is a normal outcome with a message, not a crash.
+
+    Named as a function so the import stays inside the chess commands:
+    `mana.cli` is loaded for every flag, and a network module should not
+    be imported to print a version number.
+    """
+    from .net.lichess import LichessError
+
+    return (LichessError,)
+
+
+def _hold_window(httpd) -> None:
+    """Keep the board up after the last move.
+
+    The final position and the last reasoning panel are the part worth
+    looking at, and closing the server the moment the game ends takes
+    them away exactly then.
+    """
+    if httpd is None:
+        return
+    try:
+        input("окно открыто. Enter — закрыть. ")
+    except (EOFError, KeyboardInterrupt):
+        pass
+    httpd.shutdown()
+
+
+def _what_it_concluded(world: str) -> None:
+    """What the record now says, in the world just played in.
+
+    Run after playing rather than only from the statistics command: a
+    game that goes into the record and is never read back is the failure
+    the findings work exists to close, and it would have survived in the
+    one command that produces the data that matters most.
+    """
+    from .cognition import chess_bot, chess_findings
+    from .core.gates import NOT_EVALUATED
+
+    rows = [row for row in chess_bot.recorded()
+            if str(row.get("source", chess_bot.LIVE)) == world]
+    if not rows:
+        return
+    out = chess_findings.look(rows)
+    print()
+    print(chess_findings.describe(out))
+    if all(f.verdict == NOT_EVALUATED for f in out):
+        need = chess_findings.MIN_PAIRED_TRIALS
+        print(f"\nНаблюдение — это партия, а не ход: нужно {need}, "
+              f"есть {len(rows)}.")
+
+
 def _chess_stats() -> int:
     """What the record says, and where it is.
 
@@ -481,15 +533,8 @@ def _chess(games: int, port: int = 0) -> int:
               f"ходов {row['moves']}, ошибок {row['mistakes']}, "
               f"зевков {row['blunders']}, жребием {row['close_share']:.0%}")
     print(f"записано в {chess_bot.games_path()}")
-    if httpd is not None:
-        # The window stays up on purpose: the last position and the last
-        # reasoning panel are the part worth looking at, and closing the
-        # server the moment the game ends takes them away exactly then.
-        try:
-            input("окно открыто. Enter — закрыть. ")
-        except (EOFError, KeyboardInterrupt):
-            pass
-        httpd.shutdown()
+    _what_it_concluded(chess_bot.LOCAL)
+    _hold_window(httpd)
     return 0
 
 
@@ -635,15 +680,19 @@ def _lichess(games: int, port: int = 0, watch: bool = True) -> int:
     except KeyboardInterrupt:
         bot.stop()
         seats = bot.finished
-    finally:
-        if httpd is not None:
-            httpd.shutdown()
+    except api_errors() as exc:
+        print(f"Lichess: {exc}")
+        _hold_window(httpd)
+        return 1
     for seat in seats:
         row = chess_bot.summarise(seat)
         print(f"{seat.url}  {seat.status} {seat.winner}  "
               f"ходов {row['moves']}, ошибок {row['mistakes']}, "
               f"зевков {row['blunders']}, жребием "
               f"{row['close_share']:.0%}")
+    print(f"записано в {chess_bot.games_path()}")
+    _what_it_concluded(chess_bot.LIVE)
+    _hold_window(httpd)
     return 0
 
 

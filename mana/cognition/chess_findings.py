@@ -320,8 +320,15 @@ def look(games: Optional[Sequence[Dict[str, Any]]] = None,
                 note=_note(part, measurement),
                 version=where["version"])
             out.append(finding)
-            if record:
-                book.record(finding)
+            if not record:
+                continue
+            # Asked before writing, not after. The same games measured
+            # again produce the same numbers, and a second identical row
+            # is a repeat, not a second observation.
+            known = book.already_tried(QUESTION, approach, where)
+            if known and known["match"] == "exact":
+                continue
+            book.record(finding)
     return out
 
 

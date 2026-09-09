@@ -217,3 +217,20 @@ def test_the_same_class_under_new_conditions_is_a_new_point(tmp_path):
                 if f.approach["partition"] == "capture"]
     assert len({f.finding_id for f in captures}) == 2
     assert len({f.approach_id for f in captures}) == 1     # one series
+
+
+def test_the_same_games_measured_twice_are_not_two_observations(tmp_path):
+    """`already_tried` is asked before writing, not after. Repeating the
+    statistics command appended nine identical rows a time, which is how
+    a bounded ledger loses real history to repeats."""
+    book = ledger_mod.Ledger(path=tmp_path / "findings.jsonl")
+    games = _many(MIN_PAIRED_TRIALS + 2)
+    reader.look(games=games, ledger=book)
+    first = len(book.findings())
+    reader.look(games=games, ledger=book)
+    reader.look(games=games, ledger=book)
+    assert len(book.findings()) == first
+
+    # But more games is a new point, and still lands.
+    reader.look(games=_many(MIN_PAIRED_TRIALS + 9), ledger=book)
+    assert len(book.findings()) > first
