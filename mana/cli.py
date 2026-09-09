@@ -488,6 +488,16 @@ def _chess_stats() -> int:
         return 0
     engine = chess_judge.engine_path()
     print(f"судья: {'Stockfish, ' + str(engine) if engine else 'материальный (движка нет)'}")
+    # Both incidents were findable only because every row says who judged
+    # it, and nothing was reading that back. Now something does.
+    fallback = [row for row in rows
+                if any(j.get("judged_by") == chess_judge.BY_MATERIAL
+                       for j in row.get("judged", []))]
+    if fallback and engine:
+        print(f"ВНИМАНИЕ: {len(fallback)} "
+              f"{_plural(len(fallback), 'партия судима', 'партии судимы', 'партий судимы')}"
+              f" материальным запасным — эти потери несравнимы с остальными.")
+        print("  Починить, не переигрывая:  mana.cmd --chess-rejudge")
     print()
     named = {chess_bot.LOCAL: "сама с собой", chess_bot.LIVE: "на lichess"}
     figures = chess_bot.stats(rows)
@@ -701,6 +711,15 @@ def _lichess(games: int, port: int = 0, watch: bool = True) -> int:
 
     bot = chess_bot.Bot(client=client)
     events.install_console_sink()
+    # Before the wait, not after it. This line used to arrive through the
+    # event bus once `run()` started -- which is after "жду вызова" -- so
+    # the one line worth checking scrolled past while the person was
+    # looking at the board.
+    note = chess_bot.judge_note(bot.judge_depth)
+    print(note)
+    if "запасной" in note:
+        print("  ↳ потери будут несравнимы с остальной записью. "
+              "Остановите (Ctrl+C), проверьте, что процесс запущен заново.")
     print(f"Жду вызова на lichess.org/@/{state['user']} "
           f"(или бросьте вызов сами). Ctrl+C — выход.")
     try:

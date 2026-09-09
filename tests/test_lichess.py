@@ -686,3 +686,80 @@ def test_rejudging_without_an_engine_refuses_instead_of_guessing(tmp_path, monke
 def test_rejudging_an_empty_record_is_an_answer(tmp_path, monkeypatch):
     monkeypatch.setattr(chess_bot, "games_path", lambda: tmp_path / "none.jsonl")
     assert chess_bot.rejudge(depth=6)["games"] == 0
+
+
+# --------------------------------------------------------------------------
+# noticing a judge that is not the one you think
+# --------------------------------------------------------------------------
+
+def test_a_record_judged_by_the_fallback_is_reported(tmp_path, monkeypatch, capsys):
+    """Both incidents were findable only because every row says who
+    judged it, and nothing was reading that back. Nine games came back
+    material-judged after the fix, because the process playing them had
+    been started before it."""
+    from mana import cli
+    from mana.cognition import chess_judge
+
+    _recorded(tmp_path, monkeypatch, [_played("bad"), _played("good")])
+    rows = chess_bot.recorded()
+    rows[1]["judged"][0]["judged_by"] = "stockfish"
+    _recorded(tmp_path, monkeypatch, rows)
+    monkeypatch.setattr(chess_judge, "engine_path", lambda: Path("stockfish"))
+
+    cli._chess_stats()
+    out = capsys.readouterr().out
+    assert "ВНИМАНИЕ" in out and "1 партия судима" in out
+    assert "--chess-rejudge" in out
+
+
+def test_a_clean_record_says_nothing_about_the_judge(tmp_path, monkeypatch, capsys):
+    """A warning that fires when nothing is wrong is one nobody reads."""
+    from mana import cli
+    from mana.cognition import chess_judge
+
+    rows = [_played("good")]
+    rows[0]["judged"][0]["judged_by"] = "stockfish"
+    _recorded(tmp_path, monkeypatch, rows)
+    monkeypatch.setattr(chess_judge, "engine_path", lambda: Path("stockfish"))
+
+    cli._chess_stats()
+    assert "ВНИМАНИЕ" not in capsys.readouterr().out
+
+
+def test_the_judge_is_named_before_the_wait_for_a_challenge(monkeypatch, capsys):
+    """The line used to arrive through the event bus once `run()`
+    started, which is after "жду вызова" -- so the one line worth
+    checking scrolled past while the person looked at the board."""
+    from mana import cli
+    from mana.cognition import chess_bot as bot_mod
+    from mana.cognition import chess_judge
+
+    class _Client:
+        def describe(self):
+            return {"token": True, "env": lichess.TOKEN_ENV,
+                    "user": "manabot", "bot": True}
+
+    monkeypatch.setattr(lichess, "Lichess", lambda *a, **k: _Client())
+    monkeypatch.setattr(chess_judge, "engine_path", lambda: None)
+
+    class _Bot:
+        judge_depth = 8
+        finished = []
+
+        def __init__(self, *a, **k):
+            pass
+
+        def run(self, games=0):
+            raise KeyboardInterrupt
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(bot_mod, "Bot", _Bot)
+    monkeypatch.setattr(cli, "_what_it_concluded", lambda world: None)
+    monkeypatch.setattr(cli, "_hold_window", lambda httpd: None)
+    cli._lichess(1, port=0, watch=False)
+
+    out = capsys.readouterr().out
+    assert out.index("запасной") < out.index("Жду вызова")
+    assert "запущен заново" in out
