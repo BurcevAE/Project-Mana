@@ -86,6 +86,14 @@ GAME_LIMIT = 1200.0
 #: How long to wait for a challenge to turn into a game.
 START_LIMIT = 90.0
 
+#: How long to wait before trying the event stream again after it fails,
+#: and how many failures in a row before the bench stops asking. The
+#: local half never stops for either: a network that is unavailable is a
+#: reason to play by yourself, not a reason to sit still.
+LISTEN_RETRY = 20.0
+LISTEN_GIVE_UP = 20
+
+
 #: What to do when Lichess refuses to start another game. It limits how
 #: often a client may create one, and each attempt costs two requests to
 #: the endpoint that just refused -- so the wait grows instead of being a
@@ -319,11 +327,37 @@ class Bench:
         return self.ladder
 
     def _listen(self) -> None:
-        try:
-            self.bot.run()
-        except Exception as exc:                       # the stream died
-            events.emit(events.ERROR, f"поток событий оборвался: {exc}")
-            self._stop.set()
+        """Keep the event stream up, and never stop the run by failing.
+
+        `Bot.run()` opens with an account check, and a cooldown set by a
+        refused challenge refuses that too. Treating it as fatal stopped
+        the bench, which then could not even play by itself -- the
+        network half silencing the half that needs no network.
+        """
+        failures = 0
+        while not self._stop.is_set() and failures < LISTEN_GIVE_UP:
+            left = self._cooldown_left()
+            if left > 0:
+                # Not a failure: a state with a known end. Wait it out
+                # without counting it against the retries.
+                self._stop.wait(min(left, LISTEN_RETRY))
+                continue
+            try:
+                self.bot.run()
+                failures = 0
+            except api.RateLimited as exc:
+                self._stop.wait(min(max(1.0, exc.retry_after), LISTEN_RETRY))
+            except Exception as exc:
+                failures += 1
+                events.emit(events.WARNING,
+                            f"поток событий оборвался ({exc}); попытка "
+                            f"{failures} из {LISTEN_GIVE_UP} через "
+                            f"{LISTEN_RETRY:.0f}с")
+                self._stop.wait(LISTEN_RETRY)
+        if failures >= LISTEN_GIVE_UP and not self._stop.is_set():
+            events.emit(events.ERROR,
+                        "поток событий не поднимается; партий на lichess не "
+                        "будет, играю с собой")
 
     def _one_game(self) -> Optional[Any]:
         """Challenge this level and wait for the game to be over."""

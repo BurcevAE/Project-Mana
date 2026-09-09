@@ -365,6 +365,8 @@ class Ledger:
     """
 
     def __init__(self, path: Optional[Path] = None) -> None:
+        #: (stamp, rows) from the last parse. See `findings()`.
+        self._cache: Optional[Tuple[Any, List[Finding]]] = None
         self.path = Path(path) if path else ledger_path()
         self._lock = threading.Lock()
 
@@ -390,6 +392,31 @@ class Ledger:
     # ---------- reading ----------
 
     def findings(self, limit: int = 0) -> List[Finding]:
+        """Every finding on file, parsed once per version of the file.
+
+        `already_tried` is called once per candidate and each call used to
+        re-read the whole ledger from the start: twenty-six passes over
+        eight megabytes to answer twenty-six questions about it. The cache
+        is keyed on the file's size and modification time, so a write
+        invalidates it and a stale answer cannot be served.
+        """
+        stamp = self._stamp()
+        cached = self._cache
+        if cached is not None and cached[0] == stamp:
+            rows = cached[1]
+        else:
+            rows = self._read()
+            self._cache = (stamp, rows)
+        return rows[-limit:] if limit and limit > 0 else list(rows)
+
+    def _stamp(self) -> Any:
+        try:
+            info = self.path.stat()
+            return (info.st_size, info.st_mtime_ns)
+        except OSError:
+            return None
+
+    def _read(self) -> List[Finding]:
         rows: List[Finding] = []
         try:
             handle = self.path.open("r", encoding="utf-8")
@@ -404,8 +431,7 @@ class Ledger:
                     rows.append(Finding.from_dict(json.loads(line)))
                 except Exception:
                     continue
-        rows = rows[-MAX_FINDINGS:]
-        return rows[-limit:] if limit and limit > 0 else rows
+        return rows[-MAX_FINDINGS:]
 
     def latest(self) -> List[Finding]:
         """The newest finding per experiment, newest first."""

@@ -354,12 +354,21 @@ def test_a_cooldown_is_spent_on_the_record_not_on_sleeping(tmp_path, monkeypatch
     bench.client.cooldown_left = lambda: 30.0
     bench.client.hold = lambda seconds: seconds
 
+    # Counted, not timed: a wall-clock stop made this flake under load,
+    # and what is being asserted is that the wait is worked through, not
+    # how fast the machine is.
     thought = []
-    monkeypatch.setattr(bench, "think", lambda budget=0.0: thought.append(1) or "думала")
+
+    def working(budget=0.0):
+        thought.append(1)
+        if len(thought) >= 3:
+            bench.stop()
+        return "думала"
+
+    monkeypatch.setattr(bench, "think", working)
     monkeypatch.setattr(bench_mod, "TICK", 0.01)
-    threading.Timer(0.2, bench.stop).start()
     bench.run()
-    assert thought                            # it worked while it waited
+    assert len(thought) >= 3                  # it worked while it waited
     assert bench.client.levels == []           # and asked Lichess nothing
 
 
@@ -591,7 +600,7 @@ def test_a_quiet_self_play_game_does_not_flood_the_console():
     sink = events.subscribe(lambda e: text.append(e.text))
     try:
         chess_bot.play_locally(games=1, depth=1, judge_depth=0, pause=0.0,
-                               record=False, quiet=True)
+                               record=False, quiet=True, max_plies=30)
     finally:
         events.unsubscribe(sink)
     spoken = [line for line in text if line.strip()]
@@ -621,9 +630,9 @@ def test_two_self_play_games_in_a_row_are_not_the_same_game():
     produced game zero every time -- three cooldowns wrote three
     byte-identical games into a record that counts games."""
     first = chess_bot.play_locally(games=1, depth=1, judge_depth=0, pause=0.0,
-                                   record=False, quiet=True)[0]
+                                   record=False, quiet=True, max_plies=30)[0]
     second = chess_bot.play_locally(games=1, depth=1, judge_depth=0, pause=0.0,
-                                    record=False, quiet=True)[0]
+                                    record=False, quiet=True, max_plies=30)[0]
     assert first.seed != second.seed
     assert first.moves != second.moves
 
@@ -633,9 +642,10 @@ def test_a_recorded_seed_replays_the_same_game():
     game that cannot be reproduced is one whose bugs cannot be examined
     after the fact, which is how the repeated games were found at all."""
     first = chess_bot.play_locally(games=1, depth=1, judge_depth=0, pause=0.0,
-                                   record=False, quiet=True)[0]
+                                   record=False, quiet=True, max_plies=30)[0]
     again = chess_bot.play_locally(games=1, depth=1, judge_depth=0, pause=0.0,
-                                   record=False, quiet=True, seed=first.seed)[0]
+                                   record=False, quiet=True, seed=first.seed,
+                                   max_plies=30)[0]
     assert again.moves == first.moves
     assert first.as_dict()["seed"] == first.seed
 
@@ -674,3 +684,57 @@ def test_a_cooldown_tick_is_spent_not_slept_through(tmp_path, monkeypatch):
     monkeypatch.setattr(bench_mod, "TICK", 0.2)
     bench._while_waiting(300.0)
     assert len(done) > 1                    # more than one unit inside a tick
+
+
+def test_a_cooldown_does_not_kill_the_run_it_exists_to_fill(tmp_path, monkeypatch):
+    """`Bot.run()` opens with an account check, and a cooldown set by a
+    refused challenge refuses that too. Treating it as fatal stopped the
+    bench, which then could not even play by itself -- the network half
+    silencing the half that needs no network."""
+    monkeypatch.setattr(bench_mod, "state_path", lambda: tmp_path / "bench.json")
+
+    class _Refusing(_Bot):
+        def run(self, games=0):
+            raise lichess.RateLimited("охлаждение", 30.0)
+
+    bot = _Refusing([])
+    bench = bench_mod.Bench(client=_Client(bot), bot=bot, ladder=_ladder(),
+                            gap=0.0)
+    bench.client.cooldown_left = lambda: 0.0
+    monkeypatch.setattr(bench_mod, "LISTEN_RETRY", 0.01)
+    threading.Timer(0.3, bench.stop).start()
+    bench._listen()
+    assert bench._stop.is_set()               # only because we stopped it
+
+
+def test_a_broken_stream_does_not_stop_the_local_half(tmp_path, monkeypatch):
+    monkeypatch.setattr(bench_mod, "state_path", lambda: tmp_path / "bench.json")
+
+    class _Broken(_Bot):
+        def run(self, games=0):
+            raise RuntimeError("сеть отвалилась")
+
+    bot = _Broken([])
+    bench = bench_mod.Bench(client=_Client(bot), bot=bot, ladder=_ladder(),
+                            gap=0.0)
+    bench.client.cooldown_left = lambda: 0.0
+    monkeypatch.setattr(bench_mod, "LISTEN_RETRY", 0.001)
+    monkeypatch.setattr(bench_mod, "LISTEN_GIVE_UP", 3)
+    bench._listen()
+    # It gave up on the stream and did not stop the bench.
+    assert not bench._stop.is_set()
+
+
+def test_a_set_stop_is_why_self_play_returned_nothing(tmp_path, monkeypatch):
+    """The failure that produced "прочитала" where it should have said
+    "сыграла": play_locally checks the stop flag on its first line."""
+    played = chess_bot.play_locally(games=1, depth=1, judge_depth=0,
+                                    pause=0.0, record=False, quiet=True,
+                                    stop=threading.Event(), max_plies=30)
+    assert played                              # a clear flag plays
+
+    stopped = threading.Event()
+    stopped.set()
+    assert chess_bot.play_locally(games=1, depth=1, judge_depth=0, pause=0.0,
+                                  record=False, quiet=True, stop=stopped,
+                                  max_plies=30) == []

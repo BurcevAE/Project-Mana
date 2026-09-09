@@ -526,7 +526,8 @@ def _default_player() -> Any:
 def play_locally(games: int = 1, depth: int = PLAY_DEPTH,
                  judge_depth: int = LIVE_JUDGE_DEPTH, pause: float = 0.35,
                  record: bool = True, stop: Any = None,
-                 quiet: bool = False, seed: Optional[int] = None) -> List[Seat]:
+                 quiet: bool = False, seed: Optional[int] = None,
+                 max_plies: int = 200) -> List[Seat]:
     """MANA against itself, through the same frames the live bot emits.
 
     Here so that the board, the reasoning panel and the judge can be
@@ -580,7 +581,7 @@ def play_locally(games: int = 1, depth: int = PLAY_DEPTH,
             events.emit(events.STATUS,
                         "" if quiet else f"партия {number + 1}/{games}",
                         chess=frame(seat, kind="position"))
-            while not board.is_game_over() and board.ply() < 200:
+            while not board.is_game_over() and board.ply() < max_plies:
                 if stop is not None and stop.is_set():
                     break
                 player = white if board.turn else black

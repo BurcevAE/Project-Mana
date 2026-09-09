@@ -174,6 +174,26 @@ def isolated_agent_exec_enabled(isolated_config: Config):
         pass
 
 
+#: One directory for the whole session, and a counter for the names
+#: inside it. `tmp_path_factory.mktemp` scans its parent for the next free
+#: number on every call, which is fine once and quadratic when two
+#: autouse fixtures do it for every test in a suite of eighteen hundred.
+_ISOLATION_COUNTER = [0]
+
+
+def _next_id() -> int:
+    _ISOLATION_COUNTER[0] += 1
+    return _ISOLATION_COUNTER[0]
+
+
+def _isolation_dir(tmp_path_factory):
+    root = getattr(_isolation_dir, "_root", None)
+    if root is None:
+        root = tmp_path_factory.mktemp("isolation", numbered=False)
+        _isolation_dir._root = root
+    return root
+
+
 @pytest.fixture(autouse=True)
 def _no_ambient_game_record(tmp_path_factory, monkeypatch):
     """Point the chess record at a temporary file for every test.
@@ -187,9 +207,31 @@ def _no_ambient_game_record(tmp_path_factory, monkeypatch):
     """
     from mana.cognition import chess_bench, chess_bot
 
-    # Its own directory, not the test's `tmp_path`: a fixture that adds
-    # a folder there changes what every test listing that directory sees,
-    # and one of them counts the files it wrote.
-    root = tmp_path_factory.mktemp("chess-record")
+    # Not the test's own `tmp_path`: a fixture that adds a folder there
+    # changes what every test listing that directory sees, and one of
+    # them counts the files it wrote. And not a fresh `mktemp` either --
+    # that scans its parent for the next free number, so the scan grows
+    # with the number of tests and cost eight seconds of setup each by
+    # the end of a suite.
+    root = _isolation_dir(tmp_path_factory) / f"record-{_next_id()}"
+    root.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(chess_bot, "games_path", lambda: root / "games.jsonl")
     monkeypatch.setattr(chess_bench, "state_path", lambda: root / "bench.json")
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_findings(tmp_path_factory, monkeypatch):
+    """Point the findings ledger at a temporary file for every test.
+
+    The game record was isolated after a rewrite nobody could attribute;
+    this is the same hole in the neighbouring file. A `Ledger()` with no
+    path defaults to the machine's real ledger, so a test that forgets
+    both writes to it and reads all of it -- which is also how one test
+    came to take four hundred and fifty-nine seconds.
+    """
+    from mana.cognition import findings
+
+    root = _isolation_dir(tmp_path_factory) / f"ledger-{_next_id()}"
+    root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(findings, "ledger_path",
+                        lambda: root / "findings.jsonl")
