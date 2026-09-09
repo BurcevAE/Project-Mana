@@ -176,6 +176,18 @@ class Change:
                 "from_finding": self.from_finding,
                 "also_from": list(self.also_from), "what": self.describe()}
 
+    def identity(self) -> Dict[str, Any]:
+        """What this experiment asks, with nothing that drifts.
+
+        The observational finding that suggested a change is not part of
+        the question: its own id contains the number of games it was
+        computed on, so including it renamed the experiment every cycle
+        and no ledger could say it had been run. It is a condition of the
+        answer, and it is recorded as one.
+        """
+        return {"property": self.property, "direction": self.direction,
+                "what": self.describe()}
+
     def choose(self, board: Any, tied: Sequence[Any],
                rng: random.Random) -> Any:
         """Pick among moves the search rated identically.
@@ -499,13 +511,15 @@ def record(change: Change, result: Duel, depth: int,
         verdict = NOT_EVALUATED
     finding = ledger_mod.Finding(
         question=QUESTION,
-        approach=change.as_dict(),
+        approach=change.identity(),
         verdict=verdict,
         measurement=measurement,
         conditions={"games": result.games, "search_depth": depth,
                     "opponent": "тот же игрок без изменения",
                     "control": control_name or "v0-base",
                     "candidate": candidate_name or "v0-base+change",
+                    "from_finding": change.from_finding,
+                    "also_from": list(change.also_from),
                     "version": PRODUCT_VERSION, "questions_asked": questions},
         note=_note(change, measurement, reached),
         version=PRODUCT_VERSION)

@@ -210,9 +210,26 @@ def test_the_experiment_reaches_the_ledger_with_its_provenance(tmp_path):
                       unchanged_won=10, drawn=10)
     written = act.record(change, result, depth=2, ledger=book)
     assert written.question == act.QUESTION
-    assert written.approach["from_finding"] == source.finding_id
+    # Provenance is a condition, not part of the question: the
+    # observational finding's own id contains the number of games it was
+    # computed on, so putting it in the approach renamed the experiment
+    # every cycle and no ledger could say it had been run.
+    assert written.conditions["from_finding"] == source.finding_id
+    assert written.approach == change.identity()
+    assert "from_finding" not in written.approach
     assert written.conditions["opponent"] == "тот же игрок без изменения"
+
+
     assert len(book.findings()) == 1
+
+
+def test_the_same_intervention_keeps_its_name_as_the_corpus_grows():
+    """The identity of an experiment must not drift with the evidence
+    that suggested it, or nothing can say the experiment has been run."""
+    early = act.Change("pawn_moves", act.LESS, from_finding="obs-when-small")
+    later = act.Change("pawn_moves", act.LESS, from_finding="obs-when-large")
+    assert early.identity() == later.identity()
+    assert early.as_dict() != later.as_dict()      # display still differs
 
 
 def test_the_correction_counts_the_experiments_run_together():

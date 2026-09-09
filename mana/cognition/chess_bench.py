@@ -311,6 +311,10 @@ class Bench:
         self._sides: Dict[str, Any] = {}
         #: The verdicts as of the last pass, so only what moved is said.
         self._verdicts: Dict[str, str] = {}
+        #: Said once when every candidate has been answered on this
+        #: composition. Repeating it every tick would be the noise the
+        #: cooldown reporting already refuses.
+        self._nothing_left = ""
         #: The experiment under way: (change, reach, accumulated Duel).
         #: One at a time -- a budget split between two answers neither.
         self._trying: Optional[Any] = None
@@ -885,9 +889,7 @@ class Bench:
             reached = self._reach[change.property]
             if not reached["varies"]:
                 continue                    # cannot move anything; no games
-            known = book.already_tried(chess_action.QUESTION,
-                                       change.as_dict(), {})
-            if known and known["match"] == "exact":
+            if self._settled(change, book):
                 continue
             from . import chess_version
 
@@ -898,13 +900,54 @@ class Bench:
             if best is None or reached["share"] > best[1]["share"]:
                 best = (change, reached)
         if best is None:
+            from . import chess_version
+
+            control = chess_version.confirmed_fingerprint()
+            if self._nothing_left != control:
+                self._nothing_left = control
+                events.emit(events.STATUS,
+                            f"NO_EXPERIMENT_AVAILABLE: на составе {control} "
+                            f"все выведенные изменения уже отвечены или "
+                            f"нечем двигать",
+                            chess={"kind": "version", "step": "no_experiment",
+                                   "control": control})
             return None
+        self._nothing_left = ""
         events.emit(events.STATUS,
                     f"беру опыт «{best[0].property}»: рычаг работает в "
                     f"{best[1]['share']:.0%} ничьих",
                     chess={"kind": "finding",
                            "text": f"опыт: {best[0].describe()}"})
         return (best[0], best[1], chess_action.Duel(change=best[0]))
+
+    def _settled(self, change: Any, book: Any) -> bool:
+        """Has this intervention already been answered on this control?
+
+        Answered, not merely attempted. A REJECTED verdict against the
+        composition in force now is an answer and closes the question
+        while that composition holds. NOT_EVALUATED is not an answer --
+        the experiment ran out of decided games -- and a lever with no
+        reach was refused before it played, which is a different fact
+        again.
+
+        The control is part of the condition, not the question: the same
+        intervention on a different baseline is a new experiment, and
+        blocking it would be forbidding a finding forever on the strength
+        of one composition.
+        """
+        from . import chess_action, chess_version
+
+        wanted = chess_action.QUESTION
+        probe = change.identity()
+        control = chess_version.confirmed_fingerprint()
+        for finding in book.latest():
+            if finding.question != wanted or finding.approach != probe:
+                continue
+            if finding.verdict != chess_action.REJECTED:
+                continue
+            if str(finding.conditions.get("control", "v0-base")) == control:
+                return True
+        return False
 
     def _book(self) -> Any:
         from . import findings as ledger_mod

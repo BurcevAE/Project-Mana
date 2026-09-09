@@ -1201,3 +1201,146 @@ def test_the_whole_sequence_ends_with_the_next_candidate_facing_v1(
     bench._experiment()
     assert seen["control_has"] is not None
     assert seen["control_has"].property == "pawn_moves"
+
+
+# --------------------------------------------------------------------------
+# an answered experiment is not asked again
+# --------------------------------------------------------------------------
+
+def _answered(bench, prop, verdict, control="v0-base", decided=40):
+    """Put one causal finding in the bench's ledger, as `record` would."""
+    from mana.cognition import chess_action
+
+    change = chess_action.Change(prop, chess_action.LESS,
+                                 from_finding="obs-whenever")
+    result = chess_action.Duel(change=change, games=decided + 6,
+                               changed_won=decided // 2,
+                               unchanged_won=decided - decided // 2, drawn=6)
+    if verdict == "NOT_EVALUATED":
+        result = chess_action.Duel(change=change, games=8, changed_won=3,
+                                   unchanged_won=3, drawn=2)
+    finding = chess_action.record(change, result, depth=2,
+                                  ledger=bench._book(),
+                                  reached={"share": 0.6, "ties": 400,
+                                           "varies": 240},
+                                  control_name=control)
+    assert finding.verdict == verdict, finding.verdict
+    return change, finding
+
+
+def _picking(bench, monkeypatch, properties):
+    """Make `_pick` see exactly these candidates, with reach."""
+    from mana.cognition import chess_action, chess_outcome
+
+    changes = [chess_action.Change(name, chess_action.LESS,
+                                   from_finding=f"obs-{name}")
+               for name in properties]
+    monkeypatch.setattr(chess_outcome, "look", lambda *a, **kw: [])
+    monkeypatch.setattr(chess_action, "propose", lambda found: (changes, []))
+    monkeypatch.setattr(chess_action, "ties_in", lambda *a, **kw: ["tie"])
+    monkeypatch.setattr(chess_action, "reach",
+                        lambda change, ties: {"share": 0.6, "ties": 1,
+                                              "varies": 1})
+    bench._sides = {"g": object()}
+    bench._ties = None
+    bench._reach = {}
+    return changes
+
+
+def test_a_rejected_candidate_is_not_chosen_again_on_the_same_control(
+        tmp_path, monkeypatch):
+    """The live log showed pawn_moves chosen, rejected, chosen again. The
+    probe asked with empty conditions and the approach carried a
+    provenance id that changed every cycle, so nothing matched."""
+    bench, _ = _bench_for(tmp_path, monkeypatch)
+    _answered(bench, "pawn_moves", "REJECTED")
+    _picking(bench, monkeypatch, ["pawn_moves"])
+    assert bench._pick() is None
+
+
+def test_the_same_intervention_is_open_again_on_a_new_control(
+        tmp_path, monkeypatch):
+    """REJECTED is not "forbid this finding forever": the control is a
+    condition of the answer, not part of the question."""
+    from mana.cognition import chess_version
+
+    bench, _ = _bench_for(tmp_path, monkeypatch)
+    _answered(bench, "pawn_moves", "REJECTED", control="v0-base")
+    _picking(bench, monkeypatch, ["pawn_moves"])
+    assert bench._pick() is None
+
+    monkeypatch.setattr(chess_version, "confirmed_fingerprint",
+                        lambda: "v1-abcd")
+    picked = bench._pick()
+    assert picked is not None and picked[0].property == "pawn_moves"
+
+
+def test_not_evaluated_does_not_close_the_question(tmp_path, monkeypatch):
+    """The experiment ran out of decided games. That is not an answer."""
+    bench, _ = _bench_for(tmp_path, monkeypatch)
+    _, finding = _answered(bench, "pawn_moves", "NOT_EVALUATED")
+    assert finding.verdict == "NOT_EVALUATED"
+    _picking(bench, monkeypatch, ["pawn_moves"])
+    picked = bench._pick()
+    assert picked is not None and picked[0].property == "pawn_moves"
+
+
+def test_choosing_settles_rather_than_looping(tmp_path, monkeypatch):
+    """Two candidates, both answered one after the other: the selector
+    runs out instead of returning the first one for ever."""
+    bench, _ = _bench_for(tmp_path, monkeypatch)
+    _picking(bench, monkeypatch, ["pawn_moves", "king_moves"])
+
+    first = bench._pick()
+    assert first is not None
+    _answered(bench, first[0].property, "REJECTED")
+
+    second = bench._pick()
+    assert second is not None and second[0].property != first[0].property
+    _answered(bench, second[0].property, "REJECTED")
+
+    assert bench._pick() is None
+
+
+def test_running_out_says_so_once(tmp_path, monkeypatch):
+    from mana import events
+
+    bench, _ = _bench_for(tmp_path, monkeypatch)
+    _answered(bench, "pawn_moves", "REJECTED")
+    _picking(bench, monkeypatch, ["pawn_moves"])
+
+    said = []
+    sink = events.subscribe(lambda e: said.append(e.text))
+    try:
+        assert bench._pick() is None
+        assert bench._pick() is None
+    finally:
+        events.unsubscribe(sink)
+    spoken = [line for line in said if "NO_EXPERIMENT_AVAILABLE" in line]
+    assert len(spoken) == 1                  # once, not once per tick
+
+
+def test_a_high_observational_score_does_not_reopen_an_answered_question(
+        tmp_path, monkeypatch):
+    """The correlation stays strong after the intervention fails -- that
+    is the ordinary case, not a reason to run the experiment again."""
+    from mana.cognition import chess_action
+
+    bench, _ = _bench_for(tmp_path, monkeypatch)
+    _answered(bench, "pawn_moves", "REJECTED")
+    # A brand-new observational finding, as a growing corpus produces:
+    # different id, same intervention.
+    changes = [chess_action.Change("pawn_moves", chess_action.LESS,
+                                   from_finding="obs-much-stronger-now")]
+    from mana.cognition import chess_outcome
+
+    monkeypatch.setattr(chess_outcome, "look", lambda *a, **kw: [])
+    monkeypatch.setattr(chess_action, "propose", lambda found: (changes, []))
+    monkeypatch.setattr(chess_action, "ties_in", lambda *a, **kw: ["tie"])
+    monkeypatch.setattr(chess_action, "reach",
+                        lambda change, ties: {"share": 0.9, "ties": 1,
+                                              "varies": 1})
+    bench._sides = {"g": object()}
+    bench._ties = None
+    bench._reach = {}
+    assert bench._pick() is None
