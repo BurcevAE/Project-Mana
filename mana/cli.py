@@ -457,6 +457,46 @@ def _bench(from_level: int, port: int = 0) -> int:
     return 0
 
 
+def _chess_experiment(games: int) -> int:
+    """Derive changes from what has been found, and test each by playing.
+
+    The step that separates an agent from an analyst: a finding says a
+    property goes with losing, and this asks whether changing it changes
+    anything. Nobody says which property -- the direction comes from the
+    measurement's own sign, and a property that cannot be computed for a
+    move before it is played is refused with the reason.
+    """
+    from .cognition import chess_action, chess_bot, chess_outcome
+
+    sides = [row for row in (chess_outcome.reduce_game(game)
+                             for game in chess_bot.recorded()) if row]
+    if not sides:
+        print("Записей нет. Сыграть:  mana.cmd --chess 30")
+        return 0
+    found = chess_outcome.look(sides, record=False)
+    changes, refused = chess_action.propose(found)
+    print(f"партий в записи: {len(sides)}, принятых находок: "
+          f"{sum(1 for f in found if f.verdict == 'ACCEPTED')}")
+    for row in refused:
+        print(f"  не действие: {row['property']} — {row['why']}")
+    if not changes:
+        print("Ни одна находка не даёт исполнимого изменения.")
+        return 0
+
+    games = games or chess_action.GAMES_PER_EXPERIMENT
+    print(f"\nпроверяю {len(changes)} изменений по {games} партий против "
+          f"неизменённого игрока (цвета чередуются)")
+    for number, change in enumerate(changes, 1):
+        print(f"  {number}/{len(changes)}: {change.describe()}", flush=True)
+        result = chess_action.duel(change, games=games)
+        finding = chess_action.record(change, result, depth=2,
+                                      questions=len(changes))
+        print(f"    {finding.verdict}: {finding.note}")
+    print("\nПринятое здесь — причинное утверждение: изменение сдвинуло "
+          "исход. Отклонённое — что связь не пережила вмешательства.")
+    return 0
+
+
 def _chess_rejudge(depth: int, both_sides: bool = False) -> int:
     """Judge the record again, deeper, without playing anything.
 
@@ -1263,6 +1303,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Стенд: сама вызывает Stockfish на lichess, "
                              "10 побед подряд — следующий уровень, 30 подряд "
                              "на 8-м — конец; без числа продолжает с прошлого")
+    parser.add_argument("--chess-experiment", nargs="?", const=0, type=int,
+                        metavar="N", dest="chess_experiment",
+                        help="Вывести изменения из находок и проверить каждое "
+                             "N партиями против неизменённого игрока")
     parser.add_argument("--both-sides", action="store_true", dest="both_sides",
                         help="Судить обе стороны, а не только ходы MANA "
                              "(с --chess-rejudge; возобновляемо)")
@@ -1381,6 +1425,8 @@ def main() -> int:
 
     if args.bench is not None:
         return _bench(int(args.bench), int(args.watch_port))
+    if args.chess_experiment is not None:
+        return _chess_experiment(int(args.chess_experiment))
     if args.chess_rejudge is not None:
         return _chess_rejudge(int(args.chess_rejudge), bool(args.both_sides))
     if args.chess is not None:
