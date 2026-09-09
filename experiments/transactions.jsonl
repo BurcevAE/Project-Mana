@@ -41947,3 +41947,559 @@
 {"txn_id": "087e86eace03493b", "claim_id": "ad2f4f5ec7e0", "kind": "retire", "description": "retrieve_generate_verify__arithmetic_hard: измеренная точность 0.00 на 12 применениях ниже базовой 0.40, ради которой её", "state": "OPENED", "at": 1788946494.5579057, "data": {}}
 {"txn_id": "087e86eace03493b", "state": "DECIDED", "at": 1788946494.558503, "data": {"reason": "измеренная точность 0.00 на 12 применениях ниже базовой 0.40, ради которой её приняли"}}
 {"txn_id": "087e86eace03493b", "state": "COMMITTED", "at": 1788946494.559225, "data": {"result": "RETIRED"}}
+{"txn_id": "dd77b8a8ef854ba0", "claim_id": "b1", "kind": "retire_brain", "description": "перестал окупаться", "state": "OPENED", "at": 1788947587.9338887, "data": {}}
+{"txn_id": "dd77b8a8ef854ba0", "state": "DECIDED", "at": 1788947587.9347305, "data": {"reason": "перестал окупаться"}}
+{"txn_id": "dd77b8a8ef854ba0", "state": "COMMITTED", "at": 1788947587.9356034, "data": {"result": "RETIRED"}}
+{"txn_id": "3d9a1196067045b5", "claim_id": "6f255cdaca32", "kind": "meta", "description": "gap.cost: 0.200 → 1.200 (выше вес — шире поиск)", "state": "OPENED", "at": 1788947634.3041615, "data": {}}
+{"txn_id": "3d9a1196067045b5", "state": "MEASURED", "at": 1788947634.3049846, "data": {"episodes": 40, "bar": 0.5, "parameter_reads": 80, "decisions_differed": 0, "baseline_value": 0.4195, "candidate_value": 0.9195}}
+{"txn_id": "3d9a1196067045b5", "state": "DECIDED", "at": 1788947634.305869, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "3d9a1196067045b5", "state": "COMMITTED", "at": 1788947634.3065836, "data": {"result": "ACCEPTED"}}
+{"txn_id": "9988aea411614774", "claim_id": "c429b748a9d2", "kind": "meta", "description": "gap.cost: 0.200 → 1.200 (предположительно лучше)", "state": "OPENED", "at": 1788947634.3227456, "data": {}}
+{"txn_id": "9988aea411614774", "state": "MEASURED", "at": 1788947634.3233607, "data": {"episodes": 40, "bar": 0.5, "parameter_reads": 80, "decisions_differed": 0, "baseline_value": 0.6, "candidate_value": 0.6}}
+{"txn_id": "9988aea411614774", "state": "DECIDED", "at": 1788947634.324002, "data": {"accepted": false, "reason": "failed: dev_improvement, significance"}}
+{"txn_id": "9988aea411614774", "state": "COMMITTED", "at": 1788947634.324537, "data": {"result": "REJECTED"}}
+{"txn_id": "e1813e6f90834a0a", "claim_id": "35809d8fe0f4", "kind": "meta", "description": "gap.cost: 0.200 → 1.200 ()", "state": "OPENED", "at": 1788947634.340933, "data": {}}
+{"txn_id": "e1813e6f90834a0a", "state": "MEASURED", "at": 1788947634.3417897, "data": {"episodes": 3, "bar": 0.5, "parameter_reads": 6, "decisions_differed": 0, "baseline_value": 0.42, "candidate_value": 0.92}}
+{"txn_id": "e1813e6f90834a0a", "state": "DECIDED", "at": 1788947634.342515, "data": {"accepted": false, "reason": "не оценено: парных испытаний 3 против 30, и ничто из измеренного не говорит против"}}
+{"txn_id": "e1813e6f90834a0a", "state": "COMMITTED", "at": 1788947634.3431997, "data": {"result": "REJECTED"}}
+{"txn_id": "203b83e1245b416f", "claim_id": "bef478041eb6", "kind": "meta", "description": "gap.cost: 0.200 → 1.200 ()", "state": "OPENED", "at": 1788947634.3771758, "data": {}}
+{"txn_id": "203b83e1245b416f", "state": "MEASURED", "at": 1788947634.3780699, "data": {"episodes": 40, "bar": 0.5, "parameter_reads": 80, "decisions_differed": 0, "baseline_value": 0.4195, "candidate_value": 0.9195}}
+{"txn_id": "203b83e1245b416f", "state": "DECIDED", "at": 1788947634.3786976, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "203b83e1245b416f", "state": "COMMITTED", "at": 1788947634.3793836, "data": {"result": "ACCEPTED"}}
+{"txn_id": "a1f5be2cb9784a67", "claim_id": "f16b0971764e", "kind": "meta", "description": "gap.cost: 0.200 → 1.200 ()", "state": "OPENED", "at": 1788947634.723561, "data": {}}
+{"txn_id": "a1f5be2cb9784a67", "state": "MEASURED", "at": 1788947634.7247887, "data": {"episodes": 40, "bar": 0.5, "parameter_reads": 80, "decisions_differed": 0, "baseline_value": 0.4195, "candidate_value": 0.9195}}
+{"txn_id": "a1f5be2cb9784a67", "state": "DECIDED", "at": 1788947634.725424, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "a1f5be2cb9784a67", "state": "COMMITTED", "at": 1788947634.7260165, "data": {"result": "ACCEPTED"}}
+{"txn_id": "9767b49c37e849f1", "claim_id": "286736c5b223", "kind": "meta", "description": "gap.cost: 0.200 → 1.200 (принимает больше заявок)", "state": "OPENED", "at": 1788947634.7589896, "data": {}}
+{"txn_id": "9767b49c37e849f1", "state": "MEASURED", "at": 1788947634.7598164, "data": {"episodes": 40, "bar": 0.5, "parameter_reads": 80, "decisions_differed": 0, "baseline_value": 0.9, "candidate_value": 0.2}}
+{"txn_id": "9767b49c37e849f1", "state": "DECIDED", "at": 1788947634.760478, "data": {"accepted": false, "reason": "failed: dev_improvement, significance, no_regression"}}
+{"txn_id": "9767b49c37e849f1", "state": "COMMITTED", "at": 1788947634.7611566, "data": {"result": "REJECTED"}}
+{"txn_id": "8f5db21918144809", "claim_id": "36263cee1ed8", "kind": "meta", "description": "gap.cost: 0.200 → 1.200 ()", "state": "OPENED", "at": 1788947634.82581, "data": {}}
+{"txn_id": "8f5db21918144809", "state": "MEASURED", "at": 1788947634.8270442, "data": {"episodes": 40, "bar": 0.9, "parameter_reads": 80, "decisions_differed": 0, "baseline_value": 0.4195, "candidate_value": 0.9195}}
+{"txn_id": "8f5db21918144809", "state": "DECIDED", "at": 1788947634.8278966, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "8f5db21918144809", "state": "COMMITTED", "at": 1788947634.8284822, "data": {"result": "ACCEPTED"}}
+{"txn_id": "3a136c49580943a1", "claim_id": "c315f069e8f6", "kind": "meta", "description": "gap.cost: -0.400 → 0.500 (шире поиск)", "state": "OPENED", "at": 1788947635.0635126, "data": {}}
+{"txn_id": "3a136c49580943a1", "state": "MEASURED", "at": 1788947635.0669992, "data": {"episodes": 40, "bar": 0.5, "parameter_reads": 80, "decisions_differed": 0, "baseline_value": 0.1195, "candidate_value": 0.5695}}
+{"txn_id": "3a136c49580943a1", "state": "DECIDED", "at": 1788947635.0676448, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "3a136c49580943a1", "state": "COMMITTED", "at": 1788947635.0682166, "data": {"result": "ACCEPTED"}}
+{"txn_id": "7759ece75dcd43e5", "claim_id": "31ffae3af490", "kind": "meta", "description": "gap.cost: -0.400 → 0.500 ()", "state": "OPENED", "at": 1788947635.08584, "data": {}}
+{"txn_id": "7759ece75dcd43e5", "state": "MEASURED", "at": 1788947635.0865998, "data": {"episodes": 40, "bar": 0.5, "parameter_reads": 80, "decisions_differed": 0, "baseline_value": 0.6, "candidate_value": 0.6}}
+{"txn_id": "7759ece75dcd43e5", "state": "DECIDED", "at": 1788947635.0873234, "data": {"accepted": false, "reason": "failed: dev_improvement, significance"}}
+{"txn_id": "7759ece75dcd43e5", "state": "COMMITTED", "at": 1788947635.0879114, "data": {"result": "REJECTED"}}
+{"txn_id": "012098aa5ea44010", "claim_id": "55afe8d744bd", "kind": "meta", "description": "gap.cost: -0.400 → 0.500 (шире поиск)", "state": "OPENED", "at": 1788947635.104946, "data": {}}
+{"txn_id": "012098aa5ea44010", "state": "MEASURED", "at": 1788947635.1057253, "data": {"episodes": 40, "bar": 0.5, "parameter_reads": 80, "decisions_differed": 0, "baseline_value": 0.1195, "candidate_value": 0.5695}}
+{"txn_id": "012098aa5ea44010", "state": "DECIDED", "at": 1788947635.106472, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "012098aa5ea44010", "state": "COMMITTED", "at": 1788947635.1072028, "data": {"result": "ACCEPTED"}}
+{"txn_id": "9ecc6e142d9b493c", "claim_id": "19da6f7e6ba1", "kind": "meta", "description": "gap.cost: -0.400 → 0.500 (шире поиск)", "state": "OPENED", "at": 1788947635.14244, "data": {}}
+{"txn_id": "9ecc6e142d9b493c", "state": "MEASURED", "at": 1788947635.1431549, "data": {"episodes": 40, "bar": 0.5, "parameter_reads": 80, "decisions_differed": 0, "baseline_value": 0.1195, "candidate_value": 0.5695}}
+{"txn_id": "9ecc6e142d9b493c", "state": "DECIDED", "at": 1788947635.1438038, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "9ecc6e142d9b493c", "state": "COMMITTED", "at": 1788947635.144372, "data": {"result": "ACCEPTED"}}
+{"txn_id": "f554795135784fca", "claim_id": "ad133697e050", "kind": "meta", "description": "gap.cost: 0.200 → 1.200 ()", "state": "OPENED", "at": 1788947635.1950557, "data": {}}
+{"txn_id": "f554795135784fca", "state": "MEASURED", "at": 1788947635.1958477, "data": {"episodes": 40, "bar": 0.5, "parameter_reads": 80, "decisions_differed": 40, "baseline_value": 0.9, "candidate_value": 0.9}}
+{"txn_id": "f554795135784fca", "state": "DECIDED", "at": 1788947635.1964912, "data": {"accepted": false, "reason": "failed: dev_improvement, significance"}}
+{"txn_id": "f554795135784fca", "state": "COMMITTED", "at": 1788947635.1970844, "data": {"result": "REJECTED"}}
+{"txn_id": "6a881790cb904d1d", "claim_id": "8dd0bec036fb", "kind": "meta", "description": "gap.cost: 0.200 → 1.200 ()", "state": "OPENED", "at": 1788947635.215394, "data": {}}
+{"txn_id": "6a881790cb904d1d", "state": "MEASURED", "at": 1788947635.2162273, "data": {"episodes": 40, "bar": 0.5, "parameter_reads": 80, "decisions_differed": 0, "baseline_value": 0.4195, "candidate_value": 0.9195}}
+{"txn_id": "6a881790cb904d1d", "state": "DECIDED", "at": 1788947635.2169495, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "6a881790cb904d1d", "state": "COMMITTED", "at": 1788947635.21754, "data": {"result": "ACCEPTED"}}
+{"txn_id": "57fb3457515c4b3c", "claim_id": "32586246b148", "kind": "meta", "description": "gap.cost: -0.400 → 0.500 (шире поиск)", "state": "OPENED", "at": 1788947635.2360945, "data": {}}
+{"txn_id": "57fb3457515c4b3c", "state": "MEASURED", "at": 1788947635.2370985, "data": {"episodes": 40, "bar": 0.5, "parameter_reads": 80, "decisions_differed": 0, "baseline_value": 0.1195, "candidate_value": 0.5695}}
+{"txn_id": "57fb3457515c4b3c", "state": "DECIDED", "at": 1788947635.2378721, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "57fb3457515c4b3c", "state": "COMMITTED", "at": 1788947635.2385817, "data": {"result": "ACCEPTED"}}
+{"txn_id": "4655e54b158d44ac", "claim_id": "502103ddfeac", "kind": "meta", "description": "gap.cost: -0.400 → 0.500 (шире поиск)", "state": "OPENED", "at": 1788947635.257347, "data": {}}
+{"txn_id": "4655e54b158d44ac", "state": "MEASURED", "at": 1788947635.2581625, "data": {"episodes": 40, "bar": 0.5, "parameter_reads": 80, "decisions_differed": 0, "baseline_value": 0.1195, "candidate_value": 0.5695}}
+{"txn_id": "4655e54b158d44ac", "state": "DECIDED", "at": 1788947635.258826, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "4655e54b158d44ac", "state": "COMMITTED", "at": 1788947635.259413, "data": {"result": "ACCEPTED"}}
+{"txn_id": "3374757aad0f49dd", "claim_id": "c7d2ffb585c3", "kind": "meta", "description": "gap.cost: -0.400 → 0.500 (шире поиск)", "state": "OPENED", "at": 1788947635.2948403, "data": {}}
+{"txn_id": "3374757aad0f49dd", "state": "MEASURED", "at": 1788947635.2956746, "data": {"episodes": 40, "bar": 0.5, "parameter_reads": 80, "decisions_differed": 0, "baseline_value": 0.1195, "candidate_value": 0.5695}}
+{"txn_id": "3374757aad0f49dd", "state": "DECIDED", "at": 1788947635.296426, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "3374757aad0f49dd", "state": "COMMITTED", "at": 1788947635.2970307, "data": {"result": "ACCEPTED"}}
+{"txn_id": "495f091929074cf5", "claim_id": "a6d83c8823b7", "kind": "research", "description": "измерить arithmetic/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788947647.428496, "data": {}}
+{"txn_id": "495f091929074cf5", "state": "MEASURED", "at": 1788947647.4296973, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "495f091929074cf5", "state": "COMMITTED", "at": 1788947647.4310987, "data": {"result": "урок: 12/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "050d7f36a0d04d92", "claim_id": "6f6070742955", "kind": "research", "description": "измерить arithmetic/hard: ни разу не пробовалась", "state": "OPENED", "at": 1788947647.4413998, "data": {}}
+{"txn_id": "050d7f36a0d04d92", "state": "MEASURED", "at": 1788947647.4419878, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "050d7f36a0d04d92", "state": "COMMITTED", "at": 1788947647.4432328, "data": {"result": "урок: 12/12, уточнено 0.722", "resolution": 0.7361}}
+{"txn_id": "1d17650ac6b944c9", "claim_id": "cef90f656cf6", "kind": "research", "description": "измерить sequence/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788947647.4456556, "data": {}}
+{"txn_id": "1d17650ac6b944c9", "state": "MEASURED", "at": 1788947647.446314, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "1d17650ac6b944c9", "state": "COMMITTED", "at": 1788947647.4474018, "data": {"result": "урок: 12/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "3ef3b289605c4742", "claim_id": "0af0d2885168", "kind": "research", "description": "измерить sequence/medium: ни разу не пробовалась", "state": "OPENED", "at": 1788947647.4495406, "data": {}}
+{"txn_id": "3ef3b289605c4742", "state": "MEASURED", "at": 1788947647.4501827, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "3ef3b289605c4742", "state": "COMMITTED", "at": 1788947647.4514434, "data": {"result": "урок: 12/12, уточнено 0.722", "resolution": 0.7497}}
+{"txn_id": "0ad4e220bc7d47de", "claim_id": "6c11674a170a", "kind": "research", "description": "измерить sequence/hard: ни разу не пробовалась", "state": "OPENED", "at": 1788947647.4544208, "data": {}}
+{"txn_id": "0ad4e220bc7d47de", "state": "MEASURED", "at": 1788947647.4550242, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "0ad4e220bc7d47de", "state": "COMMITTED", "at": 1788947647.4563053, "data": {"result": "урок: 12/12, уточнено 0.722", "resolution": 0.7575}}
+{"txn_id": "72085caa39264493", "claim_id": "6304285b7daa", "kind": "research", "description": "измерить logic/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788947647.459712, "data": {}}
+{"txn_id": "72085caa39264493", "state": "MEASURED", "at": 1788947647.4603407, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "72085caa39264493", "state": "COMMITTED", "at": 1788947647.4617608, "data": {"result": "урок: 12/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "5c41ce6442224378", "claim_id": "edbe0f064fa2", "kind": "research", "description": "измерить logic/medium: ни разу не пробовалась", "state": "OPENED", "at": 1788947647.4653916, "data": {}}
+{"txn_id": "5c41ce6442224378", "state": "MEASURED", "at": 1788947647.4661229, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "5c41ce6442224378", "state": "COMMITTED", "at": 1788947647.4678648, "data": {"result": "урок: 12/12, уточнено 0.722", "resolution": 0.7497}}
+{"txn_id": "4838abed65a34778", "claim_id": "5e619f537c91", "kind": "research", "description": "измерить logic/hard: ни разу не пробовалась", "state": "OPENED", "at": 1788947647.4720232, "data": {}}
+{"txn_id": "4838abed65a34778", "state": "MEASURED", "at": 1788947647.4726448, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "4838abed65a34778", "state": "COMMITTED", "at": 1788947647.474535, "data": {"result": "урок: 12/12, уточнено 0.722", "resolution": 0.7575}}
+{"txn_id": "ef3cfa4483794d7c", "claim_id": "e2e0590d8034", "kind": "research", "description": "измерить arithmetic/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788947647.5035298, "data": {}}
+{"txn_id": "ef3cfa4483794d7c", "state": "MEASURED", "at": 1788947647.5042367, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "ef3cfa4483794d7c", "state": "COMMITTED", "at": 1788947647.505506, "data": {"result": "урок: 12/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "0e48d843887845cf", "claim_id": "23bb75f9819a", "kind": "research", "description": "измерить arithmetic/hard: ни разу не пробовалась", "state": "OPENED", "at": 1788947647.515849, "data": {}}
+{"txn_id": "0e48d843887845cf", "state": "MEASURED", "at": 1788947647.5165665, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "0e48d843887845cf", "state": "COMMITTED", "at": 1788947647.5177984, "data": {"result": "урок: 12/12, уточнено 0.722", "resolution": 0.7361}}
+{"txn_id": "4593dc80afcd4921", "claim_id": "39d6a69c5ac2", "kind": "research", "description": "измерить sequence/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788947647.5198483, "data": {}}
+{"txn_id": "4593dc80afcd4921", "state": "MEASURED", "at": 1788947647.5204418, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "4593dc80afcd4921", "state": "COMMITTED", "at": 1788947647.5217135, "data": {"result": "урок: 12/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "c92a3aa249734f7a", "claim_id": "01bdea7c5e1e", "kind": "research", "description": "измерить arithmetic/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788947647.5662143, "data": {}}
+{"txn_id": "c92a3aa249734f7a", "state": "MEASURED", "at": 1788947647.5669272, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "c92a3aa249734f7a", "state": "COMMITTED", "at": 1788947647.5679634, "data": {"result": "урок: 12/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "1aea19bf2148483f", "claim_id": "4356a7f73475", "kind": "research", "description": "измерить arithmetic/medium: ни разу не пробовалась", "state": "OPENED", "at": 1788947647.5687754, "data": {}}
+{"txn_id": "1aea19bf2148483f", "state": "MEASURED", "at": 1788947647.5693588, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "1aea19bf2148483f", "state": "COMMITTED", "at": 1788947647.5708365, "data": {"result": "урок: 12/12, уточнено 0.722", "resolution": 0.7497}}
+{"txn_id": "69296843194e4158", "claim_id": "5fb76a12b556", "kind": "research", "description": "измерить arithmetic/hard: ни разу не пробовалась", "state": "OPENED", "at": 1788947647.5717363, "data": {}}
+{"txn_id": "69296843194e4158", "state": "MEASURED", "at": 1788947647.5723789, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "69296843194e4158", "state": "COMMITTED", "at": 1788947647.5737045, "data": {"result": "урок: 12/12, уточнено 0.722", "resolution": 0.7575}}
+{"txn_id": "26468b1e7f764faa", "claim_id": "b5772cbad2aa", "kind": "research", "description": "измерить sequence/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788947647.5746095, "data": {}}
+{"txn_id": "26468b1e7f764faa", "state": "MEASURED", "at": 1788947647.5752287, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "26468b1e7f764faa", "state": "COMMITTED", "at": 1788947647.5764413, "data": {"result": "урок: 12/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "5de65de2541b45d0", "claim_id": "6110eab290ea", "kind": "research", "description": "измерить arithmetic/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788947647.5967107, "data": {}}
+{"txn_id": "5de65de2541b45d0", "state": "MEASURED", "at": 1788947647.5975003, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "5de65de2541b45d0", "state": "COMMITTED", "at": 1788947647.598842, "data": {"result": "урок: 12/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "090c1890b81f4f0b", "claim_id": "7fd0a1cba539", "kind": "research", "description": "измерить arithmetic/medium: ни разу не пробовалась", "state": "OPENED", "at": 1788947647.5999177, "data": {}}
+{"txn_id": "090c1890b81f4f0b", "state": "MEASURED", "at": 1788947647.6006384, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "090c1890b81f4f0b", "state": "COMMITTED", "at": 1788947647.6019933, "data": {"result": "урок: 12/12, уточнено 0.722", "resolution": 0.7497}}
+{"txn_id": "631971143c7d4c37", "claim_id": "fc99b92c6c17", "kind": "research", "description": "измерить arithmetic/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788947647.660091, "data": {}}
+{"txn_id": "631971143c7d4c37", "state": "MEASURED", "at": 1788947647.6609876, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "631971143c7d4c37", "state": "COMMITTED", "at": 1788947647.6620302, "data": {"result": "урок: 12/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "a91fe37d832d45bf", "claim_id": "fb746b1c4d90", "kind": "research", "description": "измерить arithmetic/medium: ни разу не пробовалась", "state": "OPENED", "at": 1788947647.6628408, "data": {}}
+{"txn_id": "a91fe37d832d45bf", "state": "MEASURED", "at": 1788947647.6634233, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "a91fe37d832d45bf", "state": "COMMITTED", "at": 1788947647.6645079, "data": {"result": "урок: 12/12, уточнено 0.722", "resolution": 0.7497}}
+{"txn_id": "fc09d098160a4fc7", "claim_id": "78f16a9fee55", "kind": "research", "description": "измерить arithmetic/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788947647.7037895, "data": {}}
+{"txn_id": "fc09d098160a4fc7", "state": "MEASURED", "at": 1788947647.7044568, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "fc09d098160a4fc7", "state": "COMMITTED", "at": 1788947647.7055855, "data": {"result": "урок: 0/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "454d38a8660e4de0", "claim_id": "4f9dd01a2da0", "kind": "research", "description": "измерить arithmetic/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788947647.725961, "data": {}}
+{"txn_id": "454d38a8660e4de0", "state": "MEASURED", "at": 1788947647.7266767, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "454d38a8660e4de0", "state": "COMMITTED", "at": 1788947647.727652, "data": {"result": "урок: 12/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "3a422f7b89f44c73", "claim_id": "f941e241e799", "kind": "research", "description": "измерить arithmetic/medium: ни разу не пробовалась", "state": "OPENED", "at": 1788947647.7284765, "data": {}}
+{"txn_id": "3a422f7b89f44c73", "state": "MEASURED", "at": 1788947647.7290487, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "3a422f7b89f44c73", "state": "COMMITTED", "at": 1788947647.730513, "data": {"result": "урок: 12/12, уточнено 0.722", "resolution": 0.7497}}
+{"txn_id": "fb52c638f49b465c", "claim_id": "7ec68a27e4bb", "kind": "research", "description": "измерить arithmetic/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788947648.050321, "data": {}}
+{"txn_id": "fb52c638f49b465c", "state": "MEASURED", "at": 1788947648.051876, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "fb52c638f49b465c", "state": "COMMITTED", "at": 1788947648.0530384, "data": {"result": "урок: 12/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "7786da67123b4a2f", "claim_id": "2d248e196b75", "kind": "research", "description": "измерить arithmetic/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788947648.0736275, "data": {}}
+{"txn_id": "7786da67123b4a2f", "state": "MEASURED", "at": 1788947648.074407, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "7786da67123b4a2f", "state": "COMMITTED", "at": 1788947648.075361, "data": {"result": "урок: 11/12, уточнено 0.661", "resolution": 0.661}}
+{"txn_id": "47bda51b23aa4476", "claim_id": "5c928842dc49", "kind": "research", "description": "измерить arithmetic/medium: ни разу не пробовалась", "state": "OPENED", "at": 1788947648.0761342, "data": {}}
+{"txn_id": "47bda51b23aa4476", "state": "MEASURED", "at": 1788947648.0767195, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "47bda51b23aa4476", "state": "COMMITTED", "at": 1788947648.0781915, "data": {"result": "урок: 9/12, уточнено 0.505", "resolution": 0.5416}}
+{"txn_id": "ba201b2fdbef4dee", "claim_id": "a9d87883111f", "kind": "research", "description": "измерить arithmetic/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788947648.0993948, "data": {}}
+{"txn_id": "ba201b2fdbef4dee", "state": "MEASURED", "at": 1788947648.100109, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "ba201b2fdbef4dee", "state": "COMMITTED", "at": 1788947648.101053, "data": {"result": "урок: 12/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "d71830a8a66b4b5d", "claim_id": "630db775ab13", "kind": "research", "description": "измерить arithmetic/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788947648.1218486, "data": {}}
+{"txn_id": "d71830a8a66b4b5d", "state": "MEASURED", "at": 1788947648.1225784, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "d71830a8a66b4b5d", "state": "COMMITTED", "at": 1788947648.1237218, "data": {"result": "урок: 12/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "aa5ba2045b9a4c61", "claim_id": "bd7928d114ed", "kind": "research", "description": "измерить arithmetic/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788947648.148445, "data": {}}
+{"txn_id": "aa5ba2045b9a4c61", "state": "MEASURED", "at": 1788947648.1494544, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "aa5ba2045b9a4c61", "state": "COMMITTED", "at": 1788947648.150879, "data": {"result": "урок: 12/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "7ae034b82db1443a", "claim_id": "c0e8ba6c6770", "kind": "research", "description": "измерить arithmetic/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788947648.1796484, "data": {}}
+{"txn_id": "7ae034b82db1443a", "state": "MEASURED", "at": 1788947648.1806333, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "7ae034b82db1443a", "state": "COMMITTED", "at": 1788947648.1820343, "data": {"result": "урок: 12/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "c62123b2c8aa4da7", "claim_id": "e674b8301216", "kind": "research", "description": "измерить arithmetic/medium: ни разу не пробовалась", "state": "OPENED", "at": 1788947648.1830518, "data": {}}
+{"txn_id": "c62123b2c8aa4da7", "state": "MEASURED", "at": 1788947648.1837795, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "c62123b2c8aa4da7", "state": "COMMITTED", "at": 1788947648.1849582, "data": {"result": "урок: 12/12, уточнено 0.722", "resolution": 0.7497}}
+{"txn_id": "7a23733977914199", "claim_id": "91265370660f", "kind": "research", "description": "проверить: На срезе arithmetic/hard программа OBSERVE → GENERATE → VERIFY → CRITI", "state": "OPENED", "at": 1788947648.2229123, "data": {}}
+{"txn_id": "7a23733977914199", "state": "MEASURED", "at": 1788947648.2238393, "data": {"activity": "experiment", "estimated_calls": 120}}
+{"txn_id": "5dcfb1cfc8744b19", "claim_id": "82574f8a8129", "kind": "experiment", "description": "На срезе arithmetic/hard программа OBSERVE → GENERATE → VERIFY → CRITIQUE → REPAIR → ANSWER даст более высокую точность,", "state": "OPENED", "at": 1788947648.225216, "data": {}}
+{"txn_id": "5dcfb1cfc8744b19", "state": "MEASURED", "at": 1788947648.2258184, "data": {"plan_id": "82574f8a8129", "trials": 30, "baseline": 0.0, "candidate": 1.0, "calls_used": 270, "elapsed": 0.0}}
+{"txn_id": "5dcfb1cfc8744b19", "state": "DECIDED", "at": 1788947648.2264626, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "5dcfb1cfc8744b19", "state": "COMMITTED", "at": 1788947648.2270935, "data": {"status": "SUPPORTED"}}
+{"txn_id": "93ff5af35ace49cd", "claim_id": "7c9912735837", "kind": "synthesis", "description": "generate_verify_critique_repair__arithmetic_hard: OBSERVE → GENERATE → VERIFY → CRITIQUE → REPAIR → ANSWER для math, har", "state": "OPENED", "at": 1788947648.2284944, "data": {}}
+{"txn_id": "93ff5af35ace49cd", "state": "MEASURED", "at": 1788947648.2290936, "data": {"trials": 30, "first_margin": 1.0}}
+{"txn_id": "93ff5af35ace49cd", "state": "DECIDED", "at": 1788947648.2297773, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "93ff5af35ace49cd", "state": "COMMITTED", "at": 1788947648.2306387, "data": {"result": "CONFIRMED"}}
+{"txn_id": "7a23733977914199", "state": "COMMITTED", "at": 1788947648.2316325, "data": {"result": "эксперимент: SUPPORTED — accepted; принята способность generate_verify_critique_repair__arithmetic_hard (геном не сохраняется: путь не задан)", "resolution": 0.0}}
+{"txn_id": "c15a657f37784032", "claim_id": "35a34b44ff25", "kind": "research", "description": "проверить: На срезе arithmetic/hard программа OBSERVE → GENERATE → VERIFY → CRITI", "state": "OPENED", "at": 1788947648.233582, "data": {}}
+{"txn_id": "c15a657f37784032", "state": "MEASURED", "at": 1788947648.2343626, "data": {"activity": "experiment", "estimated_calls": 120}}
+{"txn_id": "8b50b755e6ef45a5", "claim_id": "39cd60e3939b", "kind": "experiment", "description": "На срезе arithmetic/hard программа OBSERVE → GENERATE → VERIFY → CRITIQUE → REPAIR → ANSWER даст более высокую точность,", "state": "OPENED", "at": 1788947648.2363155, "data": {}}
+{"txn_id": "8b50b755e6ef45a5", "state": "MEASURED", "at": 1788947648.237148, "data": {"plan_id": "39cd60e3939b", "trials": 30, "baseline": 0.0, "candidate": 1.0, "calls_used": 270, "elapsed": 0.0}}
+{"txn_id": "8b50b755e6ef45a5", "state": "DECIDED", "at": 1788947648.237875, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "8b50b755e6ef45a5", "state": "COMMITTED", "at": 1788947648.238533, "data": {"status": "SUPPORTED"}}
+{"txn_id": "c15a657f37784032", "state": "COMMITTED", "at": 1788947648.2395046, "data": {"result": "эксперимент: SUPPORTED — accepted", "resolution": 0.0}}
+{"txn_id": "695f1df14fc24e5d", "claim_id": "8108c3b8c226", "kind": "research", "description": "проверить: На срезе arithmetic/hard программа OBSERVE → GENERATE → VERIFY → CRITI", "state": "OPENED", "at": 1788947648.2414196, "data": {}}
+{"txn_id": "695f1df14fc24e5d", "state": "MEASURED", "at": 1788947648.2420382, "data": {"activity": "experiment", "estimated_calls": 120}}
+{"txn_id": "954f0558c9ac4da4", "claim_id": "98178546341e", "kind": "experiment", "description": "На срезе arithmetic/hard программа OBSERVE → GENERATE → VERIFY → CRITIQUE → REPAIR → ANSWER даст более высокую точность,", "state": "OPENED", "at": 1788947648.2435234, "data": {}}
+{"txn_id": "954f0558c9ac4da4", "state": "MEASURED", "at": 1788947648.244285, "data": {"plan_id": "98178546341e", "trials": 30, "baseline": 0.0, "candidate": 1.0, "calls_used": 270, "elapsed": 0.0}}
+{"txn_id": "954f0558c9ac4da4", "state": "DECIDED", "at": 1788947648.2449565, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "954f0558c9ac4da4", "state": "COMMITTED", "at": 1788947648.2456682, "data": {"status": "SUPPORTED"}}
+{"txn_id": "695f1df14fc24e5d", "state": "COMMITTED", "at": 1788947648.2466621, "data": {"result": "эксперимент: SUPPORTED — accepted", "resolution": 0.0}}
+{"txn_id": "7894a0a34df74c15", "claim_id": "2f16b65515e8", "kind": "research", "description": "измерить arithmetic/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788947648.2881427, "data": {}}
+{"txn_id": "7894a0a34df74c15", "state": "MEASURED", "at": 1788947648.2888253, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "7894a0a34df74c15", "state": "COMMITTED", "at": 1788947648.2899384, "data": {"result": "урок: 0/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "1bfa9e509fa34c76", "claim_id": "f2ccad744683", "kind": "research", "description": "измерить arithmetic/medium: ни разу не пробовалась", "state": "OPENED", "at": 1788947648.2911909, "data": {}}
+{"txn_id": "1bfa9e509fa34c76", "state": "MEASURED", "at": 1788947648.2917836, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "1bfa9e509fa34c76", "state": "COMMITTED", "at": 1788947648.2932942, "data": {"result": "урок: 0/12, уточнено 0.722", "resolution": 0.7497}}
+{"txn_id": "937b7df4b7944572", "claim_id": "18eb71ddcdcc", "kind": "research", "description": "проверить: На срезе arithmetic/hard программа OBSERVE → GENERATE → VERIFY → CRITI", "state": "OPENED", "at": 1788947648.3151882, "data": {}}
+{"txn_id": "937b7df4b7944572", "state": "MEASURED", "at": 1788947648.31581, "data": {"activity": "experiment", "estimated_calls": 120}}
+{"txn_id": "c0594dc660554d96", "claim_id": "50afe317598d", "kind": "experiment", "description": "На срезе arithmetic/hard программа OBSERVE → GENERATE → VERIFY → CRITIQUE → REPAIR → ANSWER даст более высокую точность,", "state": "OPENED", "at": 1788947648.3171086, "data": {}}
+{"txn_id": "c0594dc660554d96", "state": "MEASURED", "at": 1788947648.3177729, "data": {"plan_id": "50afe317598d", "trials": 30, "baseline": 0.0, "candidate": 1.0, "calls_used": 270, "elapsed": 0.0}}
+{"txn_id": "c0594dc660554d96", "state": "DECIDED", "at": 1788947648.3184054, "data": {"accepted": false, "reason": "failed: hidden_confirms, counterexamples"}}
+{"txn_id": "c0594dc660554d96", "state": "COMMITTED", "at": 1788947648.3190448, "data": {"status": "REFUTED"}}
+{"txn_id": "937b7df4b7944572", "state": "COMMITTED", "at": 1788947648.3200018, "data": {"result": "эксперимент: не удалось судить — нет данных для гейтов hidden_confirms, counterexamples", "resolution": 0.0}}
+{"txn_id": "a66e5e252ea246cc", "claim_id": "40a81a922c56", "kind": "research", "description": "проверить: На срезе arithmetic/hard программа OBSERVE → GENERATE → VERIFY → CRITI", "state": "OPENED", "at": 1788947648.3411195, "data": {}}
+{"txn_id": "a66e5e252ea246cc", "state": "MEASURED", "at": 1788947648.3419387, "data": {"activity": "experiment", "estimated_calls": 120}}
+{"txn_id": "5335dff9196d4c71", "claim_id": "ef01cecd425f", "kind": "experiment", "description": "На срезе arithmetic/hard программа OBSERVE → GENERATE → VERIFY → CRITIQUE → REPAIR → ANSWER даст более высокую точность,", "state": "OPENED", "at": 1788947648.3432713, "data": {}}
+{"txn_id": "5335dff9196d4c71", "state": "MEASURED", "at": 1788947648.3438807, "data": {"plan_id": "ef01cecd425f", "trials": 30, "baseline": 0.0, "candidate": 1.0, "calls_used": 270, "elapsed": 0.0}}
+{"txn_id": "5335dff9196d4c71", "state": "DECIDED", "at": 1788947648.344529, "data": {"accepted": false, "reason": "failed: hidden_confirms, counterexamples"}}
+{"txn_id": "5335dff9196d4c71", "state": "COMMITTED", "at": 1788947648.3451648, "data": {"status": "REFUTED"}}
+{"txn_id": "a66e5e252ea246cc", "state": "COMMITTED", "at": 1788947648.3461223, "data": {"result": "эксперимент: не удалось судить — нет данных для гейтов hidden_confirms, counterexamples", "resolution": 0.0}}
+{"txn_id": "e73d4a75ddf1448d", "claim_id": "271796ef215f", "kind": "research", "description": "проверить: На срезе arithmetic/hard программа OBSERVE → GENERATE → VERIFY → CRITI", "state": "OPENED", "at": 1788947648.3482049, "data": {}}
+{"txn_id": "e73d4a75ddf1448d", "state": "MEASURED", "at": 1788947648.3488784, "data": {"activity": "experiment", "estimated_calls": 120}}
+{"txn_id": "74401b5228dd4ce0", "claim_id": "3a7246d9e9d0", "kind": "experiment", "description": "На срезе arithmetic/hard программа OBSERVE → GENERATE → VERIFY → CRITIQUE → REPAIR → ANSWER даст более высокую точность,", "state": "OPENED", "at": 1788947648.3501632, "data": {}}
+{"txn_id": "74401b5228dd4ce0", "state": "MEASURED", "at": 1788947648.350787, "data": {"plan_id": "3a7246d9e9d0", "trials": 30, "baseline": 0.0, "candidate": 1.0, "calls_used": 270, "elapsed": 0.0}}
+{"txn_id": "74401b5228dd4ce0", "state": "DECIDED", "at": 1788947648.3514135, "data": {"accepted": false, "reason": "failed: hidden_confirms, counterexamples"}}
+{"txn_id": "74401b5228dd4ce0", "state": "COMMITTED", "at": 1788947648.3520582, "data": {"status": "REFUTED"}}
+{"txn_id": "e73d4a75ddf1448d", "state": "COMMITTED", "at": 1788947648.3530703, "data": {"result": "эксперимент: не удалось судить — нет данных для гейтов hidden_confirms, counterexamples", "resolution": 0.0}}
+{"txn_id": "98f55ca7dc0c439e", "claim_id": "2541f0d0fc6f", "kind": "research", "description": "измерить arithmetic/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788947648.3940444, "data": {}}
+{"txn_id": "98f55ca7dc0c439e", "state": "MEASURED", "at": 1788947648.3947954, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "98f55ca7dc0c439e", "state": "COMMITTED", "at": 1788947648.3961103, "data": {"result": "урок: 12/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "d612b2dcce964b56", "claim_id": "032f8cbcc41d", "kind": "synthesis", "description": "retrieve_generate_verify__arithmetic_hard: OBSERVE → RETRIEVE → GENERATE → VERIFY → ANSWER для math, hard (доказано на a", "state": "OPENED", "at": 1788947651.0790188, "data": {}}
+{"txn_id": "d612b2dcce964b56", "state": "MEASURED", "at": 1788947651.0797625, "data": {"trials": 40, "first_margin": 0.28}}
+{"txn_id": "d612b2dcce964b56", "state": "DECIDED", "at": 1788947651.080399, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "d612b2dcce964b56", "state": "COMMITTED", "at": 1788947651.0809906, "data": {"result": "CONFIRMED"}}
+{"txn_id": "ec75585bc9374cbb", "claim_id": "a7f158cc1715", "kind": "synthesis", "description": "retrieve_generate_verify__arithmetic_hard: OBSERVE → RETRIEVE → GENERATE → VERIFY → ANSWER для math, hard (доказано на a", "state": "OPENED", "at": 1788947651.132274, "data": {}}
+{"txn_id": "ec75585bc9374cbb", "state": "MEASURED", "at": 1788947651.1333997, "data": {"trials": 40, "first_margin": 0.28}}
+{"txn_id": "ec75585bc9374cbb", "state": "DECIDED", "at": 1788947651.1342773, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "ec75585bc9374cbb", "state": "COMMITTED", "at": 1788947651.1348822, "data": {"result": "CONFIRMED"}}
+{"txn_id": "92cda7fc03e940d6", "claim_id": "56daa452e4bb", "kind": "synthesis", "description": "retrieve_generate_verify__arithmetic_hard: OBSERVE → RETRIEVE → GENERATE → VERIFY → ANSWER для math, hard (доказано на a", "state": "OPENED", "at": 1788947651.232037, "data": {}}
+{"txn_id": "92cda7fc03e940d6", "state": "MEASURED", "at": 1788947651.2331007, "data": {"trials": 40, "first_margin": 0.28}}
+{"txn_id": "92cda7fc03e940d6", "state": "DECIDED", "at": 1788947651.2337503, "data": {"accepted": false, "reason": "failed: dev_improvement, significance, hidden_confirms, counterexamples"}}
+{"txn_id": "92cda7fc03e940d6", "state": "COMMITTED", "at": 1788947651.2343407, "data": {"result": "REJECTED"}}
+{"txn_id": "ac489bc5ece148f6", "claim_id": "fdb6eae43ea4", "kind": "synthesis", "description": "retrieve_generate_verify__arithmetic_hard: OBSERVE → RETRIEVE → GENERATE → VERIFY → ANSWER для math, hard (доказано на a", "state": "OPENED", "at": 1788947651.253967, "data": {}}
+{"txn_id": "ac489bc5ece148f6", "state": "MEASURED", "at": 1788947651.2546873, "data": {"trials": 4, "first_margin": 0.28}}
+{"txn_id": "ac489bc5ece148f6", "state": "DECIDED", "at": 1788947651.255318, "data": {"accepted": false, "reason": "не оценено: парных испытаний 4 против 30, и ничто из измеренного не говорит против"}}
+{"txn_id": "ac489bc5ece148f6", "state": "COMMITTED", "at": 1788947651.2559612, "data": {"result": "REJECTED"}}
+{"txn_id": "a068d829f4a64f25", "claim_id": "aa4724cd04c1", "kind": "synthesis", "description": "retrieve_generate_verify__arithmetic_hard: OBSERVE → RETRIEVE → GENERATE → VERIFY → ANSWER для math, hard (доказано на a", "state": "OPENED", "at": 1788947651.2752619, "data": {}}
+{"txn_id": "a068d829f4a64f25", "state": "MEASURED", "at": 1788947651.2759147, "data": {"trials": 40, "first_margin": 0.28}}
+{"txn_id": "a068d829f4a64f25", "state": "DECIDED", "at": 1788947651.2765257, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "a068d829f4a64f25", "state": "COMMITTED", "at": 1788947651.2770946, "data": {"result": "CONFIRMED"}}
+{"txn_id": "f0735ead1e684244", "claim_id": "fad3d7e0d9fd", "kind": "synthesis", "description": "retrieve_generate_verify__arithmetic_hard: OBSERVE → RETRIEVE → GENERATE → VERIFY → ANSWER для math, hard (доказано на a", "state": "OPENED", "at": 1788947651.6125968, "data": {}}
+{"txn_id": "f0735ead1e684244", "state": "MEASURED", "at": 1788947651.6160524, "data": {"trials": 40, "first_margin": 0.28}}
+{"txn_id": "f0735ead1e684244", "state": "DECIDED", "at": 1788947651.6167884, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "f0735ead1e684244", "state": "COMMITTED", "at": 1788947651.6175513, "data": {"result": "CONFIRMED"}}
+{"txn_id": "4f7f902df9a24679", "claim_id": "f502a42656ec", "kind": "synthesis", "description": "retrieve_generate_verify__arithmetic_hard: OBSERVE → RETRIEVE → GENERATE → VERIFY → ANSWER для math, hard (доказано на a", "state": "OPENED", "at": 1788947651.6368926, "data": {}}
+{"txn_id": "4f7f902df9a24679", "state": "MEASURED", "at": 1788947651.6375794, "data": {"trials": 40, "first_margin": 0.28}}
+{"txn_id": "4f7f902df9a24679", "state": "DECIDED", "at": 1788947651.6381924, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "4f7f902df9a24679", "state": "COMMITTED", "at": 1788947651.6387718, "data": {"result": "CONFIRMED"}}
+{"txn_id": "99c851665004452f", "claim_id": "d94bcdfa5d12", "kind": "synthesis", "description": "retrieve_generate_verify__arithmetic_hard: OBSERVE → RETRIEVE → GENERATE → VERIFY → ANSWER для math, hard (доказано на a", "state": "OPENED", "at": 1788947651.6582577, "data": {}}
+{"txn_id": "99c851665004452f", "state": "MEASURED", "at": 1788947651.658969, "data": {"trials": 40, "first_margin": 0.28}}
+{"txn_id": "99c851665004452f", "state": "DECIDED", "at": 1788947651.6595595, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "99c851665004452f", "state": "COMMITTED", "at": 1788947651.6601493, "data": {"result": "CONFIRMED"}}
+{"txn_id": "c4369afc8e194fad", "claim_id": "588a78ba23fc", "kind": "synthesis", "description": "retrieve_generate_verify__arithmetic_hard: OBSERVE → RETRIEVE → GENERATE → VERIFY → ANSWER для math, hard (доказано на a", "state": "OPENED", "at": 1788947651.6799643, "data": {}}
+{"txn_id": "c4369afc8e194fad", "state": "MEASURED", "at": 1788947651.6806488, "data": {"trials": 40, "first_margin": 0.28}}
+{"txn_id": "c4369afc8e194fad", "state": "DECIDED", "at": 1788947651.6812675, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "c4369afc8e194fad", "state": "COMMITTED", "at": 1788947651.6819663, "data": {"result": "CONFIRMED"}}
+{"txn_id": "2b5a7c8cb8994d6b", "claim_id": "b480bc6919c2", "kind": "synthesis", "description": "retrieve_generate_verify__arithmetic_hard: OBSERVE → RETRIEVE → GENERATE → VERIFY → ANSWER для math, hard (доказано на a", "state": "OPENED", "at": 1788947651.7014625, "data": {}}
+{"txn_id": "2b5a7c8cb8994d6b", "state": "MEASURED", "at": 1788947651.7021394, "data": {"trials": 40, "first_margin": 0.28}}
+{"txn_id": "2b5a7c8cb8994d6b", "state": "DECIDED", "at": 1788947651.7029085, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "2b5a7c8cb8994d6b", "state": "COMMITTED", "at": 1788947651.7034707, "data": {"result": "CONFIRMED"}}
+{"txn_id": "3d9b1a4bbfbb48cd", "claim_id": "50c367aff177", "kind": "synthesis", "description": "retrieve_generate_verify__arithmetic_hard: OBSERVE → RETRIEVE → GENERATE → VERIFY → ANSWER для math, hard (доказано на a", "state": "OPENED", "at": 1788947651.7224119, "data": {}}
+{"txn_id": "3d9b1a4bbfbb48cd", "state": "MEASURED", "at": 1788947651.7231932, "data": {"trials": 40, "first_margin": 0.28}}
+{"txn_id": "3d9b1a4bbfbb48cd", "state": "DECIDED", "at": 1788947651.723856, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "3d9b1a4bbfbb48cd", "state": "COMMITTED", "at": 1788947651.7244608, "data": {"result": "CONFIRMED"}}
+{"txn_id": "97521831d0b3470d", "claim_id": "c9bde488dff0", "kind": "synthesis", "description": "retrieve_generate_verify__arithmetic_hard: OBSERVE → RETRIEVE → GENERATE → VERIFY → ANSWER для math, hard (доказано на a", "state": "OPENED", "at": 1788947651.7450016, "data": {}}
+{"txn_id": "97521831d0b3470d", "state": "MEASURED", "at": 1788947651.7456877, "data": {"trials": 40, "first_margin": 0.28}}
+{"txn_id": "97521831d0b3470d", "state": "DECIDED", "at": 1788947651.7464721, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "97521831d0b3470d", "state": "COMMITTED", "at": 1788947651.7470396, "data": {"result": "CONFIRMED"}}
+{"txn_id": "84b92c8c3ea24cb2", "claim_id": "c9bde488dff0", "kind": "retire", "description": "retrieve_generate_verify__arithmetic_hard: перестала работать", "state": "OPENED", "at": 1788947651.747718, "data": {}}
+{"txn_id": "84b92c8c3ea24cb2", "state": "DECIDED", "at": 1788947651.7483828, "data": {"reason": "перестала работать"}}
+{"txn_id": "84b92c8c3ea24cb2", "state": "COMMITTED", "at": 1788947651.7490144, "data": {"result": "RETIRED"}}
+{"txn_id": "4c84fc17a647435e", "claim_id": "94c5e3b73514", "kind": "synthesis", "description": "retrieve_generate_verify__arithmetic_hard: OBSERVE → RETRIEVE → GENERATE → VERIFY → ANSWER для math, hard (доказано на a", "state": "OPENED", "at": 1788947651.787623, "data": {}}
+{"txn_id": "4c84fc17a647435e", "state": "MEASURED", "at": 1788947651.7883716, "data": {"trials": 40, "first_margin": 0.28}}
+{"txn_id": "4c84fc17a647435e", "state": "DECIDED", "at": 1788947651.7890422, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "4c84fc17a647435e", "state": "COMMITTED", "at": 1788947651.7896645, "data": {"result": "CONFIRMED"}}
+{"txn_id": "ccb20c3faa8b4695", "claim_id": "cbcca0f1945b", "kind": "synthesis", "description": "retrieve_generate_verify__arithmetic_hard: OBSERVE → RETRIEVE → GENERATE → VERIFY → ANSWER для math, hard (доказано на a", "state": "OPENED", "at": 1788947651.809231, "data": {}}
+{"txn_id": "ccb20c3faa8b4695", "state": "MEASURED", "at": 1788947651.8099396, "data": {"trials": 40, "first_margin": 0.28}}
+{"txn_id": "ccb20c3faa8b4695", "state": "DECIDED", "at": 1788947651.8105488, "data": {"accepted": false, "reason": "failed: dev_improvement, significance, hidden_confirms, counterexamples"}}
+{"txn_id": "ccb20c3faa8b4695", "state": "COMMITTED", "at": 1788947651.8111525, "data": {"result": "REJECTED"}}
+{"txn_id": "cb4601789534442b", "claim_id": "d176023696d9", "kind": "synthesis", "description": "retrieve_generate_verify__arithmetic_hard: OBSERVE → RETRIEVE → GENERATE → VERIFY → ANSWER для math, hard (доказано на a", "state": "OPENED", "at": 1788947651.8313777, "data": {}}
+{"txn_id": "cb4601789534442b", "state": "MEASURED", "at": 1788947651.8321514, "data": {"trials": 40, "first_margin": 0.28}}
+{"txn_id": "cb4601789534442b", "state": "DECIDED", "at": 1788947651.8328674, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "cb4601789534442b", "state": "COMMITTED", "at": 1788947651.8334386, "data": {"result": "CONFIRMED"}}
+{"txn_id": "ac2d065fb19f4c18", "claim_id": "d176023696d9", "kind": "retire", "description": "retrieve_generate_verify__arithmetic_hard: измеренная точность 0.00 на 12 применениях ниже базовой 0.40, ради которой её", "state": "OPENED", "at": 1788947651.8340678, "data": {}}
+{"txn_id": "ac2d065fb19f4c18", "state": "DECIDED", "at": 1788947651.834738, "data": {"reason": "измеренная точность 0.00 на 12 применениях ниже базовой 0.40, ради которой её приняли"}}
+{"txn_id": "ac2d065fb19f4c18", "state": "COMMITTED", "at": 1788947651.8354151, "data": {"result": "RETIRED"}}
+{"txn_id": "c28cf5006dd340ad", "claim_id": "b1", "kind": "retire_brain", "description": "перестал окупаться", "state": "OPENED", "at": 1788949343.202774, "data": {}}
+{"txn_id": "c28cf5006dd340ad", "state": "DECIDED", "at": 1788949343.2040014, "data": {"reason": "перестал окупаться"}}
+{"txn_id": "c28cf5006dd340ad", "state": "COMMITTED", "at": 1788949343.2047455, "data": {"result": "RETIRED"}}
+{"txn_id": "ddceaa83033d413a", "claim_id": "fff6e14db5d8", "kind": "meta", "description": "gap.cost: 0.200 → 1.200 (выше вес — шире поиск)", "state": "OPENED", "at": 1788949389.417627, "data": {}}
+{"txn_id": "ddceaa83033d413a", "state": "MEASURED", "at": 1788949389.4187932, "data": {"episodes": 40, "bar": 0.5, "parameter_reads": 80, "decisions_differed": 0, "baseline_value": 0.4195, "candidate_value": 0.9195}}
+{"txn_id": "ddceaa83033d413a", "state": "DECIDED", "at": 1788949389.4195426, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "ddceaa83033d413a", "state": "COMMITTED", "at": 1788949389.420206, "data": {"result": "ACCEPTED"}}
+{"txn_id": "13eccc30f468432f", "claim_id": "43cb32aa7a8b", "kind": "meta", "description": "gap.cost: 0.200 → 1.200 (предположительно лучше)", "state": "OPENED", "at": 1788949389.4365082, "data": {}}
+{"txn_id": "13eccc30f468432f", "state": "MEASURED", "at": 1788949389.437288, "data": {"episodes": 40, "bar": 0.5, "parameter_reads": 80, "decisions_differed": 0, "baseline_value": 0.6, "candidate_value": 0.6}}
+{"txn_id": "13eccc30f468432f", "state": "DECIDED", "at": 1788949389.4380147, "data": {"accepted": false, "reason": "failed: dev_improvement, significance"}}
+{"txn_id": "13eccc30f468432f", "state": "COMMITTED", "at": 1788949389.4386837, "data": {"result": "REJECTED"}}
+{"txn_id": "8b5dd04982e74a9e", "claim_id": "539166924339", "kind": "meta", "description": "gap.cost: 0.200 → 1.200 ()", "state": "OPENED", "at": 1788949389.455398, "data": {}}
+{"txn_id": "8b5dd04982e74a9e", "state": "MEASURED", "at": 1788949389.45608, "data": {"episodes": 3, "bar": 0.5, "parameter_reads": 6, "decisions_differed": 0, "baseline_value": 0.42, "candidate_value": 0.92}}
+{"txn_id": "8b5dd04982e74a9e", "state": "DECIDED", "at": 1788949389.4566994, "data": {"accepted": false, "reason": "не оценено: парных испытаний 3 против 30, и ничто из измеренного не говорит против"}}
+{"txn_id": "8b5dd04982e74a9e", "state": "COMMITTED", "at": 1788949389.4572575, "data": {"result": "REJECTED"}}
+{"txn_id": "4a5ef1615b9b4919", "claim_id": "708e06685903", "kind": "meta", "description": "gap.cost: 0.200 → 1.200 ()", "state": "OPENED", "at": 1788949389.4891086, "data": {}}
+{"txn_id": "4a5ef1615b9b4919", "state": "MEASURED", "at": 1788949389.4898355, "data": {"episodes": 40, "bar": 0.5, "parameter_reads": 80, "decisions_differed": 0, "baseline_value": 0.4195, "candidate_value": 0.9195}}
+{"txn_id": "4a5ef1615b9b4919", "state": "DECIDED", "at": 1788949389.4906373, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "4a5ef1615b9b4919", "state": "COMMITTED", "at": 1788949389.4913046, "data": {"result": "ACCEPTED"}}
+{"txn_id": "bcd85d1539774f11", "claim_id": "c0fbd84648fb", "kind": "meta", "description": "gap.cost: 0.200 → 1.200 ()", "state": "OPENED", "at": 1788949389.8217967, "data": {}}
+{"txn_id": "bcd85d1539774f11", "state": "MEASURED", "at": 1788949389.825256, "data": {"episodes": 40, "bar": 0.5, "parameter_reads": 80, "decisions_differed": 0, "baseline_value": 0.4195, "candidate_value": 0.9195}}
+{"txn_id": "bcd85d1539774f11", "state": "DECIDED", "at": 1788949389.8258739, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "bcd85d1539774f11", "state": "COMMITTED", "at": 1788949389.826592, "data": {"result": "ACCEPTED"}}
+{"txn_id": "91901f9d711940e2", "claim_id": "a2d5da36688e", "kind": "meta", "description": "gap.cost: 0.200 → 1.200 (принимает больше заявок)", "state": "OPENED", "at": 1788949389.8590932, "data": {}}
+{"txn_id": "91901f9d711940e2", "state": "MEASURED", "at": 1788949389.859839, "data": {"episodes": 40, "bar": 0.5, "parameter_reads": 80, "decisions_differed": 0, "baseline_value": 0.9, "candidate_value": 0.2}}
+{"txn_id": "91901f9d711940e2", "state": "DECIDED", "at": 1788949389.860586, "data": {"accepted": false, "reason": "failed: dev_improvement, significance, no_regression"}}
+{"txn_id": "91901f9d711940e2", "state": "COMMITTED", "at": 1788949389.8612232, "data": {"result": "REJECTED"}}
+{"txn_id": "08eb452e42d74e48", "claim_id": "f7192be61782", "kind": "meta", "description": "gap.cost: 0.200 → 1.200 ()", "state": "OPENED", "at": 1788949389.9231722, "data": {}}
+{"txn_id": "08eb452e42d74e48", "state": "MEASURED", "at": 1788949389.9239573, "data": {"episodes": 40, "bar": 0.9, "parameter_reads": 80, "decisions_differed": 0, "baseline_value": 0.4195, "candidate_value": 0.9195}}
+{"txn_id": "08eb452e42d74e48", "state": "DECIDED", "at": 1788949389.9246843, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "08eb452e42d74e48", "state": "COMMITTED", "at": 1788949389.925338, "data": {"result": "ACCEPTED"}}
+{"txn_id": "f7d91be32aa445cc", "claim_id": "ece3d0226140", "kind": "meta", "description": "gap.cost: -0.400 → 0.500 (шире поиск)", "state": "OPENED", "at": 1788949390.144448, "data": {}}
+{"txn_id": "f7d91be32aa445cc", "state": "MEASURED", "at": 1788949390.1455379, "data": {"episodes": 40, "bar": 0.5, "parameter_reads": 80, "decisions_differed": 0, "baseline_value": 0.1195, "candidate_value": 0.5695}}
+{"txn_id": "f7d91be32aa445cc", "state": "DECIDED", "at": 1788949390.1462684, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "f7d91be32aa445cc", "state": "COMMITTED", "at": 1788949390.1468637, "data": {"result": "ACCEPTED"}}
+{"txn_id": "7e69e77016ba4375", "claim_id": "1003773e93c4", "kind": "meta", "description": "gap.cost: -0.400 → 0.500 ()", "state": "OPENED", "at": 1788949390.163504, "data": {}}
+{"txn_id": "7e69e77016ba4375", "state": "MEASURED", "at": 1788949390.16416, "data": {"episodes": 40, "bar": 0.5, "parameter_reads": 80, "decisions_differed": 0, "baseline_value": 0.6, "candidate_value": 0.6}}
+{"txn_id": "7e69e77016ba4375", "state": "DECIDED", "at": 1788949390.1648939, "data": {"accepted": false, "reason": "failed: dev_improvement, significance"}}
+{"txn_id": "7e69e77016ba4375", "state": "COMMITTED", "at": 1788949390.165559, "data": {"result": "REJECTED"}}
+{"txn_id": "631785df8ed84f72", "claim_id": "d08abaebe0f3", "kind": "meta", "description": "gap.cost: -0.400 → 0.500 (шире поиск)", "state": "OPENED", "at": 1788949390.182305, "data": {}}
+{"txn_id": "631785df8ed84f72", "state": "MEASURED", "at": 1788949390.1830873, "data": {"episodes": 40, "bar": 0.5, "parameter_reads": 80, "decisions_differed": 0, "baseline_value": 0.1195, "candidate_value": 0.5695}}
+{"txn_id": "631785df8ed84f72", "state": "DECIDED", "at": 1788949390.183736, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "631785df8ed84f72", "state": "COMMITTED", "at": 1788949390.18431, "data": {"result": "ACCEPTED"}}
+{"txn_id": "eb209b7ce1534949", "claim_id": "61f61f4ab357", "kind": "meta", "description": "gap.cost: -0.400 → 0.500 (шире поиск)", "state": "OPENED", "at": 1788949390.2173798, "data": {}}
+{"txn_id": "eb209b7ce1534949", "state": "MEASURED", "at": 1788949390.2181551, "data": {"episodes": 40, "bar": 0.5, "parameter_reads": 80, "decisions_differed": 0, "baseline_value": 0.1195, "candidate_value": 0.5695}}
+{"txn_id": "eb209b7ce1534949", "state": "DECIDED", "at": 1788949390.2187827, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "eb209b7ce1534949", "state": "COMMITTED", "at": 1788949390.2193413, "data": {"result": "ACCEPTED"}}
+{"txn_id": "292869118b154c44", "claim_id": "f2443f39de86", "kind": "meta", "description": "gap.cost: 0.200 → 1.200 ()", "state": "OPENED", "at": 1788949390.267228, "data": {}}
+{"txn_id": "292869118b154c44", "state": "MEASURED", "at": 1788949390.2679179, "data": {"episodes": 40, "bar": 0.5, "parameter_reads": 80, "decisions_differed": 40, "baseline_value": 0.9, "candidate_value": 0.9}}
+{"txn_id": "292869118b154c44", "state": "DECIDED", "at": 1788949390.2685292, "data": {"accepted": false, "reason": "failed: dev_improvement, significance"}}
+{"txn_id": "292869118b154c44", "state": "COMMITTED", "at": 1788949390.2690914, "data": {"result": "REJECTED"}}
+{"txn_id": "d927f1db47ef4403", "claim_id": "046fd796e5ea", "kind": "meta", "description": "gap.cost: 0.200 → 1.200 ()", "state": "OPENED", "at": 1788949390.2855327, "data": {}}
+{"txn_id": "d927f1db47ef4403", "state": "MEASURED", "at": 1788949390.286158, "data": {"episodes": 40, "bar": 0.5, "parameter_reads": 80, "decisions_differed": 0, "baseline_value": 0.4195, "candidate_value": 0.9195}}
+{"txn_id": "d927f1db47ef4403", "state": "DECIDED", "at": 1788949390.2868059, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "d927f1db47ef4403", "state": "COMMITTED", "at": 1788949390.2873547, "data": {"result": "ACCEPTED"}}
+{"txn_id": "2f403704b5ce42ee", "claim_id": "1653364e20f4", "kind": "meta", "description": "gap.cost: -0.400 → 0.500 (шире поиск)", "state": "OPENED", "at": 1788949390.3039262, "data": {}}
+{"txn_id": "2f403704b5ce42ee", "state": "MEASURED", "at": 1788949390.3047795, "data": {"episodes": 40, "bar": 0.5, "parameter_reads": 80, "decisions_differed": 0, "baseline_value": 0.1195, "candidate_value": 0.5695}}
+{"txn_id": "2f403704b5ce42ee", "state": "DECIDED", "at": 1788949390.3055246, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "2f403704b5ce42ee", "state": "COMMITTED", "at": 1788949390.3062346, "data": {"result": "ACCEPTED"}}
+{"txn_id": "215ee8f735674a01", "claim_id": "cf9537ff9140", "kind": "meta", "description": "gap.cost: -0.400 → 0.500 (шире поиск)", "state": "OPENED", "at": 1788949390.3231235, "data": {}}
+{"txn_id": "215ee8f735674a01", "state": "MEASURED", "at": 1788949390.3237174, "data": {"episodes": 40, "bar": 0.5, "parameter_reads": 80, "decisions_differed": 0, "baseline_value": 0.1195, "candidate_value": 0.5695}}
+{"txn_id": "215ee8f735674a01", "state": "DECIDED", "at": 1788949390.3243206, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "215ee8f735674a01", "state": "COMMITTED", "at": 1788949390.3249018, "data": {"result": "ACCEPTED"}}
+{"txn_id": "9944380c23eb4dd6", "claim_id": "071962ba86ec", "kind": "meta", "description": "gap.cost: -0.400 → 0.500 (шире поиск)", "state": "OPENED", "at": 1788949390.3575797, "data": {}}
+{"txn_id": "9944380c23eb4dd6", "state": "MEASURED", "at": 1788949390.3583145, "data": {"episodes": 40, "bar": 0.5, "parameter_reads": 80, "decisions_differed": 0, "baseline_value": 0.1195, "candidate_value": 0.5695}}
+{"txn_id": "9944380c23eb4dd6", "state": "DECIDED", "at": 1788949390.3589313, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "9944380c23eb4dd6", "state": "COMMITTED", "at": 1788949390.3595164, "data": {"result": "ACCEPTED"}}
+{"txn_id": "9b6abd1eaef84ff2", "claim_id": "4903db709245", "kind": "research", "description": "измерить arithmetic/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788949401.8874266, "data": {}}
+{"txn_id": "9b6abd1eaef84ff2", "state": "MEASURED", "at": 1788949401.888659, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "9b6abd1eaef84ff2", "state": "COMMITTED", "at": 1788949401.8900557, "data": {"result": "урок: 12/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "a34747d9432545ff", "claim_id": "63f50189bdd0", "kind": "research", "description": "измерить arithmetic/hard: ни разу не пробовалась", "state": "OPENED", "at": 1788949401.8994515, "data": {}}
+{"txn_id": "a34747d9432545ff", "state": "MEASURED", "at": 1788949401.9001706, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "a34747d9432545ff", "state": "COMMITTED", "at": 1788949401.901753, "data": {"result": "урок: 12/12, уточнено 0.722", "resolution": 0.7361}}
+{"txn_id": "9e694bab540d4a0b", "claim_id": "7d20b1793b6e", "kind": "research", "description": "измерить sequence/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788949401.9039855, "data": {}}
+{"txn_id": "9e694bab540d4a0b", "state": "MEASURED", "at": 1788949401.9045959, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "9e694bab540d4a0b", "state": "COMMITTED", "at": 1788949401.9056928, "data": {"result": "урок: 12/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "5c14efcd96434ea2", "claim_id": "7741c72dd88c", "kind": "research", "description": "измерить sequence/medium: ни разу не пробовалась", "state": "OPENED", "at": 1788949401.9078295, "data": {}}
+{"txn_id": "5c14efcd96434ea2", "state": "MEASURED", "at": 1788949401.908681, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "5c14efcd96434ea2", "state": "COMMITTED", "at": 1788949401.9100406, "data": {"result": "урок: 12/12, уточнено 0.722", "resolution": 0.7497}}
+{"txn_id": "513aa3b0e66540ef", "claim_id": "f71332d9022f", "kind": "research", "description": "измерить sequence/hard: ни разу не пробовалась", "state": "OPENED", "at": 1788949401.9126477, "data": {}}
+{"txn_id": "513aa3b0e66540ef", "state": "MEASURED", "at": 1788949401.9132268, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "513aa3b0e66540ef", "state": "COMMITTED", "at": 1788949401.914505, "data": {"result": "урок: 12/12, уточнено 0.722", "resolution": 0.7575}}
+{"txn_id": "d5c878ad383f4a33", "claim_id": "2ce499e4e3ea", "kind": "research", "description": "измерить logic/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788949401.9173927, "data": {}}
+{"txn_id": "d5c878ad383f4a33", "state": "MEASURED", "at": 1788949401.917996, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "d5c878ad383f4a33", "state": "COMMITTED", "at": 1788949401.9193332, "data": {"result": "урок: 12/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "3144fea3b79444a6", "claim_id": "30fc00b61344", "kind": "research", "description": "измерить logic/medium: ни разу не пробовалась", "state": "OPENED", "at": 1788949401.9228015, "data": {}}
+{"txn_id": "3144fea3b79444a6", "state": "MEASURED", "at": 1788949401.9234107, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "3144fea3b79444a6", "state": "COMMITTED", "at": 1788949401.9252143, "data": {"result": "урок: 12/12, уточнено 0.722", "resolution": 0.7497}}
+{"txn_id": "fedcf502ef704638", "claim_id": "78c673246bbe", "kind": "research", "description": "измерить logic/hard: ни разу не пробовалась", "state": "OPENED", "at": 1788949401.9296498, "data": {}}
+{"txn_id": "fedcf502ef704638", "state": "MEASURED", "at": 1788949401.9302952, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "fedcf502ef704638", "state": "COMMITTED", "at": 1788949401.9319873, "data": {"result": "урок: 12/12, уточнено 0.722", "resolution": 0.7575}}
+{"txn_id": "781b9cf506c9445a", "claim_id": "893379dd8194", "kind": "research", "description": "измерить arithmetic/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788949401.958285, "data": {}}
+{"txn_id": "781b9cf506c9445a", "state": "MEASURED", "at": 1788949401.9591243, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "781b9cf506c9445a", "state": "COMMITTED", "at": 1788949401.9601302, "data": {"result": "урок: 12/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "46d4c5b710334995", "claim_id": "2e7988efe234", "kind": "research", "description": "измерить arithmetic/hard: ни разу не пробовалась", "state": "OPENED", "at": 1788949401.9694295, "data": {}}
+{"txn_id": "46d4c5b710334995", "state": "MEASURED", "at": 1788949401.970044, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "46d4c5b710334995", "state": "COMMITTED", "at": 1788949401.9713726, "data": {"result": "урок: 12/12, уточнено 0.722", "resolution": 0.7361}}
+{"txn_id": "f2cdb665dd7d40c2", "claim_id": "0f3947fe5a66", "kind": "research", "description": "измерить sequence/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788949401.9735115, "data": {}}
+{"txn_id": "f2cdb665dd7d40c2", "state": "MEASURED", "at": 1788949401.974105, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "f2cdb665dd7d40c2", "state": "COMMITTED", "at": 1788949401.9752095, "data": {"result": "урок: 12/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "0f17af82662e4c54", "claim_id": "61a71720821a", "kind": "research", "description": "измерить arithmetic/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788949402.0171597, "data": {}}
+{"txn_id": "0f17af82662e4c54", "state": "MEASURED", "at": 1788949402.0179026, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "0f17af82662e4c54", "state": "COMMITTED", "at": 1788949402.018971, "data": {"result": "урок: 12/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "2ece0b46a21046c7", "claim_id": "bc0b6f71e4f6", "kind": "research", "description": "измерить arithmetic/medium: ни разу не пробовалась", "state": "OPENED", "at": 1788949402.0197566, "data": {}}
+{"txn_id": "2ece0b46a21046c7", "state": "MEASURED", "at": 1788949402.0203187, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "2ece0b46a21046c7", "state": "COMMITTED", "at": 1788949402.0214245, "data": {"result": "урок: 12/12, уточнено 0.722", "resolution": 0.7497}}
+{"txn_id": "6dc399ac7bee4462", "claim_id": "162cafe8ec4b", "kind": "research", "description": "измерить arithmetic/hard: ни разу не пробовалась", "state": "OPENED", "at": 1788949402.022267, "data": {}}
+{"txn_id": "6dc399ac7bee4462", "state": "MEASURED", "at": 1788949402.0228207, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "6dc399ac7bee4462", "state": "COMMITTED", "at": 1788949402.0240715, "data": {"result": "урок: 12/12, уточнено 0.722", "resolution": 0.7575}}
+{"txn_id": "566d4500e38f4d69", "claim_id": "67869b1af44f", "kind": "research", "description": "измерить sequence/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788949402.0249734, "data": {}}
+{"txn_id": "566d4500e38f4d69", "state": "MEASURED", "at": 1788949402.0255153, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "566d4500e38f4d69", "state": "COMMITTED", "at": 1788949402.0265896, "data": {"result": "урок: 12/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "fa8106ea3a0f4bb9", "claim_id": "e9d70854a98e", "kind": "research", "description": "измерить arithmetic/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788949402.0442057, "data": {}}
+{"txn_id": "fa8106ea3a0f4bb9", "state": "MEASURED", "at": 1788949402.0448234, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "fa8106ea3a0f4bb9", "state": "COMMITTED", "at": 1788949402.0457914, "data": {"result": "урок: 12/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "8b90252e2eb64ff1", "claim_id": "3e1a7a3afc03", "kind": "research", "description": "измерить arithmetic/medium: ни разу не пробовалась", "state": "OPENED", "at": 1788949402.0465376, "data": {}}
+{"txn_id": "8b90252e2eb64ff1", "state": "MEASURED", "at": 1788949402.04712, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "8b90252e2eb64ff1", "state": "COMMITTED", "at": 1788949402.04832, "data": {"result": "урок: 12/12, уточнено 0.722", "resolution": 0.7497}}
+{"txn_id": "cd096ccff13e47b0", "claim_id": "e8c342900e32", "kind": "research", "description": "измерить arithmetic/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788949402.1013258, "data": {}}
+{"txn_id": "cd096ccff13e47b0", "state": "MEASURED", "at": 1788949402.1020288, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "cd096ccff13e47b0", "state": "COMMITTED", "at": 1788949402.1029596, "data": {"result": "урок: 12/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "e8987b6cd9164c42", "claim_id": "364129fc0260", "kind": "research", "description": "измерить arithmetic/medium: ни разу не пробовалась", "state": "OPENED", "at": 1788949402.1036658, "data": {}}
+{"txn_id": "e8987b6cd9164c42", "state": "MEASURED", "at": 1788949402.104229, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "e8987b6cd9164c42", "state": "COMMITTED", "at": 1788949402.1054823, "data": {"result": "урок: 12/12, уточнено 0.722", "resolution": 0.7497}}
+{"txn_id": "1400d30155544fc3", "claim_id": "c0bf735a97f3", "kind": "research", "description": "измерить arithmetic/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788949402.141893, "data": {}}
+{"txn_id": "1400d30155544fc3", "state": "MEASURED", "at": 1788949402.1425776, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "1400d30155544fc3", "state": "COMMITTED", "at": 1788949402.1435916, "data": {"result": "урок: 0/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "e9479928c54d4509", "claim_id": "7d33b8d5fd11", "kind": "research", "description": "измерить arithmetic/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788949402.1617775, "data": {}}
+{"txn_id": "e9479928c54d4509", "state": "MEASURED", "at": 1788949402.1625497, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "e9479928c54d4509", "state": "COMMITTED", "at": 1788949402.1635203, "data": {"result": "урок: 12/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "040425855aa647c1", "claim_id": "5e21fe3d3f81", "kind": "research", "description": "измерить arithmetic/medium: ни разу не пробовалась", "state": "OPENED", "at": 1788949402.164284, "data": {}}
+{"txn_id": "040425855aa647c1", "state": "MEASURED", "at": 1788949402.1648824, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "040425855aa647c1", "state": "COMMITTED", "at": 1788949402.1660168, "data": {"result": "урок: 12/12, уточнено 0.722", "resolution": 0.7497}}
+{"txn_id": "0119014ecd4744f4", "claim_id": "b45231c5cb26", "kind": "research", "description": "измерить arithmetic/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788949402.4771218, "data": {}}
+{"txn_id": "0119014ecd4744f4", "state": "MEASURED", "at": 1788949402.4805827, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "0119014ecd4744f4", "state": "COMMITTED", "at": 1788949402.4816985, "data": {"result": "урок: 12/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "78127dcb6dbc4e20", "claim_id": "bf72bcce0dab", "kind": "research", "description": "измерить arithmetic/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788949402.5019975, "data": {}}
+{"txn_id": "78127dcb6dbc4e20", "state": "MEASURED", "at": 1788949402.5026846, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "78127dcb6dbc4e20", "state": "COMMITTED", "at": 1788949402.5036604, "data": {"result": "урок: 11/12, уточнено 0.661", "resolution": 0.661}}
+{"txn_id": "facf6806e9244923", "claim_id": "fe2b30d36e88", "kind": "research", "description": "измерить arithmetic/medium: ни разу не пробовалась", "state": "OPENED", "at": 1788949402.5044892, "data": {}}
+{"txn_id": "facf6806e9244923", "state": "MEASURED", "at": 1788949402.5050652, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "facf6806e9244923", "state": "COMMITTED", "at": 1788949402.5061035, "data": {"result": "урок: 9/12, уточнено 0.505", "resolution": 0.5416}}
+{"txn_id": "5e0f38f9b7c54477", "claim_id": "a02b91157a8f", "kind": "research", "description": "измерить arithmetic/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788949402.5255933, "data": {}}
+{"txn_id": "5e0f38f9b7c54477", "state": "MEASURED", "at": 1788949402.526329, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "5e0f38f9b7c54477", "state": "COMMITTED", "at": 1788949402.5272439, "data": {"result": "урок: 12/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "799a0ba847bd49ba", "claim_id": "be7c0f153358", "kind": "research", "description": "измерить arithmetic/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788949402.54695, "data": {}}
+{"txn_id": "799a0ba847bd49ba", "state": "MEASURED", "at": 1788949402.5476751, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "799a0ba847bd49ba", "state": "COMMITTED", "at": 1788949402.5487607, "data": {"result": "урок: 12/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "402ccb4e0f4e4252", "claim_id": "7e65c9e62583", "kind": "research", "description": "измерить arithmetic/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788949402.5680606, "data": {}}
+{"txn_id": "402ccb4e0f4e4252", "state": "MEASURED", "at": 1788949402.5687044, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "402ccb4e0f4e4252", "state": "COMMITTED", "at": 1788949402.5699515, "data": {"result": "урок: 12/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "f9af770155f3446f", "claim_id": "a8db8a79eb2f", "kind": "research", "description": "измерить arithmetic/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788949402.588178, "data": {}}
+{"txn_id": "f9af770155f3446f", "state": "MEASURED", "at": 1788949402.588831, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "f9af770155f3446f", "state": "COMMITTED", "at": 1788949402.5898232, "data": {"result": "урок: 12/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "da2849609f264736", "claim_id": "2cd83cb75abb", "kind": "research", "description": "измерить arithmetic/medium: ни разу не пробовалась", "state": "OPENED", "at": 1788949402.590748, "data": {}}
+{"txn_id": "da2849609f264736", "state": "MEASURED", "at": 1788949402.591581, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "da2849609f264736", "state": "COMMITTED", "at": 1788949402.5926912, "data": {"result": "урок: 12/12, уточнено 0.722", "resolution": 0.7497}}
+{"txn_id": "c931f420ced44aad", "claim_id": "962d225fe7f5", "kind": "research", "description": "проверить: На срезе arithmetic/hard программа OBSERVE → GENERATE → VERIFY → CRITI", "state": "OPENED", "at": 1788949402.6249843, "data": {}}
+{"txn_id": "c931f420ced44aad", "state": "MEASURED", "at": 1788949402.625754, "data": {"activity": "experiment", "estimated_calls": 120}}
+{"txn_id": "7773a1af0d414232", "claim_id": "4200b6c02e5c", "kind": "experiment", "description": "На срезе arithmetic/hard программа OBSERVE → GENERATE → VERIFY → CRITIQUE → REPAIR → ANSWER даст более высокую точность,", "state": "OPENED", "at": 1788949402.627175, "data": {}}
+{"txn_id": "7773a1af0d414232", "state": "MEASURED", "at": 1788949402.6277883, "data": {"plan_id": "4200b6c02e5c", "trials": 30, "baseline": 0.0, "candidate": 1.0, "calls_used": 270, "elapsed": 0.0}}
+{"txn_id": "7773a1af0d414232", "state": "DECIDED", "at": 1788949402.6284626, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "7773a1af0d414232", "state": "COMMITTED", "at": 1788949402.6290684, "data": {"status": "SUPPORTED"}}
+{"txn_id": "029de9cb96f64f1d", "claim_id": "00a3e7e3f336", "kind": "synthesis", "description": "generate_verify_critique_repair__arithmetic_hard: OBSERVE → GENERATE → VERIFY → CRITIQUE → REPAIR → ANSWER для math, har", "state": "OPENED", "at": 1788949402.6304452, "data": {}}
+{"txn_id": "029de9cb96f64f1d", "state": "MEASURED", "at": 1788949402.631082, "data": {"trials": 30, "first_margin": 1.0}}
+{"txn_id": "029de9cb96f64f1d", "state": "DECIDED", "at": 1788949402.631684, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "029de9cb96f64f1d", "state": "COMMITTED", "at": 1788949402.6323512, "data": {"result": "CONFIRMED"}}
+{"txn_id": "c931f420ced44aad", "state": "COMMITTED", "at": 1788949402.6334903, "data": {"result": "эксперимент: SUPPORTED — accepted; принята способность generate_verify_critique_repair__arithmetic_hard (геном не сохраняется: путь не задан)", "resolution": 0.0}}
+{"txn_id": "bb092249a0904634", "claim_id": "caae7ad8756a", "kind": "research", "description": "проверить: На срезе arithmetic/hard программа OBSERVE → GENERATE → VERIFY → CRITI", "state": "OPENED", "at": 1788949402.6353328, "data": {}}
+{"txn_id": "bb092249a0904634", "state": "MEASURED", "at": 1788949402.6359687, "data": {"activity": "experiment", "estimated_calls": 120}}
+{"txn_id": "a684021ef6ab432f", "claim_id": "98113318db6f", "kind": "experiment", "description": "На срезе arithmetic/hard программа OBSERVE → GENERATE → VERIFY → CRITIQUE → REPAIR → ANSWER даст более высокую точность,", "state": "OPENED", "at": 1788949402.6372516, "data": {}}
+{"txn_id": "a684021ef6ab432f", "state": "MEASURED", "at": 1788949402.6378222, "data": {"plan_id": "98113318db6f", "trials": 30, "baseline": 0.0, "candidate": 1.0, "calls_used": 270, "elapsed": 0.0}}
+{"txn_id": "a684021ef6ab432f", "state": "DECIDED", "at": 1788949402.638422, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "a684021ef6ab432f", "state": "COMMITTED", "at": 1788949402.6390362, "data": {"status": "SUPPORTED"}}
+{"txn_id": "bb092249a0904634", "state": "COMMITTED", "at": 1788949402.6399734, "data": {"result": "эксперимент: SUPPORTED — accepted", "resolution": 0.0}}
+{"txn_id": "9c851323c4ce490f", "claim_id": "9a6193de82a9", "kind": "research", "description": "проверить: На срезе arithmetic/hard программа OBSERVE → GENERATE → VERIFY → CRITI", "state": "OPENED", "at": 1788949402.6421428, "data": {}}
+{"txn_id": "9c851323c4ce490f", "state": "MEASURED", "at": 1788949402.642855, "data": {"activity": "experiment", "estimated_calls": 120}}
+{"txn_id": "d020285fa0d949ed", "claim_id": "0f4382121000", "kind": "experiment", "description": "На срезе arithmetic/hard программа OBSERVE → GENERATE → VERIFY → CRITIQUE → REPAIR → ANSWER даст более высокую точность,", "state": "OPENED", "at": 1788949402.6442626, "data": {}}
+{"txn_id": "d020285fa0d949ed", "state": "MEASURED", "at": 1788949402.6448586, "data": {"plan_id": "0f4382121000", "trials": 30, "baseline": 0.0, "candidate": 1.0, "calls_used": 270, "elapsed": 0.0}}
+{"txn_id": "d020285fa0d949ed", "state": "DECIDED", "at": 1788949402.6454499, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "d020285fa0d949ed", "state": "COMMITTED", "at": 1788949402.6460605, "data": {"status": "SUPPORTED"}}
+{"txn_id": "9c851323c4ce490f", "state": "COMMITTED", "at": 1788949402.647256, "data": {"result": "эксперимент: SUPPORTED — accepted", "resolution": 0.0}}
+{"txn_id": "88f2cf04c04849c2", "claim_id": "10e1cee8b268", "kind": "research", "description": "измерить arithmetic/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788949402.685964, "data": {}}
+{"txn_id": "88f2cf04c04849c2", "state": "MEASURED", "at": 1788949402.6867578, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "88f2cf04c04849c2", "state": "COMMITTED", "at": 1788949402.6878943, "data": {"result": "урок: 0/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "1834af7d675a4e0f", "claim_id": "d74d3d78bd15", "kind": "research", "description": "измерить arithmetic/medium: ни разу не пробовалась", "state": "OPENED", "at": 1788949402.6892602, "data": {}}
+{"txn_id": "1834af7d675a4e0f", "state": "MEASURED", "at": 1788949402.6898546, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "1834af7d675a4e0f", "state": "COMMITTED", "at": 1788949402.6910315, "data": {"result": "урок: 0/12, уточнено 0.722", "resolution": 0.7497}}
+{"txn_id": "1644c179c3224dca", "claim_id": "d8d938d4a869", "kind": "research", "description": "проверить: На срезе arithmetic/hard программа OBSERVE → GENERATE → VERIFY → CRITI", "state": "OPENED", "at": 1788949402.7118642, "data": {}}
+{"txn_id": "1644c179c3224dca", "state": "MEASURED", "at": 1788949402.7126079, "data": {"activity": "experiment", "estimated_calls": 120}}
+{"txn_id": "6132444780c2466a", "claim_id": "239dc89d1b60", "kind": "experiment", "description": "На срезе arithmetic/hard программа OBSERVE → GENERATE → VERIFY → CRITIQUE → REPAIR → ANSWER даст более высокую точность,", "state": "OPENED", "at": 1788949402.7139173, "data": {}}
+{"txn_id": "6132444780c2466a", "state": "MEASURED", "at": 1788949402.7146485, "data": {"plan_id": "239dc89d1b60", "trials": 30, "baseline": 0.0, "candidate": 1.0, "calls_used": 270, "elapsed": 0.0}}
+{"txn_id": "6132444780c2466a", "state": "DECIDED", "at": 1788949402.7152574, "data": {"accepted": false, "reason": "failed: hidden_confirms, counterexamples"}}
+{"txn_id": "6132444780c2466a", "state": "COMMITTED", "at": 1788949402.715947, "data": {"status": "REFUTED"}}
+{"txn_id": "1644c179c3224dca", "state": "COMMITTED", "at": 1788949402.7169948, "data": {"result": "эксперимент: не удалось судить — нет данных для гейтов hidden_confirms, counterexamples", "resolution": 0.0}}
+{"txn_id": "2cde19431fc44ef5", "claim_id": "99da2c241106", "kind": "research", "description": "проверить: На срезе arithmetic/hard программа OBSERVE → GENERATE → VERIFY → CRITI", "state": "OPENED", "at": 1788949402.737883, "data": {}}
+{"txn_id": "2cde19431fc44ef5", "state": "MEASURED", "at": 1788949402.7385683, "data": {"activity": "experiment", "estimated_calls": 120}}
+{"txn_id": "7c1e6ef4be9c4259", "claim_id": "e9381fc2abe5", "kind": "experiment", "description": "На срезе arithmetic/hard программа OBSERVE → GENERATE → VERIFY → CRITIQUE → REPAIR → ANSWER даст более высокую точность,", "state": "OPENED", "at": 1788949402.7399027, "data": {}}
+{"txn_id": "7c1e6ef4be9c4259", "state": "MEASURED", "at": 1788949402.7404892, "data": {"plan_id": "e9381fc2abe5", "trials": 30, "baseline": 0.0, "candidate": 1.0, "calls_used": 270, "elapsed": 0.0}}
+{"txn_id": "7c1e6ef4be9c4259", "state": "DECIDED", "at": 1788949402.741073, "data": {"accepted": false, "reason": "failed: hidden_confirms, counterexamples"}}
+{"txn_id": "7c1e6ef4be9c4259", "state": "COMMITTED", "at": 1788949402.7416914, "data": {"status": "REFUTED"}}
+{"txn_id": "2cde19431fc44ef5", "state": "COMMITTED", "at": 1788949402.7425854, "data": {"result": "эксперимент: не удалось судить — нет данных для гейтов hidden_confirms, counterexamples", "resolution": 0.0}}
+{"txn_id": "7d05c1d33e584300", "claim_id": "b4d18eea7d5d", "kind": "research", "description": "проверить: На срезе arithmetic/hard программа OBSERVE → GENERATE → VERIFY → CRITI", "state": "OPENED", "at": 1788949402.7448144, "data": {}}
+{"txn_id": "7d05c1d33e584300", "state": "MEASURED", "at": 1788949402.7454271, "data": {"activity": "experiment", "estimated_calls": 120}}
+{"txn_id": "5d249727cb064952", "claim_id": "75a87350666d", "kind": "experiment", "description": "На срезе arithmetic/hard программа OBSERVE → GENERATE → VERIFY → CRITIQUE → REPAIR → ANSWER даст более высокую точность,", "state": "OPENED", "at": 1788949402.7468717, "data": {}}
+{"txn_id": "5d249727cb064952", "state": "MEASURED", "at": 1788949402.7474678, "data": {"plan_id": "75a87350666d", "trials": 30, "baseline": 0.0, "candidate": 1.0, "calls_used": 270, "elapsed": 0.0}}
+{"txn_id": "5d249727cb064952", "state": "DECIDED", "at": 1788949402.7480886, "data": {"accepted": false, "reason": "failed: hidden_confirms, counterexamples"}}
+{"txn_id": "5d249727cb064952", "state": "COMMITTED", "at": 1788949402.748733, "data": {"status": "REFUTED"}}
+{"txn_id": "7d05c1d33e584300", "state": "COMMITTED", "at": 1788949402.7496426, "data": {"result": "эксперимент: не удалось судить — нет данных для гейтов hidden_confirms, counterexamples", "resolution": 0.0}}
+{"txn_id": "75c05f79e0154615", "claim_id": "d038833c8dca", "kind": "research", "description": "измерить arithmetic/easy: ни разу не пробовалась", "state": "OPENED", "at": 1788949402.7882614, "data": {}}
+{"txn_id": "75c05f79e0154615", "state": "MEASURED", "at": 1788949402.789138, "data": {"activity": "measure", "estimated_calls": 12}}
+{"txn_id": "75c05f79e0154615", "state": "COMMITTED", "at": 1788949402.7902505, "data": {"result": "урок: 12/12, уточнено 0.758", "resolution": 0.7575}}
+{"txn_id": "6882be28a1ab420b", "claim_id": "f4bf7ebdc3c2", "kind": "synthesis", "description": "retrieve_generate_verify__arithmetic_hard: OBSERVE → RETRIEVE → GENERATE → VERIFY → ANSWER для math, hard (доказано на a", "state": "OPENED", "at": 1788949405.3066764, "data": {}}
+{"txn_id": "6882be28a1ab420b", "state": "MEASURED", "at": 1788949405.3097742, "data": {"trials": 40, "first_margin": 0.28}}
+{"txn_id": "6882be28a1ab420b", "state": "DECIDED", "at": 1788949405.3105087, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "6882be28a1ab420b", "state": "COMMITTED", "at": 1788949405.3112798, "data": {"result": "CONFIRMED"}}
+{"txn_id": "061612f0f63a499f", "claim_id": "f86cb045383a", "kind": "synthesis", "description": "retrieve_generate_verify__arithmetic_hard: OBSERVE → RETRIEVE → GENERATE → VERIFY → ANSWER для math, hard (доказано на a", "state": "OPENED", "at": 1788949405.3609755, "data": {}}
+{"txn_id": "061612f0f63a499f", "state": "MEASURED", "at": 1788949405.3617332, "data": {"trials": 40, "first_margin": 0.28}}
+{"txn_id": "061612f0f63a499f", "state": "DECIDED", "at": 1788949405.3624735, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "061612f0f63a499f", "state": "COMMITTED", "at": 1788949405.363041, "data": {"result": "CONFIRMED"}}
+{"txn_id": "be0509e80839486e", "claim_id": "ff5c98582ba7", "kind": "synthesis", "description": "retrieve_generate_verify__arithmetic_hard: OBSERVE → RETRIEVE → GENERATE → VERIFY → ANSWER для math, hard (доказано на a", "state": "OPENED", "at": 1788949405.4601917, "data": {}}
+{"txn_id": "be0509e80839486e", "state": "MEASURED", "at": 1788949405.4613366, "data": {"trials": 40, "first_margin": 0.28}}
+{"txn_id": "be0509e80839486e", "state": "DECIDED", "at": 1788949405.4620757, "data": {"accepted": false, "reason": "failed: dev_improvement, significance, hidden_confirms, counterexamples"}}
+{"txn_id": "be0509e80839486e", "state": "COMMITTED", "at": 1788949405.4627514, "data": {"result": "REJECTED"}}
+{"txn_id": "a0200074999c4f2a", "claim_id": "741ec557accd", "kind": "synthesis", "description": "retrieve_generate_verify__arithmetic_hard: OBSERVE → RETRIEVE → GENERATE → VERIFY → ANSWER для math, hard (доказано на a", "state": "OPENED", "at": 1788949405.4824774, "data": {}}
+{"txn_id": "a0200074999c4f2a", "state": "MEASURED", "at": 1788949405.4832523, "data": {"trials": 4, "first_margin": 0.28}}
+{"txn_id": "a0200074999c4f2a", "state": "DECIDED", "at": 1788949405.4838989, "data": {"accepted": false, "reason": "не оценено: парных испытаний 4 против 30, и ничто из измеренного не говорит против"}}
+{"txn_id": "a0200074999c4f2a", "state": "COMMITTED", "at": 1788949405.4845538, "data": {"result": "REJECTED"}}
+{"txn_id": "12f77ccc685e4105", "claim_id": "39b851a9b684", "kind": "synthesis", "description": "retrieve_generate_verify__arithmetic_hard: OBSERVE → RETRIEVE → GENERATE → VERIFY → ANSWER для math, hard (доказано на a", "state": "OPENED", "at": 1788949405.5037549, "data": {}}
+{"txn_id": "12f77ccc685e4105", "state": "MEASURED", "at": 1788949405.5044417, "data": {"trials": 40, "first_margin": 0.28}}
+{"txn_id": "12f77ccc685e4105", "state": "DECIDED", "at": 1788949405.505119, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "12f77ccc685e4105", "state": "COMMITTED", "at": 1788949405.5056887, "data": {"result": "CONFIRMED"}}
+{"txn_id": "4eed28bc304e480b", "claim_id": "db010dd053a8", "kind": "synthesis", "description": "retrieve_generate_verify__arithmetic_hard: OBSERVE → RETRIEVE → GENERATE → VERIFY → ANSWER для math, hard (доказано на a", "state": "OPENED", "at": 1788949405.9313745, "data": {}}
+{"txn_id": "4eed28bc304e480b", "state": "MEASURED", "at": 1788949405.932652, "data": {"trials": 40, "first_margin": 0.28}}
+{"txn_id": "4eed28bc304e480b", "state": "DECIDED", "at": 1788949405.93334, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "4eed28bc304e480b", "state": "COMMITTED", "at": 1788949405.9340775, "data": {"result": "CONFIRMED"}}
+{"txn_id": "05ac5a083fd7455a", "claim_id": "27b65d9b67c7", "kind": "synthesis", "description": "retrieve_generate_verify__arithmetic_hard: OBSERVE → RETRIEVE → GENERATE → VERIFY → ANSWER для math, hard (доказано на a", "state": "OPENED", "at": 1788949405.9591646, "data": {}}
+{"txn_id": "05ac5a083fd7455a", "state": "MEASURED", "at": 1788949405.960074, "data": {"trials": 40, "first_margin": 0.28}}
+{"txn_id": "05ac5a083fd7455a", "state": "DECIDED", "at": 1788949405.960805, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "05ac5a083fd7455a", "state": "COMMITTED", "at": 1788949405.96141, "data": {"result": "CONFIRMED"}}
+{"txn_id": "e97eec22c696454b", "claim_id": "7c181b23cdd1", "kind": "synthesis", "description": "retrieve_generate_verify__arithmetic_hard: OBSERVE → RETRIEVE → GENERATE → VERIFY → ANSWER для math, hard (доказано на a", "state": "OPENED", "at": 1788949405.9822803, "data": {}}
+{"txn_id": "e97eec22c696454b", "state": "MEASURED", "at": 1788949405.9829857, "data": {"trials": 40, "first_margin": 0.28}}
+{"txn_id": "e97eec22c696454b", "state": "DECIDED", "at": 1788949405.9837234, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "e97eec22c696454b", "state": "COMMITTED", "at": 1788949405.9842901, "data": {"result": "CONFIRMED"}}
+{"txn_id": "384e05ad0cc34ae3", "claim_id": "8524f0351d5d", "kind": "synthesis", "description": "retrieve_generate_verify__arithmetic_hard: OBSERVE → RETRIEVE → GENERATE → VERIFY → ANSWER для math, hard (доказано на a", "state": "OPENED", "at": 1788949406.0041575, "data": {}}
+{"txn_id": "384e05ad0cc34ae3", "state": "MEASURED", "at": 1788949406.0047748, "data": {"trials": 40, "first_margin": 0.28}}
+{"txn_id": "384e05ad0cc34ae3", "state": "DECIDED", "at": 1788949406.0054665, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "384e05ad0cc34ae3", "state": "COMMITTED", "at": 1788949406.0060384, "data": {"result": "CONFIRMED"}}
+{"txn_id": "9cd9a05e736546ea", "claim_id": "e81cc5d2129a", "kind": "synthesis", "description": "retrieve_generate_verify__arithmetic_hard: OBSERVE → RETRIEVE → GENERATE → VERIFY → ANSWER для math, hard (доказано на a", "state": "OPENED", "at": 1788949406.0253253, "data": {}}
+{"txn_id": "9cd9a05e736546ea", "state": "MEASURED", "at": 1788949406.0261083, "data": {"trials": 40, "first_margin": 0.28}}
+{"txn_id": "9cd9a05e736546ea", "state": "DECIDED", "at": 1788949406.0267172, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "9cd9a05e736546ea", "state": "COMMITTED", "at": 1788949406.0272868, "data": {"result": "CONFIRMED"}}
+{"txn_id": "179f23f6912c42ca", "claim_id": "c8d17e1c6ce3", "kind": "synthesis", "description": "retrieve_generate_verify__arithmetic_hard: OBSERVE → RETRIEVE → GENERATE → VERIFY → ANSWER для math, hard (доказано на a", "state": "OPENED", "at": 1788949406.047105, "data": {}}
+{"txn_id": "179f23f6912c42ca", "state": "MEASURED", "at": 1788949406.0477338, "data": {"trials": 40, "first_margin": 0.28}}
+{"txn_id": "179f23f6912c42ca", "state": "DECIDED", "at": 1788949406.048459, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "179f23f6912c42ca", "state": "COMMITTED", "at": 1788949406.0491292, "data": {"result": "CONFIRMED"}}
+{"txn_id": "8514655072884eba", "claim_id": "b6b9e1e5685e", "kind": "synthesis", "description": "retrieve_generate_verify__arithmetic_hard: OBSERVE → RETRIEVE → GENERATE → VERIFY → ANSWER для math, hard (доказано на a", "state": "OPENED", "at": 1788949406.068445, "data": {}}
+{"txn_id": "8514655072884eba", "state": "MEASURED", "at": 1788949406.069107, "data": {"trials": 40, "first_margin": 0.28}}
+{"txn_id": "8514655072884eba", "state": "DECIDED", "at": 1788949406.0697732, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "8514655072884eba", "state": "COMMITTED", "at": 1788949406.0703752, "data": {"result": "CONFIRMED"}}
+{"txn_id": "44e57f13043a4fa3", "claim_id": "b6b9e1e5685e", "kind": "retire", "description": "retrieve_generate_verify__arithmetic_hard: перестала работать", "state": "OPENED", "at": 1788949406.0710034, "data": {}}
+{"txn_id": "44e57f13043a4fa3", "state": "DECIDED", "at": 1788949406.071571, "data": {"reason": "перестала работать"}}
+{"txn_id": "44e57f13043a4fa3", "state": "COMMITTED", "at": 1788949406.072189, "data": {"result": "RETIRED"}}
+{"txn_id": "60f13e4ca19d4c6c", "claim_id": "8c626d5cc051", "kind": "synthesis", "description": "retrieve_generate_verify__arithmetic_hard: OBSERVE → RETRIEVE → GENERATE → VERIFY → ANSWER для math, hard (доказано на a", "state": "OPENED", "at": 1788949406.1119337, "data": {}}
+{"txn_id": "60f13e4ca19d4c6c", "state": "MEASURED", "at": 1788949406.1126034, "data": {"trials": 40, "first_margin": 0.28}}
+{"txn_id": "60f13e4ca19d4c6c", "state": "DECIDED", "at": 1788949406.113219, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "60f13e4ca19d4c6c", "state": "COMMITTED", "at": 1788949406.1138124, "data": {"result": "CONFIRMED"}}
+{"txn_id": "f665068101254502", "claim_id": "d5b705f62f37", "kind": "synthesis", "description": "retrieve_generate_verify__arithmetic_hard: OBSERVE → RETRIEVE → GENERATE → VERIFY → ANSWER для math, hard (доказано на a", "state": "OPENED", "at": 1788949406.1336806, "data": {}}
+{"txn_id": "f665068101254502", "state": "MEASURED", "at": 1788949406.134357, "data": {"trials": 40, "first_margin": 0.28}}
+{"txn_id": "f665068101254502", "state": "DECIDED", "at": 1788949406.1350856, "data": {"accepted": false, "reason": "failed: dev_improvement, significance, hidden_confirms, counterexamples"}}
+{"txn_id": "f665068101254502", "state": "COMMITTED", "at": 1788949406.1357846, "data": {"result": "REJECTED"}}
+{"txn_id": "bec1c972e1834afa", "claim_id": "7cbfc36b0f61", "kind": "synthesis", "description": "retrieve_generate_verify__arithmetic_hard: OBSERVE → RETRIEVE → GENERATE → VERIFY → ANSWER для math, hard (доказано на a", "state": "OPENED", "at": 1788949406.1557236, "data": {}}
+{"txn_id": "bec1c972e1834afa", "state": "MEASURED", "at": 1788949406.1565416, "data": {"trials": 40, "first_margin": 0.28}}
+{"txn_id": "bec1c972e1834afa", "state": "DECIDED", "at": 1788949406.1572044, "data": {"accepted": true, "reason": "accepted"}}
+{"txn_id": "bec1c972e1834afa", "state": "COMMITTED", "at": 1788949406.1577795, "data": {"result": "CONFIRMED"}}
+{"txn_id": "358bffcfccf041e8", "claim_id": "7cbfc36b0f61", "kind": "retire", "description": "retrieve_generate_verify__arithmetic_hard: измеренная точность 0.00 на 12 применениях ниже базовой 0.40, ради которой её", "state": "OPENED", "at": 1788949406.1584225, "data": {}}
+{"txn_id": "358bffcfccf041e8", "state": "DECIDED", "at": 1788949406.1590016, "data": {"reason": "измеренная точность 0.00 на 12 применениях ниже базовой 0.40, ради которой её приняли"}}
+{"txn_id": "358bffcfccf041e8", "state": "COMMITTED", "at": 1788949406.1595776, "data": {"result": "RETIRED"}}
