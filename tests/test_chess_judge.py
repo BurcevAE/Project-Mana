@@ -212,7 +212,39 @@ def test_an_explicit_path_wins_over_the_search(monkeypatch, tmp_path):
 def test_a_named_path_that_is_not_there_is_reported_not_ignored(monkeypatch, tmp_path):
     monkeypatch.setenv(judge.ENGINE_ENV, str(tmp_path / "absent.exe"))
     rows = judge.diagnose()
-    assert rows[0]["why"].endswith("но файла нет")
+    assert "нет такого пути" in rows[0]["why"]
+    assert judge.ENGINE_ENV in rows[0]["why"]
+
+
+def test_a_refused_path_is_not_reported_as_a_missing_one(monkeypatch, tmp_path):
+    """`Path.exists()` answers False for every OSError, so "absent" and
+    "refused" arrived as the same word -- and the diagnosis existed to
+    tell them apart. Reported against a directory the shell could list
+    and the process could not."""
+    import errno
+    import os as os_mod
+
+    real = os_mod.stat
+    denied = tmp_path / "denied"
+
+    def refusing(path, *a, **kw):
+        if str(path) == str(denied):
+            raise PermissionError(errno.EACCES, "Отказано в доступе")
+        return real(path, *a, **kw)
+
+    monkeypatch.setattr(judge.os, "stat", refusing)
+    monkeypatch.setattr(judge, "searched", lambda: [denied])
+    why = judge.diagnose()[0]["why"]
+    assert "не дала посмотреть" in why and "errno 13" in why
+    assert "нет такого пути" not in why
+
+
+def test_the_diagnosis_says_who_is_asking():
+    """Two of the ways a path is visible to one process and not another
+    are a different account and a different profile directory."""
+    rows = judge.diagnose()
+    assert rows[-1]["where"] == "процесс"
+    assert "LOCALAPPDATA=" in rows[-1]["why"]
 
 
 def test_each_place_says_what_was_wrong_with_it(monkeypatch, tmp_path):
@@ -225,7 +257,7 @@ def test_each_place_says_what_was_wrong_with_it(monkeypatch, tmp_path):
     monkeypatch.setattr(judge, "searched",
                         lambda: [tmp_path / "absent", a_file, empty])
     reasons = [row["why"] for row in judge.diagnose()]
-    assert "каталога нет" in reasons[0]
+    assert "нет такого пути" in reasons[0]
     assert "это не каталог" in reasons[1]
     assert "файлов stockfish* нет" in reasons[2]
 

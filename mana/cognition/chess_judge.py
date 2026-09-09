@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -97,8 +98,12 @@ def engine_path() -> Optional[Path]:
     fallback, not an error.
     """
     named = os.environ.get(ENGINE_ENV, "").strip().strip('"')
-    if named and Path(named).is_file():
-        return Path(named)
+    if named:
+        try:
+            if os.path.isfile(named):
+                return Path(named)
+        except OSError:
+            pass                       # reported by diagnose(), not hidden
     for root in searched():
         for found in _engines_in(root):
             return found
@@ -136,25 +141,57 @@ def diagnose() -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     named = os.environ.get(ENGINE_ENV, "").strip().strip('"')
     if named:
-        rows.append({"where": named, "why": (
-            "указан в " + ENGINE_ENV + ", файл есть" if Path(named).is_file()
-            else "указан в " + ENGINE_ENV + ", но файла нет")})
+        rows.append({"where": named,
+                     "why": f"указан в {ENGINE_ENV}: {_look(Path(named), want_dir=False)}"})
     for root in searched():
-        try:
-            if not root.exists():
-                why = "каталога нет"
-            elif not root.is_dir():
-                why = "это не каталог"
-            elif _engines_in(root):
-                why = "движок здесь"
-            else:
-                why = f"каталог есть, файлов stockfish* нет ({len(list(root.iterdir()))} записей)"
-        except OSError as exc:
-            why = f"система отказала: {type(exc).__name__} {exc.errno}"
-        rows.append({"where": str(root), "why": why})
+        rows.append({"where": str(root), "why": _look(root, want_dir=True)})
     found = shutil.which("stockfish")
     rows.append({"where": "PATH", "why": f"найден: {found}" if found else "в PATH нет"})
+    # Who is asking. Two of the ways a path can be visible to one process
+    # and not another are "a different account" and "a different profile
+    # directory", and both are answered by printing them rather than by
+    # another round of guessing.
+    rows.append({"where": "процесс",
+                 "why": f"пользователь {os.environ.get('USERNAME', '?')}, "
+                        f"LOCALAPPDATA={os.environ.get('LOCALAPPDATA', '?')}, "
+                        f"python {sys.executable}"})
     return rows
+
+
+def _look(path: Path, want_dir: bool) -> str:
+    """What the operating system says about this path, in its own words.
+
+    Through `os.stat` rather than `Path.exists()`, because `exists()`
+    answers False for every OSError: a missing directory, a refused one
+    and an invalid name all came back as "каталога нет". The diagnosis
+    existed to tell those apart and was doing the opposite.
+    """
+    import errno as errno_mod
+
+    try:
+        stat = os.stat(str(path))
+    except OSError as exc:
+        if exc.errno == errno_mod.ENOENT:
+            return "нет такого пути"
+        return (f"система не дала посмотреть: {type(exc).__name__}, "
+                f"errno {exc.errno}"
+                + (f", winerror {exc.winerror}" if getattr(exc, "winerror", None) else "")
+                + (f" — {exc.strerror}" if exc.strerror else ""))
+    import stat as stat_mod
+
+    is_dir = stat_mod.S_ISDIR(stat.st_mode)
+    if not want_dir:
+        return "файл есть" if not is_dir else "это каталог, а нужен файл"
+    if not is_dir:
+        return "это не каталог"
+    try:
+        inside = list(path.iterdir())
+    except OSError as exc:
+        return (f"каталог есть, но прочитать нельзя: {type(exc).__name__}, "
+                f"errno {exc.errno}")
+    if _engines_in(path):
+        return "движок здесь"
+    return f"каталог есть, файлов stockfish* нет ({len(inside)} записей)"
 
 
 def searched() -> List[Path]:
