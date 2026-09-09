@@ -431,8 +431,10 @@ def judge_note(depth: int) -> str:
         return "судья выключен — потери не измеряются"
     if chess_judge.engine_path():
         return f"судья: Stockfish, глубина {depth}"
+    where = "; ".join(str(root) for root in chess_judge.searched())
     return ("судья: материальный запасной — Stockfish не найден, "
-            "потери сравнимы только между собой")
+            "потери сравнимы только между собой.\n"
+            f"  искала в: {where}")
 
 
 def frame(seat: Seat, kind: str, san: str = "",

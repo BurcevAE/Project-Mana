@@ -90,26 +90,41 @@ def engine_path() -> Optional[Path]:
     than raising: an absent engine is a normal state with a working
     fallback, not an error.
     """
-    from ..paths import resolve_data_path, shared_data_root
-
-    # Both roots, because they differ exactly when it matters. In a
-    # checkout `data_root()` is the working directory, so a run started
-    # from the repository looked for the engine inside the repository and
-    # reported `judged_by: material` for three real games while a working
-    # Stockfish sat in %LOCALAPPDATA%. An acquired binary belongs to the
-    # machine, not to the shell that happened to start MANA.
-    roots = [Path(resolve_data_path(ENGINE_DIRNAME)),
-             shared_data_root() / ENGINE_DIRNAME]
-    seen = set()
-    for root in roots:
-        if root in seen or not root.is_dir():
+    for root in searched():
+        if not root.is_dir():
             continue
-        seen.add(root)
         for found in sorted(root.glob("stockfish*.exe")) + sorted(root.glob("stockfish*")):
             if found.is_file():
                 return found
     found = shutil.which("stockfish")
     return Path(found) if found else None
+
+
+def searched() -> List[Path]:
+    """Every place the engine is looked for, in order.
+
+    Three of them, because they differ exactly when it matters. In a
+    checkout `data_root()` is the working directory, so a run started
+    from the repository looked inside the repository and judged three
+    real games by material while a working Stockfish sat in
+    %LOCALAPPDATA%. `shared_data_root()` was the fix and it honours
+    MANA_DATA_DIR, so setting that variable collapses both to one and
+    brings the same failure back -- hence `platform_data_root()`, which
+    ignores every override.
+
+    Exposed rather than kept private because a refusal that names nothing
+    is one nobody can act on, and "Stockfish не найден" was read three
+    times today without telling anyone where to look.
+    """
+    from ..paths import platform_data_root, resolve_data_path, shared_data_root
+
+    roots: List[Path] = []
+    for root in (Path(resolve_data_path(ENGINE_DIRNAME)),
+                 shared_data_root() / ENGINE_DIRNAME,
+                 platform_data_root() / ENGINE_DIRNAME):
+        if root not in roots:
+            roots.append(root)
+    return roots
 
 
 def available() -> bool:

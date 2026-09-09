@@ -133,6 +133,25 @@ def shared_data_root() -> Path:
     return base / _APP_DIR_NAME.lower()
 
 
+def platform_data_root() -> Path:
+    """The operating system's per-user location, and nothing else.
+
+    Ignores MANA_DATA_DIR on purpose. `shared_data_root()` honours the
+    override, which is right when the override means "put my state here"
+    and wrong for finding something acquired once and shared by every
+    launch: set the variable and both roots collapse, and a working
+    engine becomes invisible for the same reason it was invisible before
+    `shared_data_root` existed.
+    """
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+        root = Path(base) if base else Path.home() / "AppData" / "Local"
+        return root / _APP_DIR_NAME
+    xdg = os.environ.get("XDG_DATA_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".local" / "share"
+    return base / _APP_DIR_NAME.lower()
+
+
 def resolve_data_path(path: str | os.PathLike) -> Path:
     """Make a Config path absolute against `data_root()`.
 

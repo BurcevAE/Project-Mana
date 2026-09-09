@@ -12,7 +12,9 @@ returning a kind with no way to ask which feature decided.
 """
 from __future__ import annotations
 
+import os
 import random
+from pathlib import Path
 
 import pytest
 
@@ -170,3 +172,43 @@ def test_the_summary_reports_its_denominator():
     assert summary["moves"] == 2
     assert summary["blunders"] == 1 and summary["mistakes"] == 1
     assert summary["mean_loss"] == 200.0
+
+
+# --------------------------------------------------------------------------
+# where the engine is looked for
+# --------------------------------------------------------------------------
+
+def test_an_override_cannot_hide_an_installed_engine(monkeypatch):
+    """`shared_data_root()` was added so an acquired binary is found
+    however MANA was started, and then written to honour MANA_DATA_DIR --
+    which is the thing that makes it move with the launch. Set the
+    variable and both roots collapse, bringing back the failure that
+    judged three real games by material."""
+    from mana import paths
+
+    monkeypatch.setenv("MANA_DATA_DIR", str(Path.cwd()))
+    roots = judge.searched()
+    assert paths.platform_data_root() / judge.ENGINE_DIRNAME in roots
+
+
+def test_the_places_looked_in_are_listed_without_repeats(monkeypatch, tmp_path):
+    monkeypatch.setenv("MANA_DATA_DIR", str(tmp_path))
+    roots = judge.searched()
+    assert len(roots) == len(set(roots))
+    assert tmp_path / judge.ENGINE_DIRNAME in roots
+
+
+def test_a_missing_engine_says_where_it_looked():
+    """"Stockfish не найден" names nothing that can be checked, and it was
+    read three times in one day without telling anyone where to look."""
+    from mana.cognition import chess_bot
+
+    import mana.cognition.chess_judge as judging
+    original = judging.engine_path
+    judging.engine_path = lambda: None
+    try:
+        note = chess_bot.judge_note(8)
+    finally:
+        judging.engine_path = original
+    assert "искала в:" in note
+    assert judge.ENGINE_DIRNAME.replace("/", os.sep) in note
