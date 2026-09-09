@@ -776,3 +776,40 @@ def test_a_set_stop_is_why_self_play_returned_nothing(tmp_path, monkeypatch):
     assert chess_bot.play_locally(games=1, depth=1, judge_depth=0, pause=0.0,
                                   record=False, quiet=True, stop=stopped,
                                   max_plies=30) == []
+
+
+def test_the_ladder_says_which_player_it_measures(tmp_path, monkeypatch):
+    """Requirement eight: an instrument whose subject was swapped without
+    a word is worse than one that stopped."""
+    from mana.cognition import chess_version
+
+    monkeypatch.setattr(bench_mod, "state_path", lambda: tmp_path / "bench.json")
+    bot = _Bot([])
+    bench = bench_mod.Bench(client=_Client(bot), bot=bot, ladder=_ladder(),
+                            gap=0.0)
+    _win(bench.ladder, 5)
+    assert bench.ladder.measures == "v0-base"
+
+    monkeypatch.setattr(chess_version, "confirmed_fingerprint",
+                        lambda: "v1-abcd")
+    said = []
+    from mana import events
+
+    sink = events.subscribe(lambda e: said.append(e.text))
+    try:
+        bench._check_subject()
+    finally:
+        events.unsubscribe(sink)
+    assert bench.ladder.wins == 0 and bench.ladder.games == 0
+    assert bench.ladder.measures == "v1-abcd"
+    assert any("состав игрока сменился" in line for line in said)
+
+
+def test_the_ladder_is_not_reset_while_the_baseline_holds(tmp_path, monkeypatch):
+    monkeypatch.setattr(bench_mod, "state_path", lambda: tmp_path / "bench.json")
+    bot = _Bot([])
+    bench = bench_mod.Bench(client=_Client(bot), bot=bot, ladder=_ladder(),
+                            gap=0.0)
+    _win(bench.ladder, 5)
+    bench._check_subject()
+    assert bench.ladder.wins == 5

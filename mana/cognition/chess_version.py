@@ -174,9 +174,52 @@ def in_force() -> List[Adoption]:
     return [row for row in history() if row.state != REVERTED]
 
 
+def confirmed() -> List[Adoption]:
+    """Only changes that survived a re-test on games played after them.
+
+    The baseline, and what the ladder plays: a measuring instrument whose
+    subject changes underneath it measures nothing.
+    """
+    return [row for row in history() if row.state == CONFIRMED]
+
+
+def provisional() -> List[Adoption]:
+    """Changes adopted and not yet re-tested. At most one at a time is
+    meaningful: two untested changes measured together answer about
+    neither."""
+    return [row for row in history() if row.state == PROVISIONAL]
+
+
+def playing() -> List[Adoption]:
+    """The composition that plays evaluation games: baseline plus what is
+    under test. Without this PROVISIONAL is a word with no consequence."""
+    return confirmed() + provisional()
+
+
 def version() -> int:
     """How many changes are in force. Zero is the player as written."""
     return len(in_force())
+
+
+def confirmed_version() -> int:
+    return len(confirmed())
+
+
+def fresh_games(adoption: Adoption,
+                games: Optional[Sequence[Dict[str, Any]]] = None
+                ) -> List[Dict[str, Any]]:
+    """Games that count as evidence about this adoption.
+
+    Played by its version, and started after it. Both halves are needed:
+    the version alone would admit games from a later composition, and the
+    time alone would admit games the baseline played.
+    """
+    from . import chess_bot
+
+    rows = chess_bot.recorded() if games is None else list(games)
+    return [row for row in rows
+            if int(row.get("player_version", 0) or 0) == adoption.version
+            and float(row.get("started", 0.0) or 0.0) > adoption.at]
 
 
 def fingerprint() -> str:
@@ -185,11 +228,22 @@ def fingerprint() -> str:
     The number alone is not enough: reverting one change and adopting
     another leaves the count the same and the player different.
     """
+    return _name(in_force())
+
+
+def confirmed_fingerprint() -> str:
+    """A name for the baseline alone -- what the ladder is measuring."""
+    return _name(confirmed())
+
+
+def _name(rows: Sequence[Adoption]) -> str:
     import hashlib
 
-    body = "|".join(f"{row.property}{row.direction:+d}" for row in in_force())
+    body = "|".join(f"{row.property}{row.direction:+d}" for row in rows)
+    if not body:
+        return "v0-base"
     digest = hashlib.blake2b(body.encode("utf-8"), digest_size=4).hexdigest()
-    return f"v{version()}-{digest}" if body else "v0-base"
+    return f"v{len(rows)}-{digest}"
 
 
 def check(evidence: Dict[str, Any]) -> str:
@@ -257,7 +311,7 @@ def adopt(evidence: Dict[str, Any]) -> Adoption:
 
 
 def confirm(adoption: Adoption, trials: int, effect: float,
-            finding_id: str = "") -> Adoption:
+            finding_id: str = "", created: float = 0.0) -> Adoption:
     """Mark an adoption confirmed on experience gathered after it.
 
     Refuses to confirm on less than a full re-test: an adoption that
@@ -267,6 +321,15 @@ def confirm(adoption: Adoption, trials: int, effect: float,
     if int(trials) < CONFIRM_GAMES:
         raise Refused(f"подтверждать на {trials} партиях нельзя, "
                       f"нужно {CONFIRM_GAMES}")
+    # The duel that justified the change cannot confirm it. Refused twice
+    # over: by identity, because it is the same measurement; and by time,
+    # because evidence gathered before a change existed cannot be about
+    # the change.
+    if finding_id and finding_id == adoption.causal_finding:
+        raise Refused("та же дуэль, что породила изменение, не может его "
+                      "подтвердить")
+    if created and float(created) <= adoption.at:
+        raise Refused("свидетельство собрано до адопции — оно не о ней")
     return _set_state(adoption, CONFIRMED,
                       f"подтверждено на {trials} новых партиях, "
                       f"эффект {effect:.0%}" + (f", {finding_id}" if finding_id else ""))
@@ -296,7 +359,7 @@ def _set_state(adoption: Adoption, state: str, note: str) -> Adoption:
     raise Refused("такой адопции в истории нет")
 
 
-def player(base: Any) -> Any:
+def player(base: Any, rows: Optional[Sequence[Adoption]] = None) -> Any:
     """The base player with every change in force, in the order adopted.
 
     Composed rather than rebuilt: the version is the base plus a list, so
@@ -305,7 +368,7 @@ def player(base: Any) -> Any:
     from . import chess_action
 
     out = base
-    for row in in_force():
+    for row in (playing() if rows is None else rows):
         out = chess_action.Tuned(out, chess_action.Change(
             property=row.property, direction=row.direction,
             from_finding=row.causal_finding))

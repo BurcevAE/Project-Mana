@@ -127,6 +127,14 @@ BROKEN = "broken"
 CLIMBING = "climbing"
 
 
+def chess_bot_default() -> Any:
+    """The player as written. Named here so the bench composes versions
+    without building a player itself."""
+    from . import chess_bot
+
+    return chess_bot._default_player()
+
+
 def state_path() -> Path:
     from ..paths import resolve_data_path
 
@@ -159,6 +167,10 @@ class Ladder:
     #: afresh -- the very behaviour the escalation exists to prevent.
     next_request_at: float = 0.0
     refused: int = 0
+    #: Which composition of the player these counts are about. A ladder
+    #: that changed its subject without saying so is an instrument that
+    #: measured two different things and reported one number.
+    measures: str = "v0-base"
 
     def cooldown_left(self) -> float:
         return max(0.0, self.next_request_at - time.time())
@@ -204,7 +216,7 @@ class Ladder:
                 "best_streak": self.best_streak, "started": self.started,
                 "done": self.done, "needed": self.needed(),
                 "next_request_at": self.next_request_at,
-                "refused": self.refused,
+                "refused": self.refused, "measures": self.measures,
                 "cooldown_left": round(self.cooldown_left(), 1)}
 
     @classmethod
@@ -218,7 +230,8 @@ class Ladder:
                    started=float(row.get("started", time.time())),
                    done=bool(row.get("done", False)),
                    next_request_at=float(row.get("next_request_at", 0.0)),
-                   refused=int(row.get("refused", 0)))
+                   refused=int(row.get("refused", 0)),
+                   measures=str(row.get("measures", "v0-base")))
 
     def save(self) -> None:
         try:
@@ -266,7 +279,15 @@ class Bench:
         #: from the saved state, so a restart continues the escalation
         #: rather than beginning it again at sixty seconds.
         self._refused = self.ladder.refused
+        # The ladder plays the baseline: only changes that survived a
+        # re-test. Passing the factory rather than letting the bot build
+        # its own is what makes that checkable from outside.
+        from . import chess_version
+
         self.bot = bot or Bot(client=self.client,
+                              player=lambda: chess_version.player(
+                                  chess_bot_default(),
+                                  chess_version.confirmed()),
                               policy=Policy(rated=False, max_games=1,
                                             speeds=("blitz", "rapid",
                                                     "classical",
@@ -435,6 +456,32 @@ class Bench:
         """
         self._stop.wait(seconds)
 
+    def _check_subject(self) -> None:
+        """Reset the ladder when the player it measures has changed.
+
+        Loudly, and only here. Counts gathered by one composition say
+        nothing about another, and carrying them across is how a ladder
+        comes to report a number about two different players.
+        """
+        from . import chess_version
+
+        now = chess_version.confirmed_fingerprint()
+        if now == self.ladder.measures:
+            return
+        was = self.ladder.measures
+        events.emit(events.WARNING,
+                    f"состав игрока сменился ({was} → {now}): лестница "
+                    f"обнулена, прежние {self.ladder.wins} из "
+                    f"{self.ladder.games} были про другого игрока")
+        self.ladder.level = FIRST_LEVEL
+        self.ladder.streak = 0
+        self.ladder.games = 0
+        self.ladder.wins = 0
+        self.ladder.by_level = {}
+        self.ladder.best_streak = {}
+        self.ladder.measures = now
+        self.ladder.save()
+
     def _cooldown_left(self) -> float:
         """Seconds before the network may be touched. Local arithmetic."""
         left = getattr(self.client, "cooldown_left", None)
@@ -521,10 +568,15 @@ class Bench:
                 return said
 
         if budget >= SELF_PLAY_FLOOR:
-            played = chess_bot.play_locally(games=1,
-                                            judge_depth=chess_bot.LIVE_JUDGE_DEPTH,
-                                            pause=0.0, quiet=True,
-                                            stop=self._stop)
+            from . import chess_version
+
+            # Under test, not the baseline: a provisional change that
+            # never plays is a state with no consequence.
+            played = chess_bot.play_locally(
+                games=1, judge_depth=chess_bot.LIVE_JUDGE_DEPTH,
+                pause=0.0, quiet=True, stop=self._stop,
+                compose=lambda one: chess_version.player(one,
+                                                         chess_version.playing()))
             if played:
                 local = sum(1 for row in rows
                             if str(row.get("source", "")) == chess_bot.LOCAL) + 1
@@ -711,6 +763,7 @@ class Bench:
         self._report_conclusions()
 
     def _announce(self, when: str) -> None:
+        self._check_subject()
         events.emit(events.STATUS,
                     f"стенд ({when}): {self.ladder.describe()}, "
                     f"всего {self.ladder.wins} из {self.ladder.games}",

@@ -18,8 +18,9 @@ from mana.core.gates import ACCEPTED, MIN_PAIRED_TRIALS, NOT_EVALUATED, REJECTED
 
 def _evidence(prop="pawn_moves", direction=act.LESS, verdict=ACCEPTED,
               reach=0.6, trials=MIN_PAIRED_TRIALS + 5, **kw):
-    row = {"change": act.Change(prop, direction, from_finding="causal-1"),
-           "causal_finding": "causal-1",
+    causal = kw.pop("causal_finding", "causal-1")
+    row = {"change": act.Change(prop, direction, from_finding=causal),
+           "causal_finding": causal,
            "observational_finding": "obs-1",
            "reach": reach, "trials": trials, "verdict": verdict,
            "effect": 0.68}
@@ -222,19 +223,125 @@ def test_reverting_gives_back_exactly_what_was_there_before():
     assert ver.player(base) is base
 
 
-def test_nothing_calls_this_yet():
-    """Wiring it into the bench makes the ladder measure a different
-    player, which resets what the ladder has measured. A separate
-    decision, and not this module's to take."""
-    import subprocess
-    import sys
+# --------------------------------------------------------------------------
+# the lifecycle: vN → accepted → vN+1 provisional → plays → confirmed/reverted
+# --------------------------------------------------------------------------
 
-    found = subprocess.run(
-        [sys.executable, "-c",
-         "import pathlib,sys;"
-         "hits=[p for p in pathlib.Path('mana').rglob('*.py')"
-         " if 'chess_version' in p.read_text(encoding='utf-8')"
-         " and p.name not in ('chess_version.py','version.py')];"
-         "print(len(hits))"],
-        capture_output=True, text=True)
-    assert found.stdout.strip() == "0", found.stdout
+def test_accepted_becomes_provisional_and_not_confirmed():
+    """Requirement seven: an accepted causal verdict is not a confirmed
+    change. The duel that produced it ran before the change existed."""
+    adopted = ver.adopt(_evidence())
+    assert adopted.state == ver.PROVISIONAL
+    assert ver.provisional() == [adopted]
+    assert ver.confirmed() == []
+    assert ver.confirmed_version() == 0        # baseline unmoved
+    assert ver.version() == 1                  # under test
+
+
+def test_the_provisional_version_is_the_one_that_plays_evaluation_games():
+    """Requirement four: a provisional change that never plays is a word
+    with no consequence."""
+    from mana.cognition.chess_arena import SearchPlayer
+
+    ver.adopt(_evidence("pawn_moves", act.LESS))
+    base = SearchPlayer(depth=2, trace=True)
+    playing = ver.player(base, ver.playing())
+    baseline = ver.player(base, ver.confirmed())
+    assert playing is not base and playing.change.property == "pawn_moves"
+    assert baseline is base                    # the ladder still plays v0
+
+
+def test_a_game_played_by_a_version_records_that_version():
+    """Requirement two: the version is part of every game's provenance."""
+    from mana.cognition import chess_bot
+
+    ver.adopt(_evidence())
+    played = chess_bot.play_locally(
+        games=1, depth=1, judge_depth=0, pause=0.0, record=False, quiet=True,
+        max_plies=10, compose=lambda one: ver.player(one, ver.playing()))[0]
+    assert played.player_version == 1
+    assert played.player_composition == ver.fingerprint()
+
+    plain = chess_bot.play_locally(games=1, depth=1, judge_depth=0, pause=0.0,
+                                   record=False, quiet=True, max_plies=10)[0]
+    assert plain.player_version == 0 and plain.player_composition == "v0-base"
+
+
+def test_the_duel_that_created_the_change_cannot_confirm_it():
+    """Requirement one, refused twice over: by identity, because it is the
+    same measurement, and by time, because evidence gathered before a
+    change existed cannot be about it."""
+    adopted = ver.adopt(_evidence())
+    with pytest.raises(ver.Refused) as same:
+        ver.confirm(adopted, trials=ver.CONFIRM_GAMES, effect=0.7,
+                    finding_id=adopted.causal_finding)
+    assert "та же дуэль" in str(same.value)
+
+    with pytest.raises(ver.Refused) as earlier:
+        ver.confirm(adopted, trials=ver.CONFIRM_GAMES, effect=0.7,
+                    finding_id="other", created=adopted.at - 1)
+    assert "до адопции" in str(earlier.value)
+    assert ver.confirmed() == []
+
+
+def test_fresh_games_are_the_ones_played_by_this_version_after_it():
+    """Both halves are needed: the version alone would admit a later
+    composition's games, the time alone the baseline's."""
+    adopted = ver.adopt(_evidence())
+    rows = [{"player_version": 1, "started": adopted.at + 10},   # fresh
+            {"player_version": 1, "started": adopted.at - 10},   # too early
+            {"player_version": 0, "started": adopted.at + 10},   # baseline
+            {"player_version": 2, "started": adopted.at + 10}]   # another one
+    assert len(ver.fresh_games(adopted, rows)) == 1
+
+
+def test_fresh_evidence_confirms_and_the_baseline_moves():
+    adopted = ver.adopt(_evidence())
+    ver.confirm(adopted, trials=ver.CONFIRM_GAMES, effect=0.68,
+                finding_id="fresh-duel", created=adopted.at + 60)
+    assert ver.confirmed_version() == 1
+    assert ver.provisional() == []
+    assert ver.confirmed_fingerprint() != "v0-base"
+
+
+def test_reverting_puts_the_previous_confirmed_version_back():
+    """Requirement five: after a revert the next games are played by the
+    version that was confirmed before it."""
+    from mana.cognition.chess_arena import SearchPlayer
+
+    first = ver.adopt(_evidence("pawn_moves", act.LESS))
+    ver.confirm(first, trials=ver.CONFIRM_GAMES, effect=0.7,
+                finding_id="fresh-1", created=first.at + 60)
+    settled = ver.confirmed_fingerprint()
+
+    second = ver.adopt(_evidence("king_moves", act.LESS,
+                                 causal_finding="causal-2"))
+    assert ver.confirmed_fingerprint() == settled     # baseline untouched
+    ver.revert(second, "на новых партиях эффект не воспроизвёлся")
+
+    assert ver.confirmed_fingerprint() == settled
+    base = SearchPlayer(depth=2, trace=True)
+    playing = ver.player(base, ver.playing())
+    assert playing.change.property == "pawn_moves"    # only the confirmed one
+    assert len(ver.history()) == 2                    # nothing erased
+
+
+def test_the_baseline_stays_identifiable_through_all_of_it():
+    """Requirement nine: the control version has a name of its own."""
+    assert ver.confirmed_fingerprint() == "v0-base"
+    adopted = ver.adopt(_evidence())
+    assert ver.confirmed_fingerprint() == "v0-base"   # still the control
+    ver.confirm(adopted, trials=ver.CONFIRM_GAMES, effect=0.7,
+                finding_id="fresh", created=adopted.at + 60)
+    assert ver.confirmed_fingerprint() != "v0-base"
+
+
+def test_only_the_two_wired_modules_reach_for_a_version():
+    """The wiring is deliberate and small: the bench chooses which
+    composition plays, self-play records it, and nothing else knows."""
+    import pathlib
+
+    hits = sorted(p.name for p in pathlib.Path("mana").rglob("*.py")
+                  if "chess_version" in p.read_text(encoding="utf-8")
+                  and p.name not in ("chess_version.py", "version.py"))
+    assert hits == ["chess_bench.py", "chess_bot.py"]

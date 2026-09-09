@@ -542,7 +542,7 @@ def play_locally(games: int = 1, depth: int = PLAY_DEPTH,
                  judge_depth: int = LIVE_JUDGE_DEPTH, pause: float = 0.35,
                  record: bool = True, stop: Any = None,
                  quiet: bool = False, seed: Optional[int] = None,
-                 max_plies: int = 200) -> List[Seat]:
+                 max_plies: int = 200, compose: Any = None) -> List[Seat]:
     """MANA against itself, through the same frames the live bot emits.
 
     Here so that the board, the reasoning panel and the judge can be
@@ -587,10 +587,23 @@ def play_locally(games: int = 1, depth: int = PLAY_DEPTH,
             this_seed = (number if seed is None and games > 1
                          else (seed + number if seed is not None
                                else random.SystemRandom().randrange(2 ** 31)))
+            from . import chess_version
+
             seat = Seat(game_id=f"local-{int(time.time())}-{number + 1}",
-                        source=LOCAL, opponent="сама с собой", seed=this_seed)
+                        source=LOCAL, opponent="сама с собой", seed=this_seed,
+                        player_version=(chess_version.version()
+                                        if compose is not None else 0),
+                        player_composition=(chess_version.fingerprint()
+                                            if compose is not None
+                                            else "v0-base"))
+            # `compose` decides which version plays. Passed in rather
+            # than looked up, so this stays a function of its arguments
+            # and a caller cannot get a different player than it asked
+            # for.
             white = SearchPlayer(depth=depth, trace=True)
             black = SearchPlayer(depth=depth, trace=True)
+            if compose is not None:
+                white, black = compose(white), compose(black)
             rng = random.Random(this_seed)
             board = chess.Board()
             events.emit(events.STATUS,
