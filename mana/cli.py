@@ -389,6 +389,74 @@ def _plural(count: int, one: str, few: str, many: str) -> str:
     return one if last == 1 else many
 
 
+def _bench(from_level: int, port: int = 0) -> int:
+    """Climb the Stockfish ladder until the rule ends it, or until Ctrl+C.
+
+    Ten consecutive wins promote; thirty at level eight finish it. A draw
+    is not a win and resets the streak -- a streak of consecutive wins is
+    what the rule asks for.
+
+    Expected to stall low, and that is the measurement. MANA plays a
+    two-ply material search and has won one game in eight against level
+    three; the level it stops at is a number about this player that no
+    single game gives, and it is comparable across changes to the player.
+    """
+    from .cognition import chess_bench, chess_bot, chess_watch
+    from .net import lichess
+
+    client = lichess.Lichess()
+    state = client.describe()
+    if not state.get("bot"):
+        print(f"токен: {'есть' if state['token'] else 'нет'} ({state['env']})")
+        if state.get("error"):
+            print(state["error"])
+        if state.get("note"):
+            print(state["note"])
+        return 1
+
+    ladder = chess_bench.Ladder.load()
+    if from_level:
+        ladder = chess_bench.Ladder(level=max(chess_bench.FIRST_LEVEL,
+                                              min(chess_bench.LAST_LEVEL,
+                                                  from_level)))
+        print(f"лестница начата заново с уровня {ladder.level}")
+    elif ladder.games:
+        print(f"продолжаю с прошлого раза: {ladder.describe()}")
+
+    httpd = None
+    try:
+        httpd = chess_watch.start(port or chess_watch.DEFAULT_PORT)
+        print(f"наблюдение: {chess_watch.url(httpd)}")
+    except OSError as exc:
+        print(f"окно не открылось ({exc}); играю без него")
+
+    bench = chess_bench.Bench(client=client, ladder=ladder)
+    events.install_console_sink()
+    note = chess_bot.judge_note(bench.bot.judge_depth)
+    print(note)
+    if "запасной" in note:
+        print("  ↳ потери будут несравнимы с остальной записью. "
+              "Остановите (Ctrl+C) и перезапустите процесс.")
+    print(f"Правило: {chess_bench.WINS_TO_ADVANCE} побед подряд — следующий "
+          f"уровень; {chess_bench.WINS_TO_FINISH} подряд на "
+          f"{chess_bench.LAST_LEVEL} — конец. Ничья серию сбрасывает.")
+    print(f"Аккаунт {state['user']}. Ctrl+C — остановить.")
+
+    try:
+        ladder = bench.run()
+    except KeyboardInterrupt:
+        bench.stop()
+        ladder = bench.ladder
+        print()
+        print("остановлено вами")
+    print()
+    print(chess_bench.summarise(ladder))
+    print(f"записано в {chess_bot.games_path()}")
+    _what_it_concluded(chess_bot.LIVE)
+    _hold_window(httpd)
+    return 0
+
+
 def _chess_rejudge(depth: int) -> int:
     """Judge the record again, deeper, without playing anything.
 
@@ -1190,6 +1258,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tried", action="store_true",
                         help="Что уже проверяли и чем это кончилось "
                              "(чтобы не повторять эксперимент заново)")
+    parser.add_argument("--bench", nargs="?", const=0, type=int,
+                        metavar="УРОВЕНЬ",
+                        help="Стенд: сама вызывает Stockfish на lichess, "
+                             "10 побед подряд — следующий уровень, 30 подряд "
+                             "на 8-м — конец; без числа продолжает с прошлого")
     parser.add_argument("--chess-rejudge", nargs="?", const=0, type=int,
                         metavar="ГЛУБИНА", dest="chess_rejudge",
                         help="Пересудить записанные партии Stockfish заново, "
@@ -1303,6 +1376,8 @@ def main() -> int:
     if args.tried:
         return _show_tried()
 
+    if args.bench is not None:
+        return _bench(int(args.bench), int(args.watch_port))
     if args.chess_rejudge is not None:
         return _chess_rejudge(int(args.chess_rejudge))
     if args.chess is not None:

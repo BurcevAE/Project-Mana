@@ -146,6 +146,10 @@ class Seat:
     status: str = "started"
     winner: str = ""
     source: str = LIVE
+    #: Stockfish's level when the opponent is Lichess's own engine, 0 for
+    #: a human. A condition of every measurement taken from the game, not
+    #: a label on it.
+    level: int = 0
     started: float = field(default_factory=time.time)
 
     @property
@@ -174,6 +178,7 @@ class Seat:
 
     def as_dict(self) -> Dict[str, Any]:
         return {"game": self.game_id, "url": self.url, "source": self.source,
+                "level": self.level,
                 "us": "white" if self.us else "black",
                 "opponent": self.opponent, "initial_fen": self.initial_fen,
                 "moves": list(self.moves), "status": self.status,
@@ -317,6 +322,7 @@ class Bot:
             seat.us = white == self.username.lower()
             side = frame.get("black") if seat.us else frame.get("white")
             seat.opponent = str((side or {}).get("name", seat.opponent))
+            seat.level = _level_of(seat.opponent)
             state = frame.get("state") or {}
         elif kind == "gameState":
             state = frame
@@ -397,6 +403,19 @@ class Bot:
         write(seat)
 
 
+def _level_of(opponent: str) -> int:
+    """Stockfish's level from the name Lichess gives it.
+
+    Read from the name rather than handed in by whoever started the game,
+    so a game begun from the website carries the same condition as one the
+    bench began.
+    """
+    import re
+
+    found = re.search(r"level\s*(\d+)", str(opponent), re.IGNORECASE)
+    return int(found.group(1)) if found else 0
+
+
 def judge_note(depth: int) -> str:
     """Which judge is about to work, said before it does.
 
@@ -431,7 +450,7 @@ def frame(seat: Seat, kind: str, san: str = "",
     """
     board = seat.board()
     return {"kind": kind, "game": seat.game_id, "url": seat.url,
-            "source": seat.source,
+            "source": seat.source, "level": seat.level,
             "fen": board.fen(), "us": "white" if seat.us else "black",
             "opponent": seat.opponent, "ply": board.ply(),
             "turn": "white" if board.turn else "black",

@@ -277,7 +277,12 @@ def conditions(games: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     sources = sorted({str(game.get("source", "?")) for game in games})
     depths = sorted({int(t.get("depth", 0))
                      for game in games for t in game.get("thoughts", [])})
+    # The opponent's strength changes what a mistake costs, so a finding
+    # drawn from a mixed-level run says which levels it was drawn from
+    # rather than averaging over them silently.
+    levels = sorted({int(game.get("level", 0) or 0) for game in games})
     return {"games": len(games), "judged_by": judges, "worlds": sources,
+            "levels": levels,
             "search_depth": depths, "version": PRODUCT_VERSION,
             "questions_asked": len(PARTITIONS)}
 

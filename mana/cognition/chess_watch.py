@@ -266,6 +266,7 @@ PAGE = """<!doctype html>
   <span class="dim" id="who">ожидание партии…</span>
   <a class="dim" id="link" href="#" target="_blank" rel="noopener"></a>
   <span class="dim" id="judge"></span>
+  <span class="tag" id="ladder" hidden></span>
 </header>
 <main>
   <section class="panel">
@@ -367,6 +368,14 @@ function apply(f){
     document.getElementById("who").textContent=
       (f.user?("аккаунт "+f.user+", ждём вызова"):"готова");
     if(f.judge) document.getElementById("judge").textContent=f.judge;
+    return;
+  }
+  if(f.kind==="bench"){
+    var L=f.ladder||{};
+    var tag=document.getElementById("ladder");
+    tag.hidden=false;
+    tag.textContent="уровень "+L.level+" · подряд "+L.streak+"/"+L.needed+
+      " · всего "+L.wins+" из "+L.games;
     return;
   }
   if(f.kind==="challenge"){
