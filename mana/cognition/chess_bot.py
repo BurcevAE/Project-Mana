@@ -68,6 +68,14 @@ __version__ = "1.0"
 #: Where finished games are kept, beside MANA's other state.
 GAMES_DIRNAME = "lichess"
 
+#: Which world a game came from. A game against itself and a game against
+#: a stranger are different populations: the first has an opponent that
+#: shares its evaluation and its blind spots, the second does not. Pooled,
+#: an average over them is a number about nothing, so the source travels
+#: with every record and the summary keeps them apart.
+LOCAL = "local"
+LIVE = "lichess"
+
 #: Search depth for play. Two is what Stage 0 was measured at; raising it
 #: silently would make the next measurement a comparison against nothing.
 PLAY_DEPTH = 2
@@ -137,11 +145,13 @@ class Seat:
     judged: List[Dict[str, Any]] = field(default_factory=list)
     status: str = "started"
     winner: str = ""
+    source: str = LIVE
     started: float = field(default_factory=time.time)
 
     @property
     def url(self) -> str:
-        return f"https://lichess.org/{self.game_id}"
+        return ("" if self.source == LOCAL
+                else f"https://lichess.org/{self.game_id}")
 
     def board(self) -> Any:
         """The current position, rebuilt from the move list.
@@ -163,7 +173,7 @@ class Seat:
         return board
 
     def as_dict(self) -> Dict[str, Any]:
-        return {"game": self.game_id, "url": self.url,
+        return {"game": self.game_id, "url": self.url, "source": self.source,
                 "us": "white" if self.us else "black",
                 "opponent": self.opponent, "initial_fen": self.initial_fen,
                 "moves": list(self.moves), "status": self.status,
@@ -379,25 +389,44 @@ class Bot:
     def _frame(self, seat: Seat, kind: str, san: str = "",
                thought: Optional[Dict[str, Any]] = None,
                judged: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """One picture of the game, and everything a watcher needs to
-        read it. `last_uci` travels beside `last` because SAN says
-        "Qxd6+" and a board needs to know which two squares to light."""
-        board = seat.board()
-        return {"kind": kind, "game": seat.game_id, "url": seat.url,
-                "fen": board.fen(), "us": "white" if seat.us else "black",
-                "opponent": seat.opponent, "ply": board.ply(),
-                "turn": "white" if board.turn else "black",
-                "status": seat.status, "winner": seat.winner,
-                "last": san, "last_uci": seat.moves[-1] if seat.moves else "",
-                "thought": thought or {}, "judged": judged or {},
-                "summary": summarise(seat)}
+        return frame(seat, kind, san, thought, judged)
 
     def _write(self, seat: Seat) -> None:
-        try:
-            with games_path().open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(seat.as_dict(), ensure_ascii=False) + "\n")
-        except OSError as exc:
-            events.emit(events.WARNING, f"партия не записана: {exc}")
+        write(seat)
+
+
+def frame(seat: Seat, kind: str, san: str = "",
+          thought: Optional[Dict[str, Any]] = None,
+          judged: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """One picture of the game, and everything a watcher needs to read it.
+
+    A function rather than a method, because the local runner and the
+    Lichess bot must produce identical frames: a window that shows one
+    world differently from the other is a window you cannot compare two
+    runs in.
+
+    `last_uci` travels beside `last` because SAN says "Qxd6+" and a board
+    needs to know which two squares to light.
+    """
+    board = seat.board()
+    return {"kind": kind, "game": seat.game_id, "url": seat.url,
+            "source": seat.source,
+            "fen": board.fen(), "us": "white" if seat.us else "black",
+            "opponent": seat.opponent, "ply": board.ply(),
+            "turn": "white" if board.turn else "black",
+            "status": seat.status, "winner": seat.winner,
+            "last": san, "last_uci": seat.moves[-1] if seat.moves else "",
+            "thought": thought or {}, "judged": judged or {},
+            "summary": summarise(seat)}
+
+
+def write(seat: Seat) -> None:
+    """Append one finished game to the record."""
+    try:
+        with games_path().open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(seat.as_dict(), ensure_ascii=False) + "\n")
+    except OSError as exc:
+        events.emit(events.WARNING, f"партия не записана: {exc}")
 
 
 def summarise(seat: Seat) -> Dict[str, Any]:
@@ -424,3 +453,143 @@ def _default_player() -> Any:
     from .chess_arena import SearchPlayer
 
     return SearchPlayer(depth=PLAY_DEPTH, trace=True)
+
+
+def play_locally(games: int = 1, depth: int = PLAY_DEPTH,
+                 judge_depth: int = LIVE_JUDGE_DEPTH, pause: float = 0.35,
+                 record: bool = True, stop: Any = None) -> List[Seat]:
+    """MANA against itself, through the same frames the live bot emits.
+
+    Here so that the board, the reasoning panel and the judge can be
+    looked at without an account, an upgrade or an opponent -- and so
+    that what a person watches before playing on Lichess is the same
+    thing they will watch during it, rather than a demo that resembles it.
+
+    `pause` exists only for the watcher: without it a game finishes faster
+    than a person can read one panel. It is not a think time and it does
+    not touch the search.
+    """
+    import chess
+
+    from .chess_arena import SearchPlayer
+
+    judge = None
+    if judge_depth:
+        from . import chess_judge
+
+        judge = chess_judge.Judge(depth=judge_depth)
+    played: List[Seat] = []
+    try:
+        for number in range(games):
+            if stop is not None and stop.is_set():
+                break
+            seat = Seat(game_id=f"local-{int(time.time())}-{number + 1}",
+                        source=LOCAL, opponent="сама с собой")
+            white = SearchPlayer(depth=depth, trace=True)
+            black = SearchPlayer(depth=depth, trace=True)
+            rng = random.Random(number)
+            board = chess.Board()
+            events.emit(events.STATUS, f"партия {number + 1}/{games}",
+                        chess=frame(seat, kind="position"))
+            while not board.is_game_over() and board.ply() < 200:
+                if stop is not None and stop.is_set():
+                    break
+                player = white if board.turn else black
+                move = player.choose(board, rng)
+                san = board.san(move)
+                ply = board.ply() + 1
+                # White is MANA's judged side, the same convention the
+                # baseline was measured under. Both sides are the same
+                # player; judging both would double-count one search.
+                thought, judged = {}, {}
+                if board.turn:
+                    thought = player.thoughts[-1].as_dict()
+                    seat.thoughts.append(thought)
+                    if judge is not None:
+                        judged = judge.judge_move(board, move, ply).as_dict()
+                        seat.judged.append(judged)
+                judged_side = bool(thought)
+                board.push(move)
+                seat.moves.append(move.uci())
+                # Only the judged side is reported as a move: the log is
+                # a list of decisions with a margin and a cost beside
+                # each, and an entry with neither is a blank row that
+                # reads as a defect. The board still advances on the
+                # other side's reply, which is what `position` is for --
+                # and it makes the window identical in both worlds,
+                # where the live bot never sees the opponent think.
+                events.emit(events.STATUS,
+                            f"{san}" + (f" (потеря {judged['loss']:.0f})"
+                                        if judged else ""),
+                            chess=frame(seat,
+                                        kind="move" if judged_side else "position",
+                                        san=san, thought=thought, judged=judged))
+                if pause:
+                    time.sleep(pause)
+            seat.status = ("mate" if board.is_checkmate()
+                           else "draw" if board.is_game_over() else "stopped")
+            seat.winner = ("white" if board.is_checkmate() and not board.turn
+                           else "black" if board.is_checkmate() else "")
+            played.append(seat)
+            if record:
+                write(seat)
+            events.emit(events.STATUS,
+                        f"партия {number + 1}: {seat.status} {seat.winner}".strip(),
+                        chess=frame(seat, kind="over"))
+    finally:
+        if judge is not None:
+            judge.close()
+    return played
+
+
+def recorded(limit: int = 0) -> List[Dict[str, Any]]:
+    """Every game written down, newest last. Missing file means none."""
+    path = games_path()
+    if not path.exists():
+        return []
+    rows: List[Dict[str, Any]] = []
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except ValueError:
+                continue                  # a half-written line; the rest stand
+    return rows[-limit:] if limit else rows
+
+
+def stats(rows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """What the record says, per world and never pooled.
+
+    Every count carries its denominator. "23 зевка" is not a fact until
+    it says out of how many moves -- the rule `invariants.summarise`
+    states for turns and `chess_judge.summarise` for moves.
+    """
+    rows = recorded() if rows is None else rows
+    out: Dict[str, Any] = {"games": len(rows), "by_source": {}}
+    for source in (LOCAL, LIVE):
+        mine = [row for row in rows if row.get("source", LIVE) == source]
+        if not mine:
+            continue
+        judged = [move for row in mine for move in row.get("judged", [])]
+        thoughts = [move for row in mine for move in row.get("thoughts", [])]
+        losses = [move.get("loss", 0.0) for move in judged]
+        close = [move for move in thoughts if move.get("close_call")]
+        results: Dict[str, int] = {}
+        for row in mine:
+            key = f"{row.get('status', '?')} {row.get('winner', '')}".strip()
+            results[key] = results.get(key, 0) + 1
+        out["by_source"][source] = {
+            "games": len(mine),
+            "moves": len(thoughts),
+            "judged": len(judged),
+            "mistakes": sum(1 for move in judged if move.get("mistake")),
+            "blunders": sum(1 for move in judged if move.get("blunder")),
+            "mean_loss": round(sum(losses) / len(losses), 1) if losses else 0.0,
+            "close_calls": len(close),
+            "close_share": (round(len(close) / len(thoughts), 3)
+                            if thoughts else 0.0),
+            "results": results}
+    return out

@@ -238,7 +238,10 @@ PAGE = """<!doctype html>
  .sq.hit{box-shadow:inset 0 0 0 3px var(--mark)}
  .sq span{color:#111}
  .sq span.b{color:#111;text-shadow:0 0 1px #fff}
- .meta{display:flex;justify-content:space-between;margin-top:10px;
+ /* Two lines, not two ends of one. Side by side they collided as soon
+    as the summary grew: "полуход" and "26 ходов" ran together and the
+    ply number wrapped away from its own label. */
+ .meta{display:grid;gap:2px;margin-top:10px;
        font-size:13px;color:var(--dim)}
  table{width:100%;border-collapse:collapse;font-size:13px}
  th{text-align:left;font-weight:600;color:var(--dim);padding:4px 6px;

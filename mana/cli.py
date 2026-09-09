@@ -374,6 +374,109 @@ def _acquire_capability(name: str, consented: bool) -> int:
     return 0
 
 
+def _plural(count: int, one: str, few: str, many: str) -> str:
+    """Russian agreement, because "2 партий" reads as a bug in the code.
+
+    The same rule the watch page needed: 1 партия, 2 партии, 5 партий,
+    and the teens take the last form regardless of their last digit.
+    """
+    tail = abs(count) % 100
+    last = tail % 10
+    if 10 < tail < 20:
+        return many
+    if 1 < last < 5:
+        return few
+    return one if last == 1 else many
+
+
+def _chess_stats() -> int:
+    """What the record says, and where it is.
+
+    Separately per world, never pooled: a game against itself has an
+    opponent that shares MANA's evaluation and its blind spots, a game
+    against a stranger does not, and an average over both is a number
+    about nothing.
+    """
+    from .cognition import chess_bot, chess_judge
+
+    rows = chess_bot.recorded()
+    path = chess_bot.games_path()
+    print(f"запись партий: {path}")
+    if not rows:
+        print("пока пусто. Сыграть с собой и посмотреть:  mana.cmd --chess 1")
+        return 0
+    engine = chess_judge.engine_path()
+    print(f"судья: {'Stockfish, ' + str(engine) if engine else 'материальный (движка нет)'}")
+    print()
+    named = {chess_bot.LOCAL: "сама с собой", chess_bot.LIVE: "на lichess"}
+    figures = chess_bot.stats(rows)
+    for source, row in figures["by_source"].items():
+        print(f"=== {named.get(source, source)}: {row['games']} "
+              f"{_plural(row['games'], 'партия', 'партии', 'партий')}, "
+              f"{row['moves']} своих "
+              f"{_plural(row['moves'], 'ход', 'хода', 'ходов')} ===")
+        if row["judged"]:
+            print(f"  средняя потеря      {row['mean_loss']:.0f}")
+            print(f"  ошибок (>=100)      {row['mistakes']} "
+                  f"({row['mistakes'] / row['judged']:.0%} из {row['judged']})")
+            print(f"  зевков (>=300)      {row['blunders']} "
+                  f"({row['blunders'] / row['judged']:.0%} из {row['judged']})")
+        else:
+            print("  судья не работал — потери не измерены")
+        print(f"  ходов без отрыва    {row['close_calls']} "
+              f"({row['close_share']:.0%}) — выбор решил жребий")
+        print(f"  исходы:             {row['results']}")
+        print()
+    return 0
+
+
+def _chess(games: int, port: int = 0) -> int:
+    """Play against itself with the window open.
+
+    Here because the window was reachable only through `--lichess N`,
+    which stops before opening it when the account is not yet a bot --
+    so the board, the reasoning panel and the judge had no way to be
+    seen at all. The frames are the ones the live bot emits, not a demo
+    that resembles them, so what is watched here is what will be watched
+    there.
+    """
+    from .cognition import chess_bot, chess_watch
+
+    if games <= 0:
+        return _chess_stats()
+
+    httpd = None
+    try:
+        httpd = chess_watch.start(port or chess_watch.DEFAULT_PORT)
+        print(f"окно: {chess_watch.url(httpd)}")
+    except OSError as exc:
+        print(f"окно не открылось ({exc}); играю без него")
+    events.install_console_sink()
+    print(f"Играю {games} {_plural(games, 'партию', 'партии', 'партий')} "
+          f"сама с собой. Ctrl+C — остановить.")
+    try:
+        played = chess_bot.play_locally(games)
+    except KeyboardInterrupt:
+        print("остановлено")
+        played = []
+    for seat in played:
+        row = chess_bot.summarise(seat)
+        print(f"{seat.game_id}: {seat.status} {seat.winner}  "
+              f"ходов {row['moves']}, ошибок {row['mistakes']}, "
+              f"зевков {row['blunders']}, жребием {row['close_share']:.0%}")
+    print(f"записано в {chess_bot.games_path()}")
+    if httpd is not None:
+        # The window stays up on purpose: the last position and the last
+        # reasoning panel are the part worth looking at, and closing the
+        # server the moment the game ends takes them away exactly then.
+        try:
+            input("окно открыто. Enter — закрыть. ")
+        except (EOFError, KeyboardInterrupt):
+            pass
+        httpd.shutdown()
+    return 0
+
+
 def _read_secret(prompt: str) -> str:
     """Read a secret with something on screen while it is typed.
 
@@ -496,11 +599,8 @@ def _lichess(games: int, port: int = 0, watch: bool = True) -> int:
     if not state.get("bot"):
         return 1
     if games <= 0:
-        path = chess_bot.games_path()
-        played = sum(1 for _ in path.open(encoding="utf-8")) if path.exists() else 0
-        print(f"сыграно и записано: {played}   {path}")
-        print("Играть:  MANA.exe --lichess 1")
-        return 0
+        print()
+        return _chess_stats()
 
     httpd = None
     if watch:
@@ -978,6 +1078,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tried", action="store_true",
                         help="Что уже проверяли и чем это кончилось "
                              "(чтобы не повторять эксперимент заново)")
+    parser.add_argument("--chess", nargs="?", const=0, type=int, metavar="N",
+                        help="Сыграть N партий с собой в окне наблюдения "
+                             "(доска, размышления, оценка судьи); "
+                             "без числа — статистика по записанным партиям")
     parser.add_argument("--lichess-token", action="store_true",
                         dest="lichess_token",
                         help="Ввести токен lichess.org и сохранить его в "
@@ -1083,6 +1187,8 @@ def main() -> int:
     if args.tried:
         return _show_tried()
 
+    if args.chess is not None:
+        return _chess(int(args.chess), int(args.watch_port))
     if args.lichess_token:
         return _lichess_token()
     if args.lichess is not None:

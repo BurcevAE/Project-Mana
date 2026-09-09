@@ -469,3 +469,116 @@ def test_a_secret_read_from_a_pipe_says_it_was_not_typed(monkeypatch, capsys):
     monkeypatch.setattr(cli.sys, "stdin", io.StringIO("lip_abc123\n"))
     assert cli._read_secret("токен: ") == "lip_abc123"
     assert "не с клавиатуры" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------
+# a game to watch without an account
+# --------------------------------------------------------------------------
+
+def test_playing_locally_needs_no_client_and_no_account():
+    """The window was reachable only through the live command, which
+    stops before opening it when the account is not yet a bot -- so the
+    board, the reasoning panel and the judge could not be seen at all."""
+    played = chess_bot.play_locally(games=1, depth=1, judge_depth=0,
+                                    pause=0.0, record=False)
+    assert len(played) == 1
+    seat = played[0]
+    assert seat.source == chess_bot.LOCAL
+    assert seat.moves and seat.thoughts
+    assert seat.status in ("mate", "draw", "stopped")
+
+
+def test_a_local_game_emits_the_frames_the_live_bot_emits():
+    """A window that shows one world differently from the other is one
+    you cannot compare two runs in."""
+    from mana import events
+
+    seen = []
+    sink = events.subscribe(lambda e: seen.append((e.data or {}).get("chess")))
+    try:
+        chess_bot.play_locally(games=1, depth=1, judge_depth=0, pause=0.0,
+                               record=False)
+    finally:
+        events.unsubscribe(sink)
+    frames = [f for f in seen if f]
+    assert frames
+    keys = {"kind", "fen", "us", "turn", "ply", "last", "last_uci",
+            "thought", "judged", "summary", "source"}
+    assert keys <= set(frames[-1])
+    assert {f["kind"] for f in frames} <= {"position", "move", "over"}
+
+
+def test_only_the_judged_side_becomes_a_log_entry():
+    """The log is decisions with a margin and a cost beside each. An
+    entry with neither is a blank row that reads as a defect."""
+    from mana import events
+
+    moves = []
+    sink = events.subscribe(
+        lambda e: moves.append((e.data or {}).get("chess") or {}))
+    try:
+        chess_bot.play_locally(games=1, depth=1, judge_depth=0, pause=0.0,
+                               record=False)
+    finally:
+        events.unsubscribe(sink)
+    for frame in [f for f in moves if f.get("kind") == "move"]:
+        assert frame["thought"], frame["last"]
+
+
+def test_a_local_game_has_no_lichess_url():
+    seat = chess_bot.Seat(game_id="local-1", source=chess_bot.LOCAL)
+    assert seat.url == ""
+    assert chess_bot.Seat(game_id="abc").url.endswith("/abc")
+
+
+# --------------------------------------------------------------------------
+# what the record adds up to
+# --------------------------------------------------------------------------
+
+def test_the_two_worlds_are_counted_apart():
+    """A game against itself has an opponent sharing its evaluation and
+    its blind spots; a game against a stranger does not. An average over
+    both is a number about nothing."""
+    rows = [
+        {"source": chess_bot.LOCAL, "status": "draw", "winner": "",
+         "thoughts": [{"close_call": True}, {"close_call": False}],
+         "judged": [{"loss": 0.0}, {"loss": 400.0, "mistake": True,
+                                    "blunder": True}]},
+        {"source": chess_bot.LIVE, "status": "mate", "winner": "black",
+         "thoughts": [{"close_call": False}],
+         "judged": [{"loss": 100.0, "mistake": True}]}]
+    figures = chess_bot.stats(rows)
+    assert figures["games"] == 2
+    local = figures["by_source"][chess_bot.LOCAL]
+    live = figures["by_source"][chess_bot.LIVE]
+    assert local["mean_loss"] == 200.0 and live["mean_loss"] == 100.0
+    assert local["close_share"] == 0.5 and live["close_share"] == 0.0
+    assert local["blunders"] == 1 and live["blunders"] == 0
+    assert live["results"] == {"mate black": 1}
+
+
+def test_every_count_carries_its_denominator():
+    """"23 зевка" is not a fact until it says out of how many moves."""
+    figures = chess_bot.stats([
+        {"source": chess_bot.LIVE, "thoughts": [{"close_call": False}],
+         "judged": [{"loss": 0.0}]}])
+    row = figures["by_source"][chess_bot.LIVE]
+    assert row["judged"] == 1 and row["moves"] == 1 and row["games"] == 1
+
+
+def test_a_half_written_line_does_not_lose_the_rest(tmp_path, monkeypatch):
+    """A run killed mid-write leaves one broken line, and losing every
+    game recorded before it would be the wrong response to that."""
+    path = tmp_path / "games.jsonl"
+    path.write_text('{"source": "local", "moves": []}\n{"source": "liv\n'
+                    '{"source": "lichess", "moves": []}\n', encoding="utf-8")
+    monkeypatch.setattr(chess_bot, "games_path", lambda: path)
+    rows = chess_bot.recorded()
+    assert len(rows) == 2
+    assert chess_bot.stats(rows)["games"] == 2
+
+
+def test_no_record_is_an_empty_answer_not_a_crash(tmp_path, monkeypatch):
+    monkeypatch.setattr(chess_bot, "games_path", lambda: tmp_path / "nope.jsonl")
+    assert chess_bot.recorded() == []
+    assert chess_bot.stats()["games"] == 0
