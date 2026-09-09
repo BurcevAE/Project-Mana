@@ -374,26 +374,84 @@ def _acquire_capability(name: str, consented: bool) -> int:
     return 0
 
 
+def _read_secret(prompt: str) -> str:
+    """Read a secret with something on screen while it is typed.
+
+    `getpass` shows nothing at all -- not even a moving cursor -- and the
+    first person to meet this prompt reported that it "does not let me
+    type". It did; there was simply no evidence of it. A secret must not
+    be echoed, but "nothing is happening" and "your keystrokes are being
+    taken" have to look different, so this echoes one asterisk per
+    character.
+
+    Backspace works, Ctrl+C aborts, and the arrow keys are swallowed
+    rather than inserted as escape junk into the middle of a token.
+
+    Not a console at all -- piped input, a redirected handle -- is
+    answered by reading the line and saying so, instead of blocking on a
+    prompt nobody can see.
+    """
+    import sys
+
+    if not sys.stdin.isatty():
+        line = sys.stdin.readline()
+        if not line:
+            raise EOFError("ввод недоступен")
+        print("(ввод получен не с клавиатуры)")
+        return line.strip()
+
+    try:
+        import msvcrt
+    except ImportError:                       # not Windows
+        import getpass
+
+        return getpass.getpass(prompt)
+
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+    typed = []
+    while True:
+        char = msvcrt.getwch()
+        if char in ("\r", "\n"):
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            return "".join(typed)
+        if char == "\x03":
+            raise KeyboardInterrupt
+        if char in ("\x00", "\xe0"):    # an arrow or function key
+            msvcrt.getwch()                   # eat the second half
+            continue
+        if char == "\b":
+            if typed:
+                typed.pop()
+                sys.stdout.write("\b \b")
+                sys.stdout.flush()
+            continue
+        typed.append(char)
+        sys.stdout.write("*")
+        sys.stdout.flush()
+
+
 def _lichess_token() -> int:
     """Store the Lichess token, without it ever being a visible string.
 
     Typed rather than passed as an argument: a command line is readable
     by any process running as this user, which is the same reason 1C
-    passwords are never put on one. `getpass` does not echo it, it does
-    not reach the shell history, and it goes straight to Windows
-    Credential Manager -- never to a file and never to the repository.
+    passwords are never put on one. It does not reach the shell history,
+    and it goes straight to Windows Credential Manager -- never to a file
+    and never to the repository.
     """
-    import getpass
-
     from .net import lichess
 
-    print(f"Токен lichess.org (не отображается). Пустая строка — удалить "
-          f"сохранённый.\n"
-          f"Права, которые нужны: {', '.join(lichess.SCOPES)}")
+    print("Вставьте токен lichess.org и нажмите Enter.")
+    print("Вместо символов будут звёздочки — так и должно быть. "
+          "Вставка правой кнопкой или Ctrl+V работает.")
+    print(f"Нужные права: {', '.join(lichess.SCOPES)}")
+    print("Пустая строка — удалить сохранённый токен.")
     try:
-        value = getpass.getpass("токен: ")
+        value = _read_secret("токен: ")
     except (EOFError, KeyboardInterrupt):
-        print("\nотменено")
+        print("отменено")
         return 1
     result = lichess.save_token(value)
     if not result["ok"]:

@@ -404,3 +404,68 @@ def test_the_command_stops_before_playing_when_the_account_is_not_a_bot(capsys):
         lichess.Lichess = original
     out = capsys.readouterr().out
     assert "curl" in out and "бот: нет" in out
+
+
+# --------------------------------------------------------------------------
+# what actually gets pasted
+# --------------------------------------------------------------------------
+
+def test_invisible_characters_are_removed_from_a_token():
+    """Found by running it. PowerShell piped what looked like an empty
+    string and delivered a byte-order mark; it survived `.strip()`, was
+    taken for a token, reached an Authorization header and came back as a
+    latin-1 codec error four frames inside urllib3. A token copied from a
+    web page with a zero-width space in it does the same.
+    """
+    assert lichess.clean("\ufeff") == ""
+    assert lichess.clean(" \ufefflip_abc123\u200b ") == "lip_abc123"
+
+
+def test_a_token_that_cannot_be_sent_is_refused_with_a_reason():
+    assert lichess.usable("lip_abc123") == ""
+    wrong = lichess.usable("lip_абв")
+    assert "скопировалось лишнее" in wrong
+    assert "codec" not in wrong                 # not urllib3's message
+
+
+def test_an_unsendable_token_is_never_stored(monkeypatch):
+    """Refused before the credential store is touched, so a bad paste
+    does not become a saved state that fails on every later run."""
+    keyring = pytest.importorskip("keyring")
+    stored = []
+    monkeypatch.setattr(keyring, "set_password",
+                        lambda *a: stored.append(a))
+    monkeypatch.delenv(lichess.TOKEN_ENV, raising=False)
+
+    result = lichess.save_token("lip_абв")
+    assert result["ok"] is False and "скопировалось" in result["error"]
+    assert stored == []
+    assert lichess.TOKEN_ENV not in __import__("os").environ
+
+    assert lichess.save_token("lip_abc123")["ok"] is True
+    assert stored == [("MANA", lichess.TOKEN_ENV, "lip_abc123")]
+
+
+def test_a_broken_token_is_reported_as_a_state_not_a_traceback():
+    state = lichess.Lichess(bearer="lip_абв").describe()
+    assert "скопировалось лишнее" in state["error"]
+    assert "user" not in state                  # nothing was asked of Lichess
+
+
+def test_the_request_layer_refuses_a_token_it_cannot_put_in_a_header():
+    client = lichess.Lichess(bearer="lip_абв", session=_Session([]))
+    with pytest.raises(lichess.LichessError) as raised:
+        client._request("GET", "/api/account")
+    assert "скопировалось лишнее" in str(raised.value)
+
+
+def test_a_secret_read_from_a_pipe_says_it_was_not_typed(monkeypatch, capsys):
+    """A prompt nobody can see, blocking on input that will never come,
+    is the failure this branch exists to avoid."""
+    import io
+
+    from mana import cli
+
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO("lip_abc123\n"))
+    assert cli._read_secret("токен: ") == "lip_abc123"
+    assert "не с клавиатуры" in capsys.readouterr().out

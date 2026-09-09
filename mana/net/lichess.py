@@ -89,6 +89,43 @@ class NoToken(LichessError):
     remedy, and the remedy is named in the message."""
 
 
+#: Characters that ride along invisibly when a token is copied from a web
+#: page or piped through a shell: a byte-order mark, the zero-width
+#: family, and the non-breaking space. None can appear in an HTTP header,
+#: and `strip()` removes none of them.
+INVISIBLE = "\ufeff\u200b\u200c\u200d\u2060\u00a0"
+
+
+def clean(value: str) -> str:
+    """A token as it was meant to be pasted.
+
+    Whitespace and invisible characters removed -- not to be forgiving,
+    but because the alternative is an unreadable failure a long way from
+    the cause.
+    """
+    for char in INVISIBLE:
+        value = value.replace(char, "")
+    return value.strip()
+
+
+def usable(value: str) -> str:
+    """"" if the token can be sent, otherwise why it cannot.
+
+    An HTTP header is latin-1 at best, and a token with anything else in
+    it fails inside urllib3 with a message about codecs. Checked here,
+    where the answer is "скопировалось лишнее" rather than a traceback.
+    """
+    if not value:
+        return "токен пуст"
+    if not value.isascii():
+        odd = sorted({repr(c) for c in value if not c.isascii()})
+        return ("в токене есть символы, которых в нём быть не может "
+                f"({', '.join(odd)}) — вероятно, скопировалось лишнее")
+    if not value.isprintable():
+        return "в токене есть управляющие символы — вероятно, скопировалось лишнее"
+    return ""
+
+
 def token() -> str:
     """The token, from the environment or the OS credential store.
 
@@ -97,7 +134,7 @@ def token() -> str:
     "is there a token" is a question with an answer, and the callers that
     need one raise their own refusal with the remedy attached.
     """
-    found = os.environ.get(TOKEN_ENV, "").strip()
+    found = clean(os.environ.get(TOKEN_ENV, ""))
     if found:
         return found
     try:
@@ -106,7 +143,7 @@ def token() -> str:
         stored = keyring.get_password(KEYRING_SERVICE, TOKEN_ENV)
     except Exception:
         return ""
-    return (stored or "").strip()
+    return clean(stored or "")
 
 
 def save_token(value: str) -> Dict[str, Any]:
@@ -115,7 +152,11 @@ def save_token(value: str) -> Dict[str, Any]:
     The value is never returned, logged or written to a file. Empty
     removes it.
     """
-    value = (value or "").strip()
+    value = clean(value or "")
+    if value:
+        wrong = usable(value)
+        if wrong:
+            return {"ok": False, "error": wrong}
     try:
         import keyring
 
@@ -225,6 +266,9 @@ class Lichess:
             raise NoToken(
                 f"нет токена: задайте {TOKEN_ENV} в окружении или сохраните "
                 "его в диспетчере учётных данных Windows")
+        wrong = usable(self.bearer)
+        if wrong:
+            raise LichessError(wrong)
 
     def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         """One call, with the documented pause after a 429.
@@ -296,6 +340,11 @@ class Lichess:
         not as a failure.
         """
         out: Dict[str, Any] = {"token": bool(self.bearer), "env": TOKEN_ENV}
+        if self.bearer:
+            wrong = usable(self.bearer)
+            if wrong:
+                out["error"] = wrong
+                return out
         if not self.bearer:
             out["note"] = (f"нет токена: задайте {TOKEN_ENV} или сохраните "
                            "его в диспетчере учётных данных")
