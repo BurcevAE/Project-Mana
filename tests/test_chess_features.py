@@ -1,4 +1,4 @@
-"""What the board said, with nothing added.
+"""What the board said, with nothing added, and no engine asked.
 
 The point of this module is what it refuses to do, so most of these tests
 are about absences: no threshold, no band, no field named for a
@@ -103,6 +103,16 @@ def test_the_result_is_told_from_the_side_that_moved():
     assert {row.outcome for row in drawn} == {feat.DRAWN}
 
 
+def test_the_bench_no_longer_pays_for_a_judge_nothing_reads():
+    """It was most of the cost of a self-play game, and self-play games
+    are the thing outcome-based analysis needs more of. The judge is not
+    deleted -- it stays an external check for a separate question."""
+    from mana.cognition import chess_bot, chess_judge
+
+    assert chess_bot.LIVE_JUDGE_DEPTH == 0
+    assert chess_judge.JUDGE_DEPTH > 0
+
+
 def test_the_opponents_search_is_absent_not_invented():
     """We do not see the opponent think. Its trace fields stay at their
     empty defaults rather than being filled with a guess."""
@@ -156,51 +166,60 @@ def test_the_outcome_is_from_manas_side():
 # horizons
 # --------------------------------------------------------------------------
 
-def _judged(plies, scores):
-    return [{"ply": ply, "score_after": score, "score_before": score,
-             "loss": 0.0, "judged_by": "stockfish"}
-            for ply, score in zip(plies, scores)]
+def test_no_engine_verdict_reaches_the_features():
+    """Centipawn loss is a stronger player's opinion, it exists only where
+    somebody paid for it -- 0 of 23452 opponent moves had one -- and
+    self-knowledge built on it is knowledge of what Stockfish thinks."""
+    fields = feat.Move("g", 1).as_dict()
+    for borrowed in ("loss", "score", "judged", "cp", "eval"):
+        assert not any(borrowed in name for name in fields), borrowed
+    import inspect
+
+    assert "chess_judge" not in inspect.getsource(feat)
 
 
-def test_later_evaluations_come_from_scores_already_recorded():
-    """Centipawn loss answers "was this worse than the best move" and
-    nothing else. It cannot see a move that is fine now and ruinous in six
-    plies -- which is the mistake a two-ply search makes by construction."""
-    game = _game(SCHOLARS, judged=_judged([1, 3, 5, 7], [10, 40, -60, -900]))
-    mine = [row for row in feat.observe(game) if row.ours]
-    assert mine[0].later[1] == 30.0                       # 40 - 10
-    assert mine[0].later[3] == -910.0                     # -900 - 10
-    assert mine[1].later[1] == -100.0
+def test_the_consequence_is_the_result_and_both_sides_carry_it():
+    """Symmetric by construction: a game one side won is one the other
+    lost, so every move of both players has it, over every game already
+    played, with no engine and nothing to re-judge."""
+    moves = feat.observe(_game(SCHOLARS, winner="white"))
+    assert all(row.outcome in (feat.WON, feat.LOST) for row in moves)
+    assert {row.outcome for row in moves if row.ours} == {feat.WON}
+    assert {row.outcome for row in moves if not row.ours} == {feat.LOST}
+
+
+def test_horizons_are_material_and_need_nothing_bought():
+    """A count, not a verdict. 1.e4 e5 2.Qh5 Nc6 3.Bc4 Nf6 4.Qxf7#: white
+    is level until the mate takes a pawn."""
+    mine = [row for row in feat.observe(_game(SCHOLARS)) if row.ours]
+    assert mine[0].material == 0
+    assert mine[0].later[1] == 0.0                     # still level next move
+    assert mine[-1].later[1] is None                   # game ended first
 
 
 def test_a_horizon_counts_moves_by_the_same_side():
     """With both players in one list, "one move later" has to mean one
     move by the same player, or a horizon compares a position to one the
     other side was looking at."""
-    both = _judged([1, 3, 5, 7], [10, 40, -60, -900])
-    both += _judged([2, 4, 6], [-5, -30, 70])
-    moves = feat.observe(_game(SCHOLARS, judged=both))
+    # 1.e4 d5 2.exd5 Qxd5: white is +1 after the capture, level after the
+    # recapture; black is level, then -1, then level again.
+    moves = feat.observe(_game(["e2e4", "d7d5", "e4d5", "d8d5"], winner=""))
     mine = [row for row in moves if row.ours]
     theirs = [row for row in moves if not row.ours]
-    assert mine[0].later[1] == 30.0                       # 40 - 10, mine
-    assert theirs[0].later[1] == -25.0                    # -30 - -5, theirs
+    assert mine[0].material == 0 and mine[1].material == 0
+    assert mine[0].later[1] == 0.0                     # white, one own move on
+    assert theirs[0].material == 0 and theirs[1].material == -1
+    assert theirs[0].later[1] == -1.0                  # black, its own next
 
 
 def test_a_horizon_past_the_end_is_absent_not_zero():
     """An unmeasured horizon is not a horizon at which nothing changed --
     the rule this project states everywhere else."""
-    game = _game(SCHOLARS, judged=_judged([1, 3, 5, 7], [10, 40, -60, -900]))
-    moves = feat.observe(game)
+    moves = feat.observe(_game(SCHOLARS))
     mine = [row for row in moves if row.ours]
     assert mine[-1].later[1] is None
     assert mine[-1].later[3] is None
-    assert mine[0].as_dict()["after_10"] is None
-
-
-def test_an_unjudged_move_has_no_horizons():
-    moves = feat.observe(_game(SCHOLARS))
-    assert all(row.loss is None for row in moves)
-    assert all(row.later[n] is None for row in moves for n in feat.HORIZONS)
+    assert mine[0].as_dict()["material_after_10"] is None
 
 
 # --------------------------------------------------------------------------
@@ -211,7 +230,7 @@ def test_observing_writes_nothing_into_the_record():
     """A new observable applies to every game ever played the moment it
     is written, and a feature cannot drift out of agreement with the game
     it describes."""
-    game = _game(SCHOLARS, judged=_judged([1, 3], [10, 40]))
+    game = _game(SCHOLARS)
     before = dict(game)
     feat.observe(game)
     assert game == before
@@ -229,8 +248,7 @@ def test_a_damaged_game_does_not_lose_the_others():
 def test_the_summary_carries_its_denominator_and_ranks_nothing():
     """Sorting observables by anything is the first step of deciding
     which one matters, and that decision is not this layer's."""
-    game = _game(SCHOLARS, judged=_judged([1, 3, 5, 7], [10, 40, -60, -900]))
-    text = feat.describe(feat.observe(game))
+    text = feat.describe(feat.observe(_game(SCHOLARS)))
     assert "ходов всего: 7" in text
     assert "MANA 4" in text and "соперника 3" in text
     assert "известно" in text

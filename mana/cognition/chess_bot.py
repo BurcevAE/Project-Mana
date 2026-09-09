@@ -80,11 +80,13 @@ LIVE = "lichess"
 #: silently would make the next measurement a comparison against nothing.
 PLAY_DEPTH = 2
 
-#: Judge depth during a game. Lower than `chess_judge.JUDGE_DEPTH`
-#: because this one runs while a clock is going; the games are stored, so
-#: the same moves can be judged again deeper afterwards without being
-#: played again.
-LIVE_JUDGE_DEPTH = 8
+#: Judge depth during a game. Zero: the analysis reads the result of the
+#: game, not a stronger player's opinion of each move, so paying an engine
+#: per move buys a number nothing reads -- and it was most of the cost of
+#: a self-play game, which is the thing outcome-based analysis needs more
+#: of. The judge is not deleted: it remains an external check for a
+#: separate question, and `--chess-rejudge` still calls it on demand.
+LIVE_JUDGE_DEPTH = 0
 
 #: A game nobody moves in. Lichess ends abandoned games on its own; this
 #: is only so a dead stream cannot hold a thread forever.

@@ -32,20 +32,28 @@ applies to every game ever played the moment it is written, without
 replaying anything; and a feature cannot drift out of agreement with the
 game it describes, because it is recomputed from that game every time.
 
-Horizons
----------
-Centipawn loss answers "was this move worse than the best one" and nothing
-else. It cannot see a move that is fine now and ruinous in six plies, and
-a two-ply search makes exactly that mistake by construction. The judge
-already stored an engine score at every one of MANA's moves, so the later
-scores are in the record already: `after(n)` is the evaluation n of MANA's
-own moves later, and `outcome` is how the game ended. No new judging, no
-new games.
+No engine, and the result is the consequence
+---------------------------------------------
+Nothing here asks a stronger player what a move was worth. Centipawn loss
+is Stockfish's opinion, it exists only where somebody paid for it -- 0 of
+23452 opponent moves had one -- and self-knowledge built on it is
+knowledge of what Stockfish thinks rather than of what happened.
 
-    короткий      сколько стоил ход прямо сейчас
-    средний       что стало через 2 и 6 своих ходов
-    длинный       что стало через 20
+The result of the game is neither borrowed nor one-sided: a game one side
+won is one the other lost, so both players carry it, on every move, over
+every game already played.
+
+    материал      счёт фигур, свой для того, кто ходит
+    через N       каким стал этот счёт через N своих ходов
     эпизод        чем кончилась партия
+
+The cost is real: a game is sixty moves and one bit, so four hundred games
+are four hundred observations rather than twenty-three thousand, and a
+feature has to be common and lopsided before anything can be said about
+it. The compensation is also real, and only self-play has it: the opponent
+is the same player, so anything appearing equally on both sides cannot
+correlate with the result at all. A whole class of spurious features dies
+without anybody deciding it was spurious.
 
 What it does not do
 --------------------
@@ -68,8 +76,8 @@ __version__ = "1.1"
 #: has to use some scale.
 PIECE_VALUE = {1: 1, 2: 3, 3: 3, 4: 5, 5: 9, 6: 0}
 
-#: How far ahead the later evaluations are read, in MANA's own moves.
-#: Three numbers rather than one because a move that is fine now and
+#: How far ahead the later material is read, in the mover's own moves.
+#: Three numbers rather than one because a move that looks even now and
 #: ruinous later is invisible to the first, and which distance matters is
 #: not something to decide in advance.
 HORIZONS = (1, 3, 10)
@@ -117,14 +125,12 @@ class Move:
     margin: float = 0.0
     nodes: int = 0
     depth: int = 0
-    #: Facts the judge supplied. None where it did not judge.
-    score_before: Optional[int] = None
-    score_after: Optional[int] = None
-    loss: Optional[float] = None
-    judged_by: str = ""
-    #: Later evaluations, in MANA's own moves: {1: delta, 3: delta, ...}.
-    #: Absent where the game ended before that horizon.
+    #: How the mover's own material stood n of its own moves later, minus
+    #: what it is now. A count, available for both sides without an
+    #: engine. Absent where the game ended before that horizon -- an
+    #: unmeasured horizon is not one at which nothing changed.
     later: Dict[int, Optional[float]] = field(default_factory=dict)
+    #: The consequence: how the game ended, from the mover's side.
     outcome: str = UNFINISHED
 
     def as_dict(self) -> Dict[str, Any]:
@@ -133,9 +139,8 @@ class Move:
             "legal_moves", "material",
             "our_pieces", "their_pieces", "in_check", "piece", "is_capture",
             "captured", "is_promotion", "gives_check", "considered",
-            "tied_at_top", "margin", "nodes", "depth", "score_before",
-            "score_after", "loss", "judged_by", "outcome")}
-        row.update({f"after_{n}": self.later.get(n) for n in HORIZONS})
+            "tied_at_top", "margin", "nodes", "depth", "outcome")}
+        row.update({f"material_after_{n}": self.later.get(n) for n in HORIZONS})
         return row
 
 
@@ -188,7 +193,6 @@ def observe(game: Dict[str, Any]) -> List[Move]:
     us = str(game.get("us", "white")) == "white"
     start = str(game.get("initial_fen", "startpos"))
     board = chess.Board() if start in ("", "startpos") else chess.Board(start)
-    judged = {int(row.get("ply", 0)): row for row in game.get("judged", [])}
     traced = {int(row.get("ply", 0)): row for row in game.get("thoughts", [])}
     outcome = _outcome(game)
 
@@ -204,7 +208,6 @@ def observe(game: Dict[str, Any]) -> List[Move]:
         piece = board.piece_at(move.from_square)
         taken = board.piece_at(move.to_square)
         ours, theirs = _counts(board, mover)
-        verdict = judged.get(index, {})
         trace = traced.get(index, {})
         scores = [score for _, score in trace.get("considered", [])]
         top = max(scores) if scores else 0.0
@@ -224,10 +227,6 @@ def observe(game: Dict[str, Any]) -> List[Move]:
             tied_at_top=sum(1 for score in scores if score == top),
             margin=float(trace.get("margin", 0.0)),
             nodes=int(trace.get("nodes", 0)), depth=int(trace.get("depth", 0)),
-            score_before=verdict.get("score_before"),
-            score_after=verdict.get("score_after"),
-            loss=verdict.get("loss"),
-            judged_by=str(verdict.get("judged_by", "")),
             outcome=_from(outcome, mover == us))
         board.push(move)
         row.gives_check = board.is_check()
@@ -238,28 +237,25 @@ def observe(game: Dict[str, Any]) -> List[Move]:
 
 
 def _fill_horizons(moves: Sequence[Move]) -> None:
-    """How the evaluation stood n of MANA's own moves later.
+    """How the mover's own material stood n of its own moves later.
 
-    Read from scores the judge already stored, so no position is analysed
-    twice and no game is replayed against an engine. Absent rather than
-    zero where the game ended first: an unmeasured horizon is not a
-    horizon at which nothing changed.
+    A count rather than an engine's verdict: it exists for both sides,
+    over every game already played, and needs nothing bought. Absent
+    rather than zero where the game ended first -- an unmeasured horizon
+    is not a horizon at which nothing changed.
     """
     # Per side. With both players in one list, "n moves later" has to mean
     # n moves by the same player, or a horizon would compare a position to
     # one the other side was looking at.
     for side in (True, False):
         mine = [row for row in moves if row.ours is side]
-        scores = [row.score_after for row in mine]
+        counts = [row.material for row in mine]
         for index, row in enumerate(mine):
-            if row.score_after is None:
-                row.later = {n: None for n in HORIZONS}
-                continue
             for n in HORIZONS:
                 ahead = index + n
-                later = scores[ahead] if ahead < len(scores) else None
+                later = counts[ahead] if ahead < len(counts) else None
                 row.later[n] = (None if later is None
-                                else float(later - row.score_after))
+                                else float(later - row.material))
 
 
 def observe_all(games: Sequence[Dict[str, Any]]) -> List[Move]:
@@ -281,12 +277,11 @@ def describe(moves: Sequence[Move]) -> str:
     """
     if not moves:
         return "наблюдений нет"
-    judged = [row for row in moves if row.loss is not None]
     ours = [row for row in moves if row.ours]
+    decided = [row for row in moves if row.outcome in (WON, LOST)]
     lines = [f"ходов всего: {len(moves)} (из них MANA {len(ours)}, "
-             f"соперника {len(moves) - len(ours)}), судимых: {len(judged)}",
-             f"  судимых у MANA: {sum(1 for r in ours if r.loss is not None)}, "
-             f"у соперника: {sum(1 for r in moves if not r.ours and r.loss is not None)}",
+             f"соперника {len(moves) - len(ours)})",
+             f"  с известным исходом: {len(decided)}",
              f"партий: {len({row.game for row in moves})}"]
     for name in ("legal_moves", "material", "our_pieces", "considered",
                  "tied_at_top"):
@@ -295,8 +290,8 @@ def describe(moves: Sequence[Move]) -> str:
                      f"{sorted(values)[len(values) // 2]}, макс {max(values)}")
     for n in HORIZONS:
         known = [row.later.get(n) for row in moves if row.later.get(n) is not None]
-        lines.append(f"  через {n:>2} своих ходов: известно {len(known)} "
-                     f"из {len(moves)}")
+        lines.append(f"  материал через {n:>2} своих ходов: известно "
+                     f"{len(known)} из {len(moves)}")
     kinds: Dict[str, int] = {}
     for row in moves:
         kinds[row.outcome] = kinds.get(row.outcome, 0) + 1
