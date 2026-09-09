@@ -164,6 +164,8 @@ class Sides:
     game: str
     source: str = ""
     level: int = 0
+    #: The player that played it. Never pooled with another.
+    player_version: int = 0
     #: {(property, window): value} for each side.
     ours: Dict[Tuple[str, str], Optional[float]] = field(default_factory=dict)
     theirs: Dict[Tuple[str, str], Optional[float]] = field(default_factory=dict)
@@ -193,6 +195,7 @@ def reduce_game(game: Dict[str, Any]) -> Optional[Sides]:
     return Sides(
         game=str(game.get("game", "")), source=str(game.get("source", "")),
         level=int(game.get("level", 0) or 0),
+        player_version=int(game.get("player_version", 0) or 0),
         ours={(p.name, w): p.of(_window(ours, w))
               for p in PROPERTIES for w in WINDOWS},
         theirs={(p.name, w): p.of(_window(theirs, w))
@@ -275,6 +278,7 @@ def conditions(games: Sequence[Sides]) -> Dict[str, Any]:
             "decided": sum(1 for row in games if row.we_won is not None),
             "worlds": sorted({row.source for row in games}),
             "levels": sorted({row.level for row in games}),
+            "player_versions": sorted({row.player_version for row in games}),
             "version": PRODUCT_VERSION,
             "questions_asked": len(PROPERTIES) * len(WINDOWS)}
 
@@ -300,10 +304,14 @@ def look(games: Sequence[Sides], ledger: Optional[Any] = None,
         events.emit(events.WARNING,
                     f"не наблюдения, в счёт не идут: {len(outside)} партий "
                     f"из миров {sorted({row.source for row in outside})}")
-    worlds: Dict[str, List[Sides]] = {}
+    # By world and by version of the player. A game is evidence about the
+    # player that played it, so a finding computed across an adoption is
+    # about neither -- the same rule that keeps worlds apart, one layer
+    # up, and the one that makes adoption safe to do at all.
+    worlds: Dict[Tuple[str, int], List[Sides]] = {}
     for row in games:
         if row.source in chess_bot.OBSERVATIONAL:
-            worlds.setdefault(row.source, []).append(row)
+            worlds.setdefault((row.source, row.player_version), []).append(row)
 
     out: List[ledger_mod.Finding] = []
     for world in sorted(worlds):
@@ -348,7 +356,8 @@ def _note(prop: Property, measurement: Dict[str, Any],
 
 def state(out: Sequence[ledger_mod.Finding]) -> Dict[str, str]:
     """Verdict per property per world, for comparing two passes."""
-    return {f"{','.join(f.conditions.get('worlds', ['?']))}/"
+    return {f"{','.join(f.conditions.get('worlds', ['?']))}"
+            f"@{f.conditions.get('player_versions', [0])[0]}/"
             f"{f.approach['property']}/{f.approach.get('window', WHOLE)}":
             f.verdict for f in out}
 
@@ -367,7 +376,8 @@ def changes(before: Dict[str, str], after: Sequence[ledger_mod.Finding]
         if was == verdict:
             continue
         finding = next(f for f in after
-                       if f"{','.join(f.conditions.get('worlds', ['?']))}/"
+                       if f"{','.join(f.conditions.get('worlds', ['?']))}"
+                          f"@{f.conditions.get('player_versions', [0])[0]}/"
                           f"{f.approach['property']}/"
                           f"{f.approach.get('window', WHOLE)}" == key)
         moved = "новое" if was is None else f"{was} → {verdict}"

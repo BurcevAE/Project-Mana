@@ -248,3 +248,24 @@ def _no_ambient_findings(tmp_path_factory, monkeypatch):
     mark = _next_id()
     monkeypatch.setattr(findings, "ledger_path",
                         lambda: root / f"findings-{mark}.jsonl")
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_player_version(tmp_path_factory, monkeypatch):
+    """No test reads or writes the machine's adopted player.
+
+    An adoption is data on disk, so a suite that read it would pass or
+    fail by what this installation had adopted, and one that wrote it
+    would change the user's player from a test run. The same lesson as
+    the policy overlay, the installed rules, the game record and the
+    findings ledger -- four times now.
+    """
+    from mana.cognition import chess_version
+
+    root = _isolation_dir(tmp_path_factory)
+    mark = _next_id()
+    monkeypatch.setattr(chess_version, "path",
+                        lambda: root / f"player-{mark}.json")
+    chess_version._reset_for_tests()
+    yield
+    chess_version._reset_for_tests()

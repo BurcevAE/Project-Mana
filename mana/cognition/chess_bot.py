@@ -157,6 +157,11 @@ class Seat:
     status: str = "started"
     winner: str = ""
     source: str = LIVE
+    #: Which version of the player played this game. Zero is the player
+    #: as written. A game is evidence about the player that played it,
+    #: and a finding computed across an adoption is about neither.
+    player_version: int = 0
+    player_composition: str = "v0-base"
     #: The shuffle's seed, for a self-play game. Written down so a game
     #: can be replayed exactly, which is the only thing that made the
     #: repeated-game bug findable after the fact.
@@ -197,7 +202,8 @@ class Seat:
                 "us": "white" if self.us else "black",
                 "opponent": self.opponent, "initial_fen": self.initial_fen,
                 "moves": list(self.moves), "status": self.status,
-                "seed": self.seed,
+                "seed": self.seed, "player_version": self.player_version,
+                "player_composition": self.player_composition,
                 "winner": self.winner, "thoughts": self.thoughts,
                 "judged": self.judged, "started": self.started}
 
