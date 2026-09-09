@@ -505,7 +505,10 @@ def test_a_local_game_emits_the_frames_the_live_bot_emits():
     keys = {"kind", "fen", "us", "turn", "ply", "last", "last_uci",
             "thought", "judged", "summary", "source"}
     assert keys <= set(frames[-1])
-    assert {f["kind"] for f in frames} <= {"position", "move", "over"}
+    assert {f["kind"] for f in frames} <= {"ready", "position", "move", "over"}
+    # The run says which judge is about to work, before it works. Three
+    # real games were judged by the fallback and nothing said so out loud.
+    assert frames[0]["kind"] == "ready" and frames[0]["judge"]
 
 
 def test_only_the_judged_side_becomes_a_log_entry():

@@ -179,6 +179,18 @@ class Thought:
     nodes: int = 0
 
     @property
+    def forced(self) -> bool:
+        """One legal move. There was no decision to report on.
+
+        Separate from a close call because the repair is different and
+        because pooling them overstates the headline: a position with a
+        single legal reply was not "decided by lot", it was not decided.
+        Three of eighty-five moves in the first real games were forced and
+        every one of them was counted as a coin toss.
+        """
+        return len(self.considered) == 1
+
+    @property
     def margin(self) -> float:
         """How far ahead the chosen move was of the next one."""
         if len(self.considered) < 2:
@@ -187,7 +199,7 @@ class Thought:
 
     @property
     def close_call(self) -> bool:
-        return self.margin < 25.0
+        return not self.forced and self.margin < 25.0
 
     def describe(self, top: int = 4) -> str:
         rivals = ", ".join(f"{san} {score:+.0f}"
@@ -204,7 +216,8 @@ class Thought:
                                for san, score in self.considered],
                 "depth": self.depth, "nodes": self.nodes,
                 "margin": round(self.margin, 1),
-                "close_call": self.close_call}
+                "close_call": self.close_call,
+                "forced": self.forced}
 
 
 class SearchPlayer(Player):

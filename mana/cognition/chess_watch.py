@@ -265,6 +265,7 @@ PAGE = """<!doctype html>
   <h1>MANA играет</h1>
   <span class="dim" id="who">ожидание партии…</span>
   <a class="dim" id="link" href="#" target="_blank" rel="noopener"></a>
+  <span class="dim" id="judge"></span>
 </header>
 <main>
   <section class="panel">
@@ -363,7 +364,9 @@ function note(f){
 
 function apply(f){
   if(f.kind==="ready"){
-    document.getElementById("who").textContent="аккаунт "+(f.user||"")+", ждём вызова";
+    document.getElementById("who").textContent=
+      (f.user?("аккаунт "+f.user+", ждём вызова"):"готова");
+    if(f.judge) document.getElementById("judge").textContent=f.judge;
     return;
   }
   if(f.kind==="challenge"){

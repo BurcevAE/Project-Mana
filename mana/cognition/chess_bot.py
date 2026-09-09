@@ -222,8 +222,10 @@ class Bot:
             raise api.LichessError(
                 f"аккаунт {self.username} — не бот, играть через Bot API нельзя. "
                 f"Это делается один раз и необратимо: {api.upgrade_command()}")
-        events.emit(events.STATUS, f"Lichess: играю как {self.username}",
+        events.emit(events.STATUS,
+                    f"Lichess: играю как {self.username}; {judge_note(self.judge_depth)}",
                     chess={"kind": "ready", "user": self.username,
+                           "judge": judge_note(self.judge_depth),
                            "policy": self.policy.__dict__})
         try:
             for event in self.client.stream_events():
@@ -395,6 +397,25 @@ class Bot:
         write(seat)
 
 
+def judge_note(depth: int) -> str:
+    """Which judge is about to work, said before it does.
+
+    Three real games were judged by the fallback and nothing said so out
+    loud. Every row carried `judged_by: material` -- which is why that
+    field exists -- but a person watching a board saw "потеря 300" with no
+    author, and a number whose source cannot be told apart is a number
+    nobody can compare.
+    """
+    from . import chess_judge
+
+    if not depth:
+        return "судья выключен — потери не измеряются"
+    if chess_judge.engine_path():
+        return f"судья: Stockfish, глубина {depth}"
+    return ("судья: материальный запасной — Stockfish не найден, "
+            "потери сравнимы только между собой")
+
+
 def frame(seat: Seat, kind: str, san: str = "",
           thought: Optional[Dict[str, Any]] = None,
           judged: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -478,6 +499,8 @@ def play_locally(games: int = 1, depth: int = PLAY_DEPTH,
         from . import chess_judge
 
         judge = chess_judge.Judge(depth=judge_depth)
+    events.emit(events.STATUS, judge_note(judge_depth),
+                chess={"kind": "ready", "judge": judge_note(judge_depth)})
     played: List[Seat] = []
     try:
         for number in range(games):

@@ -110,6 +110,29 @@ def data_root() -> Path:
     return base / _APP_DIR_NAME.lower()
 
 
+def shared_data_root() -> Path:
+    """The per-user location, whether or not this run is frozen.
+
+    `data_root()` deliberately follows the working directory in a
+    checkout, so a development run keeps its memory beside the code. That
+    is right for state and wrong for something acquired once and shared by
+    every launch -- a downloaded engine, say. Looking a file up in both is
+    the difference between "MANA has no Stockfish" and "this shell does
+    not", and the first was reported for three real games where the second
+    was true.
+    """
+    override = os.environ.get(DATA_DIR_ENV, "").strip()
+    if override:
+        return Path(override).expanduser().resolve()
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+        root = Path(base) if base else Path.home() / "AppData" / "Local"
+        return root / _APP_DIR_NAME
+    xdg = os.environ.get("XDG_DATA_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".local" / "share"
+    return base / _APP_DIR_NAME.lower()
+
+
 def resolve_data_path(path: str | os.PathLike) -> Path:
     """Make a Config path absolute against `data_root()`.
 
