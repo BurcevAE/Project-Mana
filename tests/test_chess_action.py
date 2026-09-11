@@ -324,3 +324,266 @@ def _nowhere():
             return True
 
     return _Void()
+
+
+# --------------------------------------------------------------------------
+# composition: new levers out of the ones already derived
+# --------------------------------------------------------------------------
+
+def _ties_for(count=12):
+    """Real positions with several moves rated equal, from real games."""
+    import chess
+
+    from mana.cognition import chess_action
+    from mana.cognition.chess_arena import SearchPlayer
+
+    board = chess.Board()
+    player = SearchPlayer(depth=1, trace=True)
+    out = []
+    import random as _random
+
+    while len(out) < count and not board.is_game_over() and board.ply() < 120:
+        player.choose(board, _random.Random(1))
+        scores = getattr(player, "_root_scores", None) or []
+        if scores:
+            top = max(score for _, score in scores)
+            tied = [san for san, score in scores if score == top]
+            if len(tied) > 1:
+                out.append((board.copy(), tied))
+        board.push(_random.Random(board.ply()).choice(list(board.legal_moves)))
+    return out
+
+
+def test_a_composite_keeps_its_primary_ordering_and_breaks_the_rest():
+    """`A then B` is A wherever A speaks, and B only where A ties."""
+    import chess
+
+    from mana.cognition import chess_action
+
+    board = chess.Board("rnbqkbnr/ppp2ppp/8/3pp3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 0 3")
+    tied = [move for move in board.legal_moves]
+    pawns = chess_action.Change("pawn_moves", chess_action.MORE)
+    both = chess_action.Change("pawn_moves", chess_action.MORE,
+                               then=(("captures", chess_action.MORE),))
+    import random
+
+    picked_first = pawns.choose(board, tied, random.Random(3))
+    picked_both = both.choose(board, tied, random.Random(3))
+    assert board.piece_at(picked_first.from_square).piece_type == chess.PAWN
+    assert board.piece_at(picked_both.from_square).piece_type == chess.PAWN
+    assert board.is_capture(picked_both)          # the second key decided
+
+
+def test_a_primitive_identity_did_not_change_when_composition_arrived():
+    """Every refutation in the ledger was written against this dict. A
+    new key in it would silently reopen five answered questions."""
+    from mana.cognition import chess_action
+
+    change = chess_action.Change("pawn_moves", chess_action.LESS,
+                                 from_finding="obs-1")
+    assert change.identity() == {
+        "property": "pawn_moves", "direction": -1,
+        "what": "среди равных ходов выбирать тот, у которого "
+                "«pawn_moves» меньше"}
+
+
+def test_a_composite_has_its_own_identity():
+    from mana.cognition import chess_action
+
+    first = chess_action.Change("pawn_moves", chess_action.LESS)
+    both = chess_action.Change("pawn_moves", chess_action.LESS,
+                               then=(("captures", chess_action.MORE),))
+    assert both.identity() != first.identity()
+    assert both.identity()["then"] == [["captures", 1]]
+
+
+def test_reach_of_a_composite_counts_the_second_key_too():
+    """An inert property is not inert as a second key: it is asked only
+    where the first one ties, which is a different question."""
+    import chess
+
+    from mana.cognition import chess_action
+
+    board = chess.Board()
+    tied = list(board.legal_moves)
+    ties = [(board, tied)]
+    inert = chess_action.Change("promotions", chess_action.MORE)
+    assert chess_action.reach(inert, ties)["varies"] == 0
+    composed = chess_action.Change("pawn_moves", chess_action.MORE,
+                                   then=(("promotions", chess_action.MORE),))
+    assert chess_action.reach(composed, ties)["varies"] == 1
+
+
+def _made_ties():
+    """Two positions where a pawn capture, a piece capture and a quiet
+    pawn move are all rated the same. Constructed rather than sampled:
+    the question is what composition does when a second key has
+    something to say, and an opening walk rarely offers one."""
+    import chess
+
+    board = chess.Board(
+        "rnbqkbnr/ppp1pppp/8/3p4/4P3/2N5/PPPP1PPP/R1BQKBNR w KQkq - 0 3")
+    moves = lambda names: [chess.Move.from_uci(uci) for uci in names]
+    return [(board, moves(["e4d5", "c3d5", "d2d4"])),
+            (board, moves(["e4d5", "c3d5", "g1f3", "d2d4"]))]
+
+
+def test_compose_refuses_a_part_wearing_a_new_name():
+    """When the second key never varies inside the first key's best set,
+    the composite plays exactly as its primary does. Measured on real
+    ties: this is the common case, not a corner one."""
+    from mana.cognition import chess_action
+
+    ties = _ties_for(16)
+    parts = [chess_action.Change("pawn_moves", chess_action.LESS,
+                                 from_finding="o1"),
+             chess_action.Change("promotions", chess_action.MORE,
+                                 from_finding="o2")]
+    for change, reached in chess_action.compose(parts, ties):
+        assert reached["differs"] > 0
+    inert = chess_action.Change("promotions", chess_action.MORE,
+                                then=(("pawn_moves", chess_action.LESS),))
+    primary = chess_action.Change("pawn_moves", chess_action.LESS)
+    # promotions never varies here, so "promotions then pawn_moves" is
+    # pawn_moves. The generator must not sell that as a new lever.
+    assert chess_action.narrows(inert, primary, ties) == 0.0
+    assert not [made for made, _ in chess_action.compose(parts, ties)
+                if made.name() == inert.name()]
+
+
+def test_novelty_is_the_set_of_moves_not_the_shuffle_s_pick():
+    """Two levers can leave different sets and be handed the same move by
+    the same seed. `disagreement` reports that as agreement, which would
+    throw away a real new lever."""
+    from mana.cognition import chess_action
+
+    ties = _made_ties()
+    part = chess_action.Change("pawn_moves", chess_action.MORE)
+    made = chess_action.Change("pawn_moves", chess_action.MORE,
+                               then=(("captures", chess_action.MORE),))
+    assert chess_action.disagreement(made, part, ties) == 0.0
+    assert chess_action.narrows(made, part, ties) > 0.0
+
+
+def test_compose_produces_levers_that_reach_and_differ():
+    from mana.cognition import chess_action
+
+    ties = _made_ties()
+    parts = [chess_action.Change("pawn_moves", chess_action.MORE,
+                                 from_finding="o1"),
+             chess_action.Change("captures", chess_action.MORE,
+                                 from_finding="o2")]
+    made = chess_action.compose(parts, ties)
+    assert made, "composition produced nothing at all"
+    names = [change.name() for change, _ in made]
+    assert "pawn_moves+1×captures+1" in names
+    for change, reached in made:
+        assert reached["varies"] > 0                    # can move a move
+        assert reached["differs"] > 0                   # is not its parts
+        assert change.then
+        assert change.from_finding and change.also_from  # provenance kept
+
+
+def test_a_composed_change_is_playable_by_the_wrapper():
+    """The point is behaviour, not a new row: the composite has to drive
+    a real player."""
+    import random
+
+    import chess
+
+    from mana.cognition import chess_action
+    from mana.cognition.chess_arena import SearchPlayer
+
+    change = chess_action.Change("captures", chess_action.MORE,
+                                 then=(("checks_given", chess_action.MORE),))
+    player = chess_action.Tuned(SearchPlayer(depth=1, trace=True), change)
+    board = chess.Board()
+    move = player.choose(board, random.Random(0))
+    assert move in board.legal_moves
+    assert "captures+1×checks_given+1" in player.name
+
+
+# --------------------------------------------------------------------------
+# a new kind of action, made from the record rather than declared
+# --------------------------------------------------------------------------
+
+def _decided(winner, moves, times=6):
+    return [{"source": "local", "initial_fen": "startpos", "winner": winner,
+             "moves": list(moves)} for _ in range(times)]
+
+
+def test_learn_values_the_winners_actions_above_the_losers():
+    """A: white won every game, so white's moves score above 0.5 and
+    black's below -- from outcomes alone, with nothing about chess."""
+    from mana.cognition import chess_action
+
+    made = chess_action.learn(_decided("white", ["e2e4", "e7e5", "g1f3"]))
+    assert made is not None and made.property == chess_action.LEARNED
+    assert made.table["e2e4"] > 0.5 and made.table["g1f3"] > 0.5
+    assert made.table["e7e5"] < 0.5
+    assert made.from_finding.startswith("record:6:")       # provenance
+
+
+def test_learn_ignores_draws_and_actions_seen_too_rarely():
+    from mana.cognition import chess_action
+
+    assert chess_action.learn(_decided("", ["e2e4", "e7e5"])) is None
+    made = chess_action.learn(_decided("black", ["d2d4", "d7d5"])
+                              + _decided("white", ["c2c4"], times=2))
+    assert "c2c4" not in made.table                  # seen twice: neutral
+    assert made.table["d7d5"] > 0.5 > made.table["d2d4"]
+
+
+def test_a_learned_change_is_one_question_however_often_it_is_refit():
+    """The table is a condition of the answer, not the question: a refit
+    on a longer record must not rename the experiment, or a refuted
+    action would come back every time the record grew."""
+    from mana.cognition import chess_action
+
+    first = chess_action.learn(_decided("white", ["e2e4", "e7e5"]))
+    second = chess_action.learn(_decided("black", ["e2e4", "e7e5"], times=9))
+    assert first.table != second.table
+    assert first.identity() == second.identity()
+    assert "then" not in first.identity()             # not a composite
+    assert first.identity()["property"] not in chess_action.SCORERS
+
+
+def test_a_learned_change_moves_a_move_on_a_prepared_position():
+    """C: two moves the search rated equal; the record prefers one."""
+    import random
+
+    import chess
+
+    from mana.cognition import chess_action
+
+    board = chess.Board()
+    tied = [chess.Move.from_uci("e2e4"), chess.Move.from_uci("d2d4")]
+    made = chess_action.Change(chess_action.LEARNED, chess_action.MORE,
+                               table={"e2e4": 0.3, "d2d4": 0.8})
+    assert chess_action.reach(made, [(board, tied)])["varies"] == 1
+    for seed in range(5):
+        assert made.choose(board, tied, random.Random(seed)).uci() == "d2d4"
+
+    blank = chess_action.Change(chess_action.LEARNED, chess_action.MORE)
+    assert not chess_action.known(blank)           # no table, no action
+    assert chess_action.reach(blank, [(board, tied)])["varies"] == 0
+
+
+def test_a_learned_change_goes_through_the_duel_into_the_ledger():
+    """D: four real games, then the ordinary recorder. Too few to decide
+    anything -- the point is the lifecycle, not the verdict."""
+    from mana.cognition import chess_action, findings
+
+    made = chess_action.learn(_decided("white", ["e2e4", "e7e5", "g1f3",
+                                                 "b8c6", "d2d4"]))
+    result = chess_action.duel(made, games=4, depth=1, seed=3)
+    assert result.games == 4
+    book = findings.Ledger()
+    finding = chess_action.record(made, result, depth=1, ledger=book,
+                                  reached={"share": 0.5, "ties": 2,
+                                           "varies": 1})
+    assert finding.verdict == "NOT_EVALUATED"            # 4 games, honestly
+    assert finding.approach == made.identity()
+    assert finding.conditions["learned_table"] == \
+        chess_action.table_digest(made.table)
+    assert any(row.finding_id == finding.finding_id for row in book.latest())

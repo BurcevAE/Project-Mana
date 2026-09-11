@@ -64,7 +64,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from ..core.gates import ACCEPTED, MIN_PAIRED_TRIALS
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 #: What an adoption must carry. Named here so a caller can see what to
 #: bring, and so a record missing one comes back refused rather than
@@ -108,14 +108,33 @@ class Adoption:
     effect: float = 0.0
     at: float = field(default_factory=time.time)
     note: str = ""
+    #: Secondary keys of a composed change, applied only where the
+    #: primary ties. Empty for a primitive, so a file written before
+    #: composition existed reads back unchanged.
+    then: tuple = ()
+    #: A learned scorer's values, frozen at adoption. Refitting later
+    #: would change the player in force without an experiment.
+    table: Dict[str, float] = field(default_factory=dict)
+
+    def name(self) -> str:
+        body = f"{self.property}{self.direction:+d}"
+        for prop, way in self.then:
+            body += f"×{prop}{way:+d}"
+        return body
 
     def describe(self) -> str:
         way = "больше" if self.direction > 0 else "меньше"
-        return (f"версия {self.version}: среди равных ходов выбирать тот, "
-                f"у которого «{self.property}» {way} [{self.state}]")
+        said = (f"версия {self.version}: среди равных ходов выбирать тот, "
+                f"у которого «{self.property}» {way}")
+        for prop, direction in self.then:
+            way = "больше" if direction > 0 else "меньше"
+            said += f", при равенстве — у которого «{prop}» {way}"
+        return f"{said} [{self.state}]"
 
     def as_dict(self) -> Dict[str, Any]:
         return {"property": self.property, "direction": self.direction,
+                "then": [[prop, way] for prop, way in self.then],
+                "table": dict(self.table),
                 "version": self.version, "state": self.state,
                 "causal_finding": self.causal_finding,
                 "observational_finding": self.observational_finding,
@@ -134,7 +153,11 @@ class Adoption:
                    trials=int(row.get("trials", 0)),
                    effect=float(row.get("effect", 0.0)),
                    at=float(row.get("at", 0.0)),
-                   note=str(row.get("note", "")))
+                   note=str(row.get("note", "")),
+                   then=tuple((str(prop), int(way))
+                              for prop, way in row.get("then", ())),
+                   table={str(key): float(value) for key, value
+                          in (row.get("table") or {}).items()})
 
 
 def _load() -> Dict[str, Any]:
@@ -239,7 +262,7 @@ def confirmed_fingerprint() -> str:
 def _name(rows: Sequence[Adoption]) -> str:
     import hashlib
 
-    body = "|".join(f"{row.property}{row.direction:+d}" for row in rows)
+    body = "|".join(row.name() for row in rows)
     if not body:
         return "v0-base"
     digest = hashlib.blake2b(body.encode("utf-8"), digest_size=4).hexdigest()
@@ -279,7 +302,8 @@ def check(evidence: Dict[str, Any]) -> str:
     change = evidence["change"]
     already = [row for row in in_force()
                if row.property == getattr(change, "property", "")
-               and row.direction == getattr(change, "direction", 0)]
+               and row.direction == getattr(change, "direction", 0)
+               and tuple(row.then) == tuple(getattr(change, "then", ()))]
     if already:
         return "это изменение уже в силе"
     return ""
@@ -299,6 +323,9 @@ def adopt(evidence: Dict[str, Any]) -> Adoption:
     state = _load()
     adoption = Adoption(
         property=str(change.property), direction=int(change.direction),
+        then=tuple((str(prop), int(way))
+                   for prop, way in getattr(change, "then", ())),
+        table=dict(getattr(change, "table", None) or {}),
         version=version() + 1, state=PROVISIONAL,
         causal_finding=str(evidence["causal_finding"]),
         observational_finding=str(evidence["observational_finding"]),
@@ -371,6 +398,7 @@ def player(base: Any, rows: Optional[Sequence[Adoption]] = None) -> Any:
     for row in (playing() if rows is None else rows):
         out = chess_action.Tuned(out, chess_action.Change(
             property=row.property, direction=row.direction,
+            then=tuple(row.then), table=dict(row.table) or None,
             from_finding=row.causal_finding))
     return out
 

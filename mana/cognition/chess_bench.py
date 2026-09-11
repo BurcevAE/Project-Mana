@@ -56,7 +56,7 @@ from .. import events
 from ..net import lichess as api
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 FIRST_LEVEL = 1
 LAST_LEVEL = 8
@@ -326,6 +326,14 @@ class Bench:
         self._sides: Dict[str, Any] = {}
         #: The verdicts as of the last pass, so only what moved is said.
         self._verdicts: Dict[str, str] = {}
+        #: Composed candidates, and the composition they were built for.
+        #: Rebuilt when the baseline changes: a second-order lever is a
+        #: question about the player in force, like every other one.
+        self._composed: list = []
+        self._composed_on: str = ""
+        #: The generated action, and the composition it was made for.
+        self._invented: list = []
+        self._invented_on: str = ""
         #: Said once when every candidate has been answered on this
         #: composition. Repeating it every tick would be the noise the
         #: cooldown reporting already refuses.
@@ -799,10 +807,14 @@ class Bench:
         if self._confirming is None:
             waiting = chess_version.provisional()
             if waiting:
+                # The second key comes with it: re-testing the primitive
+                # instead would confirm a change that is not in force.
                 self._confirming = (waiting[0],
                                     chess_action.Duel(change=chess_action.Change(
                                         property=waiting[0].property,
-                                        direction=waiting[0].direction)))
+                                        direction=waiting[0].direction,
+                                        then=tuple(waiting[0].then),
+                                        table=dict(waiting[0].table) or None)))
         if self._confirming is not None:
             return self._confirm_or_revert()
 
@@ -826,7 +838,7 @@ class Bench:
                 questions=max(1, len(self._reach)), reached=reached,
                 control_name=chess_version.confirmed_fingerprint(),
                 candidate_name=f"{chess_version.confirmed_fingerprint()}"
-                               f"+{change.property}")
+                               f"+{change.name()}")
             self._trying = None
             events.emit(events.STATUS, f"опыт: {finding.verdict}: {finding.note}",
                         chess={"kind": "finding", "text": finding.note})
@@ -841,7 +853,7 @@ class Bench:
                     and _improved(finding.measurement)):
                 return self._adopt(change, reached, sofar, finding)
             return f"опыт закончен: {finding.verdict}"
-        return (f"опыт «{change.property}»: {sofar.games} партий, "
+        return (f"опыт «{change.name()}»: {sofar.games} партий, "
                 f"{sofar.decided} решённых из "
                 f"{chess_action.MIN_PAIRED_TRIALS} нужных")
 
@@ -901,24 +913,11 @@ class Bench:
             self._ties = chess_action.ties_in(
                 played, SearchPlayer(depth=chess_bot.PLAY_DEPTH, trace=True))
         book = self._book()
-        best = None
-        for change in changes:
-            if change.property not in self._reach:
-                self._reach[change.property] = chess_action.reach(change,
-                                                                  self._ties)
-            reached = self._reach[change.property]
-            if not reached["varies"]:
-                continue                    # cannot move anything; no games
-            if self._settled(change, book):
-                continue
-            from . import chess_version
-
-            if any(row.property == change.property
-                   and row.direction == change.direction
-                   for row in chess_version.in_force()):
-                continue
-            if best is None or reached["share"] > best[1]["share"]:
-                best = (change, reached)
+        best = self._best([(change, None) for change in changes], book)
+        if best is None:
+            best = self._compose(changes, book)
+        if best is None:
+            best = self._invent(book)
         if best is None:
             from . import chess_version
 
@@ -934,11 +933,101 @@ class Bench:
             return None
         self._nothing_left = ""
         events.emit(events.STATUS,
-                    f"беру опыт «{best[0].property}»: рычаг работает в "
+                    f"беру опыт «{best[0].name()}»: рычаг работает в "
                     f"{best[1]['share']:.0%} ничьих",
                     chess={"kind": "finding",
                            "text": f"опыт: {best[0].describe()}"})
         return (best[0], best[1], chess_action.Duel(change=best[0]))
+
+    def _best(self, candidates: Any, book: Any) -> Optional[Any]:
+        """The widest-reaching candidate nobody has answered yet.
+
+        One filter for both orders of candidate: a composed lever earns
+        its experiment on exactly the terms a primitive does, and a
+        second copy of these three conditions is a second place for them
+        to drift apart.
+        """
+        from . import chess_action, chess_version
+
+        in_force = chess_version.in_force()
+        best = None
+        for change, known in candidates:
+            handle = change.name()
+            if known is not None:
+                self._reach[handle] = known
+            if handle not in self._reach:
+                self._reach[handle] = chess_action.reach(change, self._ties)
+            reached = self._reach[handle]
+            if not reached["varies"]:
+                continue                    # cannot move anything; no games
+            if self._settled(change, book):
+                continue
+            if any(row.property == change.property
+                   and row.direction == change.direction
+                   and tuple(row.then) == tuple(change.then)
+                   for row in in_force):
+                continue
+            if best is None or reached["share"] > best[1]["share"]:
+                best = (change, reached)
+        return best
+
+    def _compose(self, changes: Any, book: Any) -> Optional[Any]:
+        """Second-order discovery: run only when the first order is out.
+
+        The derived levers are a fixed, small list, and once every one of
+        them is answered on this composition the loop is finished for
+        good unless the space of actions can grow. It can: an ordering
+        may have a second key, and `A then B` is neither A nor B.
+
+        Built here rather than up front on purpose. Forty-two composites
+        proposed before the seven primitives are answered would bury the
+        cheap questions under the expensive ones, and a candidate that
+        exists because nothing else is left carries that fact honestly.
+        """
+        from . import chess_action, chess_version
+
+        control = chess_version.confirmed_fingerprint()
+        if self._composed_on != control:
+            self._composed_on = control
+            self._composed = chess_action.compose(changes, self._ties)
+            events.emit(events.STATUS,
+                        f"первый порядок исчерпан на составе {control}: "
+                        f"строю составные рычаги, годных "
+                        f"{len(self._composed)}",
+                        chess={"kind": "version", "step": "second_order",
+                               "control": control,
+                               "candidates": [made.name()
+                                              for made, _ in self._composed]})
+        return self._best(self._composed, book)
+
+    def _invent(self, book: Any) -> Optional[Any]:
+        """Last resort: a way of acting that no declared property names.
+
+        Reached only when every declared lever and every composition of
+        them is answered on this composition. Built once per composition,
+        like the composites, and from the local world only -- the world
+        its duel is played in, so the fit and the test are about the
+        same thing. It earns its games on the same terms as any change:
+        reach first, then the duel, then the ledger.
+        """
+        from . import chess_action, chess_bot, chess_version
+
+        control = chess_version.confirmed_fingerprint()
+        if self._invented_on != control:
+            self._invented_on = control
+            local = [row for row in chess_bot.recorded()
+                     if str(row.get("source", "")) == chess_bot.LOCAL]
+            made = chess_action.learn(local)
+            self._invented = [] if made is None else [(made, None)]
+            events.emit(events.STATUS,
+                        f"объявленные рычаги исчерпаны на составе {control}: "
+                        + (f"строю новый способ действия из опыта "
+                           f"({len(made.table)} действий, {made.from_finding})"
+                           if made else "опыта для нового способа нет"),
+                        chess={"kind": "version", "step": "invented",
+                               "control": control,
+                               "candidate": made.name() if made else ""})
+        return self._best(self._invented, book)
 
     def _settled(self, change: Any, book: Any) -> bool:
         """Has this intervention already been answered on this control?

@@ -1241,6 +1241,10 @@ def _picking(bench, monkeypatch, properties):
     monkeypatch.setattr(chess_action, "reach",
                         lambda change, ties: {"share": 0.6, "ties": 1,
                                               "varies": 1})
+    # These ask about the first order only. Composition is a real
+    # measurement on real positions and has its own tests; here it would
+    # answer a question nobody asked, on a stand-in tie.
+    monkeypatch.setattr(chess_action, "compose", lambda parts, ties: [])
     bench._sides = {"g": object()}
     bench._ties = None
     bench._reach = {}
@@ -1376,7 +1380,205 @@ def test_a_high_observational_score_does_not_reopen_an_answered_question(
     monkeypatch.setattr(chess_action, "reach",
                         lambda change, ties: {"share": 0.9, "ties": 1,
                                               "varies": 1})
+    monkeypatch.setattr(chess_action, "compose", lambda parts, ties: [])
     bench._sides = {"g": object()}
     bench._ties = None
     bench._reach = {}
     assert bench._pick() is None
+
+
+# --------------------------------------------------------------------------
+# the second order runs only when the first one is out
+# --------------------------------------------------------------------------
+
+def _first_order(bench, monkeypatch, properties=("pawn_moves", "captures")):
+    from mana.cognition import chess_action, chess_outcome
+
+    changes = [chess_action.Change(name, chess_action.LESS,
+                                   from_finding=f"obs-{name}")
+               for name in properties]
+    monkeypatch.setattr(chess_outcome, "look", lambda *a, **kw: [])
+    monkeypatch.setattr(chess_action, "propose", lambda found: (changes, []))
+    monkeypatch.setattr(chess_action, "ties_in", lambda *a, **kw: ["tie"])
+    monkeypatch.setattr(chess_action, "reach",
+                        lambda change, ties: {"share": 0.5, "ties": 1,
+                                              "varies": 1})
+    bench._sides = {"g": object()}
+    bench._ties = None
+    bench._reach = {}
+    return changes
+
+
+def test_the_second_order_starts_only_after_the_first_is_answered(
+        tmp_path, monkeypatch):
+    from mana.cognition import chess_action
+
+    bench, _ = _bench_for(tmp_path, monkeypatch)
+    changes = _first_order(bench, monkeypatch)
+    asked = []
+    monkeypatch.setattr(chess_action, "compose",
+                        lambda parts, ties: asked.append(parts) or [])
+
+    picked = bench._pick()
+    assert picked is not None and not picked[0].then
+    assert asked == []                      # nothing composed while work is left
+
+    for change in changes:
+        _answered(bench, change.property, "REJECTED")
+    bench._pick()
+    assert len(asked) == 1                  # composed once the levers ran out
+
+
+def test_a_composed_candidate_is_taken_when_the_primitives_are_out(
+        tmp_path, monkeypatch):
+    from mana.cognition import chess_action
+
+    bench, _ = _bench_for(tmp_path, monkeypatch)
+    changes = _first_order(bench, monkeypatch)
+    for change in changes:
+        _answered(bench, change.property, "REJECTED")
+    composed = chess_action.Change("pawn_moves", chess_action.LESS,
+                                   from_finding="obs-pawn_moves",
+                                   then=(("captures", chess_action.LESS),))
+    monkeypatch.setattr(chess_action, "compose",
+                        lambda parts, ties: [(composed, {"share": 0.3,
+                                                         "ties": 10,
+                                                         "varies": 3,
+                                                         "differs": 0.2})])
+    picked = bench._pick()
+    assert picked is not None
+    assert picked[0].then == (("captures", chess_action.LESS),)
+
+
+def test_refuting_a_part_does_not_refute_the_composite(tmp_path, monkeypatch):
+    """A REJECTED is an answer about A, not about A-then-B."""
+    from mana.cognition import chess_action
+
+    bench, _ = _bench_for(tmp_path, monkeypatch)
+    _answered(bench, "pawn_moves", "REJECTED")
+    composed = chess_action.Change("pawn_moves", chess_action.LESS,
+                                   then=(("captures", chess_action.MORE),))
+    assert bench._settled(composed, bench._book()) is False
+
+
+def test_refuting_the_composite_closes_the_composite_alone(
+        tmp_path, monkeypatch):
+    from mana.cognition import chess_action
+
+    bench, _ = _bench_for(tmp_path, monkeypatch)
+    composed = chess_action.Change("pawn_moves", chess_action.LESS,
+                                   from_finding="obs-x",
+                                   then=(("captures", chess_action.MORE),))
+    result = chess_action.Duel(change=composed, games=46, changed_won=20,
+                               unchanged_won=20, drawn=6)
+    finding = chess_action.record(composed, result, depth=2,
+                                  ledger=bench._book(),
+                                  reached={"share": 0.3, "ties": 10,
+                                           "varies": 3})
+    assert finding.verdict == "REJECTED"
+    assert bench._settled(composed, bench._book()) is True
+    other = chess_action.Change("pawn_moves", chess_action.LESS)
+    assert bench._settled(other, bench._book()) is False
+
+
+def test_a_composed_change_can_be_adopted_and_played(tmp_path, monkeypatch):
+    from mana.cognition import chess_action, chess_version
+
+    bench, version = _bench_for(tmp_path, monkeypatch)
+    composed = chess_action.Change("captures", chess_action.MORE,
+                                   from_finding="obs-x",
+                                   then=(("checks_given", chess_action.MORE),))
+    adoption = version.adopt({"change": composed, "causal_finding": "d1",
+                              "observational_finding": "obs-x", "reach": 0.3,
+                              "trials": 40, "verdict": "ACCEPTED"})
+    assert adoption.then == (("checks_given", 1),)
+    assert version.fingerprint() != "v0-base"
+    assert "×checks_given+1" in version.history()[-1].name()
+
+    played = version.player(object(), [adoption])
+    assert played.change.then == (("checks_given", 1),)
+
+    # A file round trip keeps the second key: an adoption that forgets it
+    # would quietly play the primitive instead.
+    version._reset_for_tests()
+    assert version.history()[-1].then == (("checks_given", 1),)
+
+
+# --------------------------------------------------------------------------
+# when every declared lever is answered, a new kind of action is made
+# --------------------------------------------------------------------------
+
+def _record_of(monkeypatch):
+    from mana.cognition import chess_bot
+
+    games = [{"source": chess_bot.LOCAL, "initial_fen": "startpos",
+              "winner": "white", "moves": ["e2e4", "e7e5", "g1f3"]}
+             for _ in range(6)]
+    monkeypatch.setattr(chess_bot, "recorded", lambda *a, **kw: games)
+
+
+def test_a_new_kind_of_action_appears_only_when_the_declared_ones_are_out(
+        tmp_path, monkeypatch):
+    """B: not while a declared lever is open; yes once all are answered
+    and no composite is left -- and what appears is not a composite."""
+    from mana.cognition import chess_action
+
+    bench, _ = _bench_for(tmp_path, monkeypatch)
+    changes = _first_order(bench, monkeypatch)
+    monkeypatch.setattr(chess_action, "compose", lambda parts, ties: [])
+    _record_of(monkeypatch)
+
+    first = bench._pick()
+    assert first is not None and first[0].property != chess_action.LEARNED
+    assert bench._invented_on == ""               # nothing made while work is left
+
+    for change in changes:
+        _answered(bench, change.property, "REJECTED")
+    picked = bench._pick()
+    assert picked is not None
+    assert picked[0].property == chess_action.LEARNED
+    assert picked[0].then == ()                   # a new kind, not A x B
+    assert picked[0].table                        # it carries what it does
+
+
+def test_the_new_action_is_closed_by_its_own_result(tmp_path, monkeypatch):
+    """Its result lands in the same experience: a finished experiment on
+    this composition closes it, and then there is honestly nothing left."""
+    from mana.cognition import chess_action
+
+    bench, _ = _bench_for(tmp_path, monkeypatch)
+    changes = _first_order(bench, monkeypatch)
+    monkeypatch.setattr(chess_action, "compose", lambda parts, ties: [])
+    _record_of(monkeypatch)
+    for change in changes:
+        _answered(bench, change.property, "REJECTED")
+    made = bench._pick()[0]
+
+    result = chess_action.Duel(change=made, games=46, changed_won=20,
+                               unchanged_won=20, drawn=6)
+    finding = chess_action.record(made, result, depth=2, ledger=bench._book(),
+                                  reached={"share": 0.4, "ties": 10,
+                                           "varies": 4})
+    assert finding.verdict == "REJECTED"
+    assert bench._settled(made, bench._book()) is True
+    assert bench._pick() is None
+
+
+def test_an_adopted_learned_action_keeps_its_table_and_plays_it(
+        tmp_path, monkeypatch):
+    """Frozen at adoption: refitting later would change the player in
+    force without an experiment."""
+    from mana.cognition import chess_action
+
+    bench, version = _bench_for(tmp_path, monkeypatch)
+    made = chess_action.Change(chess_action.LEARNED, chess_action.MORE,
+                               table={"e2e4": 0.7}, from_finding="record:6:x")
+    adoption = version.adopt({"change": made, "causal_finding": "d1",
+                              "observational_finding": made.from_finding,
+                              "reach": 0.4, "trials": 40,
+                              "verdict": "ACCEPTED"})
+    version._reset_for_tests()
+    assert version.history()[-1].table == {"e2e4": 0.7}
+    played = version.player(object(), [version.history()[-1]])
+    assert played.change.table == {"e2e4": 0.7}
+    assert chess_action.known(played.change)
