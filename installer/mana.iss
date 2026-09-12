@@ -85,6 +85,11 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs 
 [Icons]
 Name: "{group}\MANA"; Filename: "{app}\MANA.exe"
 Name: "{group}\Диагностика MANA"; Filename: "{app}\MANA.exe"; Parameters: "--self-check"; Comment: "Проверить, что сборка сохранила песочницу, самопатчинг и зависимости"
+; A terminal already standing in the install folder, so MANA-cli.exe --
+; the console twin that prints what the windowed MANA.exe cannot -- is
+; one word away. Not a shortcut to MANA-cli.exe itself: without
+; arguments it would run and close its window before anything was read.
+Name: "{group}\MANA — командная строка"; Filename: "{cmd}"; Parameters: "/k echo MANA-cli --bench    шахматный стенд, ход мыслей в этом окне& echo MANA-cli --help     все команды"; WorkingDir: "{app}"; Comment: "Терминал в папке MANA: MANA-cli.exe печатает сюда"
 Name: "{autodesktop}\MANA"; Filename: "{app}\MANA.exe"; Tasks: desktopicon
 
 [Registry]

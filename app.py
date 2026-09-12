@@ -23,6 +23,20 @@ Run modes:
     MANA.exe --cli <args>    -> exactly the old command line
     MANA.exe --self-check    -> verify a packaged build can still do the
                                 three things freezing usually breaks
+    MANA-cli.exe <args>      -> the same program as a console executable:
+                                never opens the window, everything that
+                                would have opened it goes to the old
+                                command line instead
+
+Why a second executable and not a flag. MANA.exe is a windowed build, so
+Windows starts it with no console: sys.stdout is None, cmd.exe returns to
+its prompt at once, and `MANA.exe --cli --bench` from a terminal plays the
+whole ladder while printing nothing. The console subsystem is a property
+of the .exe file, fixed at link time -- no argument can give a windowed
+program the terminal it was started from, short of attaching to the
+parent's console, where its output interleaves with the prompt and Ctrl+C
+reaches the wrong process. So build_exe.py links the same app.py twice
+into the same folder, and this file tells the two apart by name.
 """
 from __future__ import annotations
 
@@ -58,6 +72,22 @@ def _bootstrap_package_path() -> Path:
 
 
 APP_DIR = _bootstrap_package_path()
+
+#: File name of the console executable build_exe.py puts beside MANA.exe.
+CONSOLE_TWIN = "MANA-cli"
+
+
+def _is_console_twin(executable: str = "") -> bool:
+    """True when running as MANA-cli.exe.
+
+    Decided by the executable's name, which is the one thing that differs
+    between the two: they share app.py, the folder, and every byte of the
+    bundle except the bootloader. A source run's executable is python.exe
+    and is never the twin.
+    """
+    if not executable and not getattr(sys, "frozen", False):
+        return False
+    return Path(executable or sys.executable).stem.lower() == CONSOLE_TWIN.lower()
 
 
 def self_check() -> int:
@@ -191,6 +221,18 @@ def self_check() -> int:
     except Exception as exc:
         report["language_models_error"] = f"{type(exc).__name__}: {exc}"
         capabilities["language_model_reachable"] = False
+
+    # The chess polygon makes a move, not merely imports. This check was
+    # missing when 2.90.0 shipped without python-chess: --self-check said
+    # "ok" and the stand abandoned every game at MANA's first move.
+    try:
+        import chess
+        board = chess.Board()
+        board.push_uci("e2e4")
+        capabilities["chess_plays"] = board.turn == chess.BLACK
+    except Exception as exc:
+        capabilities["chess_plays"] = False
+        report["chess_error"] = f"{type(exc).__name__}: {exc}"
 
     report["capabilities"] = capabilities
 
@@ -389,6 +431,12 @@ def main() -> int:
 
     if argv and argv[0] == "--cli":
         sys.argv = [sys.argv[0]] + argv[1:]
+        from mana.cli import main as cli_main
+        return cli_main()
+
+    # The console twin is the command line; `MANA-cli.exe --bench` is
+    # `MANA.exe --cli --bench` with a terminal to print into.
+    if _is_console_twin():
         from mana.cli import main as cli_main
         return cli_main()
 

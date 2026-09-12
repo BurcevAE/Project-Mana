@@ -56,7 +56,7 @@ from .. import events
 from ..net import lichess as api
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.1"
+__version__ = "1.2"
 
 FIRST_LEVEL = 1
 LAST_LEVEL = 8
@@ -311,6 +311,8 @@ class Bench:
                                                     "classical",
                                                     "correspondence")))
         self._stop = threading.Event()
+        #: The event-stream thread of the current run; ends with the run.
+        self._listener: Optional[threading.Thread] = None
         #: A wait carried over from a previous run is applied before
         #: anything is asked of Lichess.
         left = self.ladder.cooldown_left()
@@ -366,8 +368,17 @@ class Bench:
         """
         played = 0
         self._announce("старт")
-        listening = threading.Thread(target=self._listen, name="MANA-bench",
-                                     daemon=True)
+        # The listener lives exactly as long as this run. Ended only by
+        # stop(), it outlived every run that ended by itself -- the game
+        # limit, the finished ladder, an exception: against Lichess it kept
+        # asking for the account and holding an event stream with nobody
+        # behind it; against a bot whose run() returns at once when
+        # stopped, it spun. The test file that took seconds took minutes,
+        # one busy thread per finished bench.
+        done = threading.Event()
+        listening = threading.Thread(target=self._listen, args=(done,),
+                                     name="MANA-bench", daemon=True)
+        self._listener = listening
         listening.start()
         try:
             while not self._stop.is_set() and not self.ladder.done:
@@ -389,12 +400,13 @@ class Bench:
                 if self.gap and not self._stop.is_set():
                     self._sleep(self.gap)
         finally:
+            done.set()
             self.bot.stop()
             self.ladder.save()
             self._announce("итог")
         return self.ladder
 
-    def _listen(self) -> None:
+    def _listen(self, done: Optional[threading.Event] = None) -> None:
         """Keep the event stream up, and never stop the run by failing.
 
         `Bot.run()` opens with an account check, and a cooldown set by a
@@ -403,7 +415,9 @@ class Bench:
         network half silencing the half that needs no network.
         """
         failures = 0
-        while not self._stop.is_set() and failures < LISTEN_GIVE_UP:
+        done = done or threading.Event()
+        while (not self._stop.is_set() and not done.is_set()
+               and failures < LISTEN_GIVE_UP):
             left = self._cooldown_left()
             if left > 0:
                 # Not a failure: a state with a known end. Wait it out
@@ -1076,6 +1090,16 @@ class Bench:
         # no evidence at all, and folding it in as a draw broke a real
         # streak. "Unmeasured is not zero" is the rule everywhere else in
         # this project; the ladder had been the exception.
+        if seat.error:
+            # Not an unmeasured game but a broken player. The next
+            # challenge would break the same way and abandon another game
+            # on Lichess, so the run ends here, saying why.
+            events.emit(events.ERROR,
+                        f"стенд остановлен: партия {seat.game_id} сломалась "
+                        f"на стороне MANA ({seat.error}); следующий вызов "
+                        f"сломался бы так же")
+            self._stop.set()
+            return
         if seat.status in ("started", "created", ""):
             events.emit(events.WARNING,
                         f"партия {seat.game_id} без результата "
@@ -1102,6 +1126,23 @@ class Bench:
                     f"стенд ({when}): {self.ladder.describe()}, "
                     f"всего {self.ladder.wins} из {self.ladder.games}",
                     chess={"kind": "bench", "ladder": self.ladder.as_dict()})
+
+
+def cannot_play() -> str:
+    """Why this installation cannot play chess at all; "" when it can.
+
+    Asked before anything reaches Lichess. A challenge the player cannot
+    answer is not a lost measurement but an abandoned game on the
+    account, and 2.90.0 abandoned five in a row this way.
+    """
+    try:
+        import chess          # noqa: F401
+        import chess.engine   # noqa: F401
+    except ImportError as exc:
+        return (f"в этой установке нет библиотеки python-chess ({exc}); без "
+                f"неё MANA не может сделать ход, и каждая вызванная партия "
+                f"была бы брошена")
+    return ""
 
 
 def summarise(ladder: Ladder) -> str:

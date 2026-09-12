@@ -134,6 +134,9 @@ BUNDLED = (
     Bundled("cryptography", "cryptography",
             "экземпляр не сможет подписывать свои отчёты, и чужие подписи "
             "нечем будет проверить", required=True),
+    Bundled("chess", "chess",
+            "шахматный стенд, партии на Lichess и самоигра не работают: "
+            "MANA не может сделать ни одного хода"),
 )
 
 #: NOT shipped, on purpose, with the reason. Written down because the
@@ -229,5 +232,17 @@ try:
     import pythoncom       # noqa: F401,E402
     import pywintypes      # noqa: F401,E402
     import win32com.client  # noqa: F401,E402
+except Exception:
+    pass
+
+# The chess polygon. mana/cognition imports it only inside functions, and
+# mana/ is invisible to the analyser, so 2.90.0 shipped without it: on the
+# stand every game was challenged, then abandoned at MANA's first move, and
+# nothing said why until the idle self-play hit the same ImportError.
+# chess.engine is named separately -- it is how the judge talks to
+# Stockfish, and it pulls in asyncio, which nothing else here does.
+try:
+    import chess           # noqa: F401,E402
+    import chess.engine    # noqa: F401,E402
 except Exception:
     pass

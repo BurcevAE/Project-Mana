@@ -236,3 +236,108 @@ def test_build_manifest_is_read_back_when_present(tmp_path, monkeypatch):
     result = server.build_manifest()
     assert result["packaged"] is True
     assert result["bundled"] == {"numpy": "2.5.2"}
+
+
+# ---------------------------------------------------------- console twin
+#
+# MANA.exe is windowed: started from cmd.exe it has no stdout, the prompt
+# returns at once, and `MANA.exe --cli --bench` plays the whole ladder
+# printing nothing. MANA-cli.exe is the same app.py linked as a console
+# program, and these pin the three places that have to agree about it.
+
+def _fake_module(monkeypatch, name, **attrs):
+    import types
+    module = types.ModuleType(name)
+    for key, value in attrs.items():
+        setattr(module, key, value)
+    monkeypatch.setitem(sys.modules, name, module)
+
+
+def _run_app(monkeypatch, argv, twin):
+    """Run app.main() with the window and the CLI replaced by recorders."""
+    import app
+    from mana import console
+    seen = {}
+
+    def cli_main():
+        seen["cli"] = list(sys.argv)
+        return 0
+
+    def run_window():
+        seen["window"] = True
+        return 0
+
+    monkeypatch.setattr(console, "speak_utf8", lambda: None)
+    monkeypatch.setattr("mana.cli.main", cli_main)
+    _fake_module(monkeypatch, "mana_desktop.window", run_window=run_window)
+    monkeypatch.setattr(app, "_is_console_twin", lambda executable="": twin)
+    monkeypatch.setattr(sys, "argv", argv)
+    assert app.main() == 0
+    return seen
+
+
+def test_the_twin_is_recognised_by_its_file_name():
+    import app
+    assert app._is_console_twin(r"C:\Users\x\AppData\Local\Programs\MANA\MANA-cli.exe")
+    assert app._is_console_twin(r"C:\MANA\mana-CLI.EXE")
+    assert not app._is_console_twin(r"C:\MANA\MANA.exe")
+
+
+def test_a_source_run_is_never_the_twin(monkeypatch):
+    import app
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    assert app._is_console_twin() is False
+
+
+def test_the_twin_gives_the_command_line_what_would_open_the_window(monkeypatch):
+    seen = _run_app(monkeypatch, ["MANA-cli.exe", "--bench"], twin=True)
+    assert seen == {"cli": ["MANA-cli.exe", "--bench"]}
+
+
+def test_the_twin_without_arguments_does_not_open_the_window(monkeypatch):
+    seen = _run_app(monkeypatch, ["MANA-cli.exe"], twin=True)
+    assert "window" not in seen and "cli" in seen
+
+
+def test_the_windowed_executable_still_opens_the_window(monkeypatch):
+    seen = _run_app(monkeypatch, ["MANA.exe"], twin=False)
+    assert seen == {"window": True}
+
+
+def test_both_executables_are_linked_from_one_command():
+    """The twin runs on the window build's folder, so the two must collect
+    the same files; only the subsystem and the name may differ."""
+    import app
+    import build_exe
+    assert build_exe.CONSOLE_TWIN == app.CONSOLE_TWIN
+    window = build_exe.pyinstaller_command(windowed=True)
+    twin = build_exe.pyinstaller_command(windowed=False, name=build_exe.CONSOLE_TWIN)
+    assert "--windowed" in window and "--console" not in window
+    assert "--console" in twin and "--windowed" not in twin
+    assert twin[twin.index("--name") + 1] == "MANA-cli"
+
+    def rest(cmd):
+        cmd = list(cmd)
+        cmd.pop(cmd.index("--name") + 1)
+        return [a for a in cmd if a not in ("--console", "--windowed")]
+
+    assert rest(window) == rest(twin)
+
+
+def test_the_installer_refuses_a_build_without_the_twin(tmp_path, monkeypatch, capsys):
+    import importlib.util
+    import json
+    spec = importlib.util.spec_from_file_location(
+        "build_installer_under_test", ROOT / "scripts" / "build_installer.py")
+    installer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(installer)
+
+    (tmp_path / "MANA.exe").write_bytes(b"")
+    (tmp_path / "build_manifest.json").write_text(
+        json.dumps({"windowed": True, "missing": []}), encoding="utf-8")
+    monkeypatch.setattr(installer, "APP_DIR", tmp_path)
+    monkeypatch.setattr(installer, "find_compiler",
+                        lambda: pytest.fail("компилятор не должен вызываться"))
+    monkeypatch.setattr(sys, "argv", ["build_installer.py"])
+    assert installer.main() == 1
+    assert "MANA-cli.exe" in capsys.readouterr().out

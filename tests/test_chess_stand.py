@@ -91,6 +91,25 @@ def test_without_a_bot_account_it_refuses_with_the_reason(quiet, monkeypatch):
     assert not chess_stand.running()
 
 
+def test_without_the_chess_library_it_refuses_before_calling_anyone(quiet, monkeypatch):
+    """2.90.0 shipped without python-chess and abandoned five games on
+    Lichess before anything said why. The check comes before the network."""
+    monkeypatch.setattr(chess_bench, "cannot_play",
+                        lambda: "в этой установке нет библиотеки python-chess")
+
+    def no_network():
+        raise AssertionError("до Lichess дело дойти не должно")
+
+    monkeypatch.setattr(lichess, "Lichess", no_network)
+    refused = chess_stand.start()
+    assert not refused["ok"] and "python-chess" in refused["error"]
+    assert not chess_stand.running()
+
+
+def test_this_environment_can_play():
+    assert chess_bench.cannot_play() == ""
+
+
 def test_a_pause_lichess_imposed_is_kept_when_starting_from_level_one(quiet):
     saved = chess_bench.Ladder(level=4, next_request_at=12345.0, refused=3)
     saved.save()

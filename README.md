@@ -34,10 +34,16 @@ python mana_run.py --version           # продукт + версии всех 
 
 ```bash
 python serve_ui.py                     # интерфейс в браузере, без сборки
-python build_exe.py --windowed         # собрать MANA.exe
+python build_exe.py --windowed         # собрать MANA.exe и MANA-cli.exe
 dist/MANA/MANA.exe --self-check        # проверить, что упаковка ничего не потеряла
 python scripts/build_installer.py      # установщик (нужен Inno Setup 6)
 ```
+
+`MANA.exe` — оконная программа, консоли у неё нет, поэтому из cmd.exe она
+ничего не напечатает. Для терминала рядом лежит `MANA-cli.exe` — та же MANA,
+но консольная: `MANA-cli --bench` показывает ход мыслей стенда в том же окне,
+как `mana.cmd --bench` из папки проекта. В меню «Пуск» есть ярлык
+«MANA — командная строка», который открывает терминал в папке установки.
 
 Установщик ставит MANA в `%LOCALAPPDATA%\Programs\MANA` без прав
 администратора: приложение переписывает собственный код, а в Program Files у
@@ -47,7 +53,7 @@ python scripts/build_installer.py      # установщик (нужен Inno S
 
 **Windows 10.** Окно рисуется WebView2 Runtime: в Windows 11 он встроен, в 10 —
 нет. MANA проверяет это до запуска окна и говорит, что поставить; без
-WebView2 работает `MANA.exe --cli`.
+WebView2 работает `MANA-cli.exe`.
 
 ### Мозги
 

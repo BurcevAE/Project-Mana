@@ -37,7 +37,7 @@ from .optional_deps import HAS_REQUESTS, HAS_WEB, HAS_SOUNDDEVICE, sd
 from . import events, paths
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "2.0"
+__version__ = "2.1"
 
 
 # ---------------------------------------------------------------------------
@@ -403,6 +403,11 @@ def _bench(from_level: int, port: int = 0) -> int:
     """
     from .cognition import chess_bench, chess_bot, chess_watch
     from .net import lichess
+
+    missing = chess_bench.cannot_play()
+    if missing:
+        print(missing)
+        return 1
 
     client = lichess.Lichess()
     state = client.describe()

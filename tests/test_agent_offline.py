@@ -79,4 +79,7 @@ def test_hardware_status_and_tools_status_shapes(isolated_agent):
     # The app tools are registered even where the application is absent:
     # a tool that answers "Word is not installed" is a fact the agent can
     # pass on, one that is missing teaches it nothing.
-    assert len(tools["tools"]) == 21
+    # + 2 in 2.90: the chess stand, started and stopped by asking.
+    assert len(tools["tools"]) == 23
+    names = {tool["name"] for tool in tools["tools"]}
+    assert {"chess_stand_start", "chess_stand_stop"} <= names

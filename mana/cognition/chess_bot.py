@@ -63,7 +63,7 @@ from .. import events
 from ..net import lichess as api
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 #: Where finished games are kept, beside MANA's other state.
 GAMES_DIRNAME = "lichess"
@@ -170,6 +170,10 @@ class Seat:
     #: a human. A condition of every measurement taken from the game, not
     #: a label on it.
     level: int = 0
+    #: What broke on MANA's side when the game ended because MANA could
+    #: not move rather than because the game did. Empty for every game
+    #: that ended on the board.
+    error: str = ""
     started: float = field(default_factory=time.time)
 
     @property
@@ -332,6 +336,16 @@ class Bot:
                     break
         except api.LichessError as exc:
             events.emit(events.ERROR, f"партия {seat.game_id}: {exc}")
+        except Exception as exc:
+            # MANA's own side broke. Uncaught, this killed the game thread
+            # with a traceback on a stderr the windowed build does not
+            # have, left the game "started" on Lichess with MANA's clock
+            # running, and the bench challenged again: five games went
+            # that way on 2.90.0 before anything said "No module named
+            # 'chess'".
+            seat.error = f"{type(exc).__name__}: {exc}"
+            events.emit(events.ERROR, f"партия {seat.game_id}: MANA не смогла "
+                                      f"сделать ход — {seat.error}")
         finally:
             with self._lock:
                 self.seats.pop(seat.game_id, None)

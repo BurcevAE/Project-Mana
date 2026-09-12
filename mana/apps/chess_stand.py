@@ -25,7 +25,7 @@ from typing import Any, Dict, Optional
 from .. import events
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 #: How long `stop` waits for the run to wind down before answering.
 STOP_WAIT = 30.0
@@ -85,6 +85,9 @@ def start(from_level: int = 1) -> Dict[str, Any]:
         if running():
             return {"ok": True, "already": True, "status": _run.bench.ladder.describe(),
                     "url": _run.url, "account": _run.account}
+        missing = chess_bench.cannot_play()
+        if missing:
+            return {"ok": False, "error": f"стенд не запущен: {missing}"}
         client = lichess.Lichess()
         state = client.describe()
         if not state.get("bot"):

@@ -217,6 +217,17 @@ def test_stopping_ends_the_run_and_keeps_the_state(tmp_path, monkeypatch):
     assert bench_mod.Ladder.load().games == ladder.games
 
 
+def test_the_listener_ends_with_the_run(tmp_path, monkeypatch):
+    """A run that ends by itself -- here the game limit -- used to leave its
+    listener spinning on a bot whose run() returns at once when stopped.
+    One busy thread per finished bench turned this file from seconds into
+    minutes, which read as a hang."""
+    bench = _bench([True], tmp_path, monkeypatch)
+    bench.run(limit=1)
+    bench._listener.join(2.0)
+    assert not bench._listener.is_alive()
+
+
 def test_a_refused_challenge_does_not_break_the_ladder(tmp_path, monkeypatch):
     """Lichess refusing is a normal outcome with a message."""
     bench = _bench([True], tmp_path, monkeypatch)
@@ -322,6 +333,20 @@ def test_a_game_without_a_result_is_not_a_draw(tmp_path, monkeypatch):
     real_draw.winner = ""
     bench._fold(real_draw)
     assert bench.ladder.streak == 0 and bench.ladder.games == 5
+
+
+def test_a_game_broken_on_its_side_stops_the_bench(tmp_path, monkeypatch):
+    """Not an unmeasured game but a broken player: the next challenge would
+    break the same way and abandon another game on the account."""
+    monkeypatch.setattr(bench_mod, "state_path", lambda: tmp_path / "bench.json")
+    bench = bench_mod.Bench(client=object(), bot=_Bot([]), ladder=_ladder())
+    _win(bench.ladder, 4)
+
+    broken = chess_bot.Seat(game_id="g", us=True, source=chess_bot.LIVE)
+    broken.error = "ImportError: No module named 'chess'"
+    bench._fold(broken)
+    assert bench._stop.is_set()
+    assert bench.ladder.streak == 4 and bench.ladder.games == 4
 
 
 def test_the_wait_after_a_refusal_grows(tmp_path, monkeypatch):

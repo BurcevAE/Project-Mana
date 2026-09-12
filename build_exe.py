@@ -22,8 +22,13 @@ working TF-IDF fallback (see mana/optional_deps.py, which flags every
 capability instead of assuming it). A user who wants them installs them
 into the shipped python/ directory; the app notices and uses them.
 
+The windowed build carries a second executable, MANA-cli.exe: the same
+app.py linked as a console program into the same folder. A windowed .exe
+has no terminal to print into, so without it an installed MANA started
+from cmd.exe runs the chess ladder in silence -- see app.py.
+
     python build_exe.py            # console build, for --self-check
-    python build_exe.py --windowed # the app
+    python build_exe.py --windowed # the app: MANA.exe + MANA-cli.exe
 """
 from __future__ import annotations
 
@@ -36,6 +41,10 @@ ROOT = Path(__file__).resolve().parent
 DIST = ROOT / "dist"
 BUILD = ROOT / "build"
 EMBED = ROOT / "python-embed"
+
+#: The console executable shipped beside the windowed one. app.py
+#: recognises itself by this name.
+CONSOLE_TWIN = "MANA-cli"
 
 #: Kept OUT of the bundle, each for a reason stated in
 #: packaging_deps.DELIBERATELY_ABSENT or because nothing in mana imports
@@ -65,6 +74,82 @@ HIDDEN = ["webview.platforms.edgechromium", "webview.platforms.winforms",
 #: the analyser does not follow, and the failure is a COM call that works
 #: from source and raises ImportError in the package.
 COLLECTED = ["sklearn", "ddgs", "win32com"]
+
+
+def pyinstaller_command(windowed: bool, name: str = "MANA") -> list:
+    """The PyInstaller invocation, shared by both executables.
+
+    One function rather than two lists so the console twin cannot drift
+    from the window build: they must collect the same files, because the
+    twin is copied into the window build's folder and runs on its bundle.
+    """
+    cmd = [
+        sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir",
+        "--name", name,
+        # Both directories are DATA. mana/ must stay as .py files so the
+        # agent can patch itself; python/ is the sandbox interpreter that
+        # replaces sys.executable in a frozen build.
+        "--add-data", f"{ROOT / 'mana'}{';'}mana",
+        "--add-data", f"{EMBED}{';'}python",
+        # The window shell and its page. Unlike mana/, this one IS frozen
+        # into the bundle: nothing rewrites it at runtime, so there is no
+        # reason to ship it as loose files. web/ still has to be declared
+        # as data -- PyInstaller collects .py, never .html.
+        "--add-data", f"{ROOT / 'mana_desktop' / 'web'}{';'}mana_desktop/web",
+        # Flat layout: PyInstaller 6 puts collected files under
+        # _internal/ by default, which would put mana/ and python/ one
+        # level below where paths.install_root() looks for them. Keeping
+        # the contents beside the executable makes the folder layout the
+        # same thing the code assumes.
+        "--contents-directory", ".",
+        # PyInstaller would otherwise follow the imports in mana/ and
+        # freeze a second, read-only copy of the package into the bundle --
+        # which app.py's sys.path order would shadow, but which would also
+        # double the size and confuse anyone reading the output.
+        "--exclude-module", "mana",
+        "--console" if not windowed else "--windowed",
+    ]
+    for module in EXCLUDED:
+        cmd += ["--exclude-module", module]
+    for module in HIDDEN:
+        cmd += ["--hidden-import", module]
+    # Collected wholesale rather than left to the analyser: both reach
+    # large parts of themselves through lazy imports, and the failure mode
+    # is not a build error but a ModuleNotFoundError inside a feature the
+    # user tries months later.
+    for package in COLLECTED:
+        cmd += ["--collect-submodules", package]
+    cmd.append(str(ROOT / "app.py"))
+    return cmd
+
+
+def build_console_twin(app_dir: Path) -> int:
+    """Link app.py again as a console program and put it beside MANA.exe.
+
+    Only the executable is copied. In an onedir build the .exe holds the
+    bootloader and the archive of frozen Python modules; the interpreter,
+    the native libraries and mana/ are the folder's, and both builds
+    collect the same folder from the same command. So the twin runs on
+    the window build's files and adds its own ~26 MB (measured on the
+    first build: 25.9 MB, the same as MANA.exe), not another 270.
+    """
+    work = BUILD / "console-twin"
+    cmd = pyinstaller_command(windowed=False, name=CONSOLE_TWIN)
+    # Its own dist, work and spec directories: the default ones hold the
+    # window build that was just made.
+    cmd[-1:-1] = ["--distpath", str(work / "dist"),
+                  "--workpath", str(work / "build"),
+                  "--specpath", str(work)]
+    print()
+    print(f"$ ... --name {CONSOLE_TWIN} --console  (консольная копия для терминала)")
+    result = subprocess.run(cmd, cwd=str(ROOT))
+    built = work / "dist" / CONSOLE_TWIN / f"{CONSOLE_TWIN}.exe"
+    if result.returncode != 0 or not built.is_file():
+        print(f"{CONSOLE_TWIN}.exe не собрался: установленная MANA не сможет")
+        print("печатать в терминал. Окно при этом работает.")
+        return result.returncode or 1
+    shutil.copy2(built, app_dir / built.name)
+    return 0
 
 
 def build(windowed: bool, allow_missing: bool = False,
@@ -115,50 +200,18 @@ def build(windowed: bool, allow_missing: bool = False,
     for path in (DIST, BUILD):
         shutil.rmtree(path, ignore_errors=True)
 
-    cmd = [
-        sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir",
-        "--name", "MANA",
-        # Both directories are DATA. mana/ must stay as .py files so the
-        # agent can patch itself; python/ is the sandbox interpreter that
-        # replaces sys.executable in a frozen build.
-        "--add-data", f"{ROOT / 'mana'}{';'}mana",
-        "--add-data", f"{EMBED}{';'}python",
-        # The window shell and its page. Unlike mana/, this one IS frozen
-        # into the bundle: nothing rewrites it at runtime, so there is no
-        # reason to ship it as loose files. web/ still has to be declared
-        # as data -- PyInstaller collects .py, never .html.
-        "--add-data", f"{ROOT / 'mana_desktop' / 'web'}{';'}mana_desktop/web",
-        # Flat layout: PyInstaller 6 puts collected files under
-        # _internal/ by default, which would put mana/ and python/ one
-        # level below where paths.install_root() looks for them. Keeping
-        # the contents beside the executable makes the folder layout the
-        # same thing the code assumes.
-        "--contents-directory", ".",
-        # PyInstaller would otherwise follow the imports in mana/ and
-        # freeze a second, read-only copy of the package into the bundle --
-        # which app.py's sys.path order would shadow, but which would also
-        # double the size and confuse anyone reading the output.
-        "--exclude-module", "mana",
-        "--console" if not windowed else "--windowed",
-    ]
-    for module in EXCLUDED:
-        cmd += ["--exclude-module", module]
-    for module in HIDDEN:
-        cmd += ["--hidden-import", module]
-    # Collected wholesale rather than left to the analyser: both reach
-    # large parts of themselves through lazy imports, and the failure mode
-    # is not a build error but a ModuleNotFoundError inside a feature the
-    # user tries months later.
-    for package in COLLECTED:
-        cmd += ["--collect-submodules", package]
-    cmd.append(str(ROOT / "app.py"))
-
+    cmd = pyinstaller_command(windowed)
     print("$", " ".join(cmd[:6]), "...")
     result = subprocess.run(cmd, cwd=str(ROOT))
     if result.returncode != 0:
         return result.returncode
 
     app_dir = DIST / "MANA"
+    if windowed:
+        code = build_console_twin(app_dir)
+        if code != 0:
+            return code
+    twin = app_dir / f"{CONSOLE_TWIN}.exe"
     total = sum(f.stat().st_size for f in app_dir.rglob("*") if f.is_file())
 
     # Shipped beside the executable so that "what is in this build?"
@@ -170,6 +223,7 @@ def build(windowed: bool, allow_missing: bool = False,
         "built": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "python": sys.version.split()[0],
         "windowed": windowed,
+        "console_twin": twin.name if twin.is_file() else "",
         "bundled": {f.spec.package: f.version for f in found if f.present},
         "missing": [f.spec.package for f in found if not f.present],
         "deliberately_absent": [
@@ -178,13 +232,17 @@ def build(windowed: bool, allow_missing: bool = False,
     }, ensure_ascii=False, indent=2), encoding="utf-8")
 
     if sign_with:
-        code = sign(app_dir / "MANA.exe", sign_with)
-        if code != 0:
-            return code
+        for target in (app_dir / "MANA.exe", twin):
+            if target.is_file():
+                code = sign(target, sign_with)
+                if code != 0:
+                    return code
 
     print(f"\nГотово: {app_dir}")
     print(f"Размер: {total / 1e6:.1f} МБ")
     print(f"Проверка: {app_dir / 'MANA.exe'} --self-check")
+    if twin.is_file():
+        print(f"Терминал: {twin} --bench")
     return 0
 
 

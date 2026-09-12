@@ -355,6 +355,29 @@ def test_a_finished_game_is_not_played_into():
     assert bot.finished[0].status == "aborted"
 
 
+def test_a_break_on_its_own_side_is_recorded_and_said(monkeypatch):
+    """Uncaught, an ImportError here killed the game thread silently and
+    the game read as merely unfinished."""
+    from mana import events
+
+    bot = _bot([FULL])
+
+    def broken(*args, **kwargs):
+        raise ImportError("No module named 'chess'")
+
+    monkeypatch.setattr(bot, "_advance", broken)
+    seen = []
+    sink = events.subscribe(seen.append)
+    try:
+        bot._play(lichess.GameStart(id="g1"))
+    finally:
+        events.unsubscribe(sink)
+    seat = bot.finished[0]
+    assert "ImportError" in seat.error and "chess" in seat.error
+    assert any(e.kind == events.ERROR and "не смогла сделать ход" in e.text
+               for e in seen)
+
+
 def test_a_challenge_is_refused_while_a_game_is_running():
     bot = _bot([])
     bot.seats["busy"] = chess_bot.Seat(game_id="busy")

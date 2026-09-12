@@ -15,6 +15,9 @@ a way a packaged build has actually gone out wrong:
   3. The build is the windowed one. A console build opens a black
      terminal behind the window on every launch; it is the right thing to
      ship to yourself and the wrong thing to hand anyone else.
+  4. MANA-cli.exe is beside MANA.exe. Without it an installed MANA started
+     from cmd.exe prints nothing: the windowed executable has no console,
+     so the chess ladder and everything it concludes go nowhere.
 
 Usage:
     python build_exe.py --windowed
@@ -36,6 +39,8 @@ sys.path.insert(0, str(ROOT))
 DIST = ROOT / "dist"
 APP_DIR = DIST / "MANA"
 SCRIPT = ROOT / "installer" / "mana.iss"
+#: The console executable build_exe.py links beside MANA.exe.
+TWIN = "MANA-cli.exe"
 
 #: Where Inno Setup lands. The LocalAppData entry is first because it is
 #: what `winget install JRSoftware.InnoSetup` produces -- winget installs
@@ -100,6 +105,13 @@ def main() -> int:
         print("  пересоберите: python build_exe.py --windowed")
         return 1
 
+    if not (APP_DIR / TWIN).is_file():
+        print(f"нет {APP_DIR / TWIN}")
+        print("Без него установленная MANA, запущенная из командной строки,")
+        print("ничего не напечатает: MANA.exe — оконная программа без консоли.")
+        print("  пересоберите: python build_exe.py --windowed")
+        return 1
+
     compiler = find_compiler()
     if not compiler:
         print("не найден ISCC.exe — компилятор Inno Setup 6.")
@@ -117,9 +129,10 @@ def main() -> int:
     # the installer unsigned. The setup file itself is signed below.
     if args.sign:
         from build_exe import sign
-        code = sign(APP_DIR / "MANA.exe", args.sign)
-        if code != 0:
-            return code
+        for target in (APP_DIR / "MANA.exe", APP_DIR / TWIN):
+            code = sign(target, args.sign)
+            if code != 0:
+                return code
 
     total = sum(f.stat().st_size for f in APP_DIR.rglob("*") if f.is_file())
     print(f"источник: {APP_DIR}  ({total / 1e6:.0f} МБ до сжатия)")
