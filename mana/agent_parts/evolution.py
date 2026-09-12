@@ -42,7 +42,7 @@ from .. import code_evolution as _code_evolution
 from ..optional_deps import fitz, HAS_FITZ, HAS_SKLEARN, LogisticRegression, HAS_TORCH, DEVICE, HAS_WEB, WEB_BACKEND, torch
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "2.0"
+__version__ = "2.1"
 
 def _out(*parts: Any, **_kw: Any) -> None:
     """print()-shaped adapter onto the event bus.
@@ -171,7 +171,10 @@ class EvolutionMixin:
         scored = []
         seen = set()
         for p in candidates:
-            p = PipelineSpec(**asdict(p)).normalize(self.config)
+            # Experience may hold specs from before routing and capability
+            # left the genome; they seed a profile, not a new route.
+            p = PipelineFactory.pin(PipelineSpec.from_dict(asdict(p)).normalize(self.config),
+                                    self.pipeline, self.config)
             if p.key() in seen: continue
             seen.add(p.key())
             scored.append((self.experience.ucb(p.key(), total, self.config.ucb_exploration), p))
@@ -180,7 +183,7 @@ class EvolutionMixin:
         rate = min(.95, self.config.mutation_rate + self._exploration_level())
         while len(population) < self.config.strategy_population:
             if self.stagnation >= self.config.exploration_stagnation_threshold and len(population) % 2 == 0:
-                p = PipelineFactory.random(self.rm, self.config)
+                p = PipelineFactory.random(self.rm, self.config, parent=self.pipeline)
             else:
                 base = self.rm.choice(population or [self.pipeline])
                 p = PipelineFactory.mutate(base, self.rm, self.config, rate, self.frozen_params.keys())
@@ -297,6 +300,80 @@ class EvolutionMixin:
         if abs(before) <= 1e-12:
             return 0.0 if abs(after) <= 1e-12 else float("inf")
         return (after - before) / abs(before)
+
+    #: Oracle-graded development tasks per domain for the acceptance
+    #: evidence. There are three development domains, so twelve each is
+    #: thirty-six paired trials -- over the gates' floor of thirty.
+    GATE_DEV_PER_DOMAIN = 12
+    #: Hidden tasks per domain, per arm. Small on purpose: the hidden
+    #: budget is per process, and every candidate that reaches the gate
+    #: spends two evaluations of it.
+    GATE_HIDDEN_PER_DOMAIN = 10
+
+    def _gate_evidence(self, champion: PipelineSpec, candidate: PipelineSpec) -> Any:
+        """Both arms on oracle-graded tasks and on the hidden holdout.
+
+        Not the 21 substring tasks: those decide which candidates are worth
+        measuring, and they still do. Whether a candidate is better is a
+        question for tasks with a computed answer, graded without a model,
+        and for a set the search never saw.
+        """
+        from ..core import oracle, splits
+        from ..core.gates import Evidence, PairedOutcome
+
+        def respond(spec: PipelineSpec):
+            def ask(prompt: str) -> str:
+                try:
+                    return str(self.answer(prompt, spec=spec, save_memory=False,
+                                           context_tag="GATE").get("answer") or "")
+                except Exception:
+                    return ""
+            return ask
+
+        base, cand = respond(champion), respond(candidate)
+        outcomes = [PairedOutcome(task_id=task.task_id, domain=task.domain,
+                                  baseline_correct=oracle.grade(task, base(task.prompt), self.verifier).correct,
+                                  candidate_correct=oracle.grade(task, cand(task.prompt), self.verifier).correct)
+                    for task in splits.dev_tasks(per_domain=self.GATE_DEV_PER_DOMAIN)]
+        evidence = Evidence(
+            paired_dev=outcomes,
+            # A break is only possible where the champion was right.
+            counterexamples_sought=sum(1 for o in outcomes if o.baseline_correct),
+            counterexamples_found=sum(1 for o in outcomes
+                                      if o.baseline_correct and not o.candidate_correct))
+        try:
+            hidden_base = splits.hidden_score(lambda task: base(task["prompt"]), verifier=self.verifier,
+                                              per_domain=self.GATE_HIDDEN_PER_DOMAIN,
+                                              label="evolution-champion")
+            hidden_cand = splits.hidden_score(lambda task: cand(task["prompt"]), verifier=self.verifier,
+                                              per_domain=self.GATE_HIDDEN_PER_DOMAIN,
+                                              label="evolution-candidate")
+            evidence.with_hidden(hidden_base, hidden_cand)
+        except Exception as exc:
+            evidence.notes["hidden"] = f"не измерено: {exc}"
+        return evidence
+
+    def _judge_candidate(self, champion: PipelineSpec, candidate: PipelineSpec,
+                         changed: Dict[str, Any]) -> Tuple[Any, Any]:
+        """Ask core/gates, inside a transaction the caller closes.
+
+        Returned open: the decision is applied afterwards, and a crash in
+        between must leave the transaction findable as unfinished rather
+        than recorded as either outcome.
+        """
+        from ..core import gates, transaction
+
+        names = sorted((changed or {}).get("changed", {})) or ["без изменений"]
+        claim = gates.Claim(claim_id=f"pipeline:{candidate.key()}", kind="genome",
+                            description="PipelineSpec: " + ", ".join(names))
+        txn = transaction.TransactionScope(claim.claim_id, "genome", claim.description)
+        txn.step(transaction.SNAPSHOT, pipeline=asdict(champion))
+        evidence = self._gate_evidence(champion, candidate)
+        txn.step(transaction.MEASURED, paired=len(evidence.paired_dev),
+                 hidden_measured=evidence.baseline_hidden is not None)
+        verdict = gates.judge(claim, evidence)
+        txn.step(transaction.DECIDED, status=verdict.status, reason=verdict.reason)
+        return txn, verdict
 
     def _strict_acceptance(self, before: Dict[str, Any], candidate_after: Dict[str, Any],
                            candidate_fit: float, champion_fit: float) -> Tuple[bool, Dict[str, Any]]:
@@ -658,7 +735,6 @@ class EvolutionMixin:
         report["adaptive_compute"] = {
             "budget": int(getattr(self.pipeline, "compute_budget", 2)),
             "confidence_threshold": float(getattr(self.pipeline, "confidence_threshold", 0.62)),
-            "verification_mode": getattr(self.pipeline, "verification_mode", "adaptive"),
             "architecture": getattr(self.pipeline, "architecture", "adaptive"),
             "graph_nodes": list(getattr(self.pipeline, "graph_nodes", ("LLM", "EVALUATE"))),
             "stop_policy": getattr(self.pipeline, "stop_policy", "adaptive"),
@@ -718,9 +794,21 @@ class EvolutionMixin:
             self._vlog("CANDIDATE AFTER START | actual candidate + LOCKED HOLDOUT")
             candidate_after = self.run_control_benchmark(candidate_pipeline)
             candidate_after_for_compare = candidate_after
-            accepted, final_gate = self._strict_acceptance(
+            # The old conditions stay, as vetoes only: latency, reliability
+            # and regression on the substring suite can still refuse a
+            # candidate. Whether it is better is decided by core/gates.
+            old_ok, final_gate = self._strict_acceptance(
                 baseline_full, candidate_after, fit, champion_before_fit
             )
+            txn, gate_verdict = self._judge_candidate(champion_before_pipeline,
+                                                      candidate_pipeline, changed)
+            accepted = bool(old_ok and gate_verdict.accepted)
+            final_gate["gate_verdict"] = gate_verdict.as_dict()
+            final_gate["old_checks_passed"] = bool(old_ok)
+            if not gate_verdict.accepted:
+                final_gate.setdefault("failed_gates", []).append(f"core_gates:{gate_verdict.status}")
+                final_gate["reason"] = f"core/gates: {gate_verdict.reason}"
+            final_gate["accepted"] = accepted
             candidate_routing = self.routing_holdout(candidate_pipeline) if self.config.routing_gate_enabled else None
             routing_gate = {"enabled": bool(self.config.routing_gate_enabled), "baseline": baseline_routing, "candidate": candidate_routing, "failed_gates": []}
             if self.config.routing_gate_enabled and candidate_routing is not None:
@@ -762,6 +850,7 @@ class EvolutionMixin:
         else:
             candidate_after = None
             candidate_after_for_compare = baseline_full
+            txn = None
             candidate_routing = None
             routing_gate = {"enabled": bool(self.config.routing_gate_enabled), "baseline": baseline_routing, "candidate": None, "failed_gates": ["candidate_rejected_precheck"] if self.config.routing_gate_enabled else []}
             accepted = False
@@ -796,6 +885,12 @@ class EvolutionMixin:
             self.best_metrics = self.rollback_snapshot["best_metrics"] if self.rollback_snapshot else self.best_metrics
             self.stagnation += 1
             after_full = baseline_full
+
+        if txn is not None:
+            if accepted:
+                txn.commit(pipeline=asdict(self.pipeline))
+            else:
+                txn.rollback(reason=str(final_gate.get("reason", "")))
 
         # 5. Build a report from actual before/after data. There is no post-hoc 'accept because holdout looked okay'.
         report = self._cycle_report(

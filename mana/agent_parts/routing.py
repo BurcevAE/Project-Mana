@@ -309,8 +309,9 @@ class RoutingMixin:
             return mode
         return self.classify_route(task)
 
-    def _answer_routed(self, task: str, spec: PipelineSpec, save_memory: bool, context_tag: str) -> Dict[str, Any]:
-        route = self._effective_route(task, spec)
+    def _answer_routed(self, task: str, spec: PipelineSpec, save_memory: bool, context_tag: str,
+                       route: Optional[str] = None) -> Dict[str, Any]:
+        route = route or self._effective_route(task, spec)
         routed = PipelineSpec(**asdict(spec)).normalize(self.config)
         routed.route_mode = route
         if route == "local":

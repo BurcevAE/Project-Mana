@@ -28,14 +28,20 @@ def test_baseline_score_shape():
     assert len(base["passed"]) + len(base["failed"]) == base["total"]
 
 
-def test_genuine_improvement_is_accepted(isolated_agent_exec_enabled):
-    """Uses a test-local CodeTarget under a throwaway id, so it never
-    depends on what state the real whitelist entries happen to be in.
+def test_a_genuine_improvement_on_one_case_is_not_evaluated(isolated_agent_exec_enabled):
+    """A real fix, measured on one test case, is not an accepted change.
 
+    It used to be: this module judged its own candidates, and one newly
+    passing case with no regression was enough to rewrite MANA's source.
+    The decision now belongs to core/gates, which needs thirty paired
+    trials before it will say anything. The diagnosis stays -- this IS a
+    strict improvement on what was measured -- and the status says that
+    what was measured is not enough.
+
+    Uses a test-local CodeTarget under a throwaway id, so it never
+    depends on what state the real whitelist entries happen to be in.
     The single test case is one the current implementation demonstrably
-    fails, and the test asserts that precondition first -- if a future
-    change makes it pass, this fails loudly on the precondition rather
-    than quietly proving something else.
+    fails, and the test asserts that precondition first.
     """
     verifier = isolated_agent_exec_enabled.verifier
     real_target = ce.WHITELIST["local_fallback"]
@@ -64,8 +70,10 @@ def _local_fallback(task: str) -> str:
         decision = ce.decide(evaluation)
     finally:
         del ce.WHITELIST["local_fallback_local_test"]
-    assert decision["accepted"] is True, decision
-    assert decision["reason"] == "strict_improvement"
+    assert decision["reason"] == "strict_improvement", decision   # the diagnosis
+    assert decision["accepted"] is False                            # the gate
+    assert decision["status"] == "NOT_EVALUATED"
+    assert "sample_size" in decision["gate"]["failed_gates"]
 
 
 def test_noop_candidate_is_rejected_as_no_improvement(isolated_agent_exec_enabled):

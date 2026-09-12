@@ -280,26 +280,50 @@ def evaluate_candidate(target_id: str, candidate_source: str, verifier: Any) -> 
 
 
 def decide(evaluation: Dict[str, Any]) -> Dict[str, Any]:
-    """Strict accept/reject gate: no regression on anything the baseline
-    already passed, and a strict improvement on at least one case that
-    currently fails. A tie is a reject, same as evolve_pipeline's
-    _strict_acceptance -- "no measurable win" is not accepted just because
-    nothing got worse."""
+    """Ask core/gates whether this patch may be applied.
+
+    This module used to judge its own candidates: no regression, and at
+    least one newly passing case, was an acceptance -- on as few as one
+    test case. It was one of two loops that really change the agent, and
+    both bypassed the only module allowed to say "accepted". Now the same
+    sandbox results go to `gates.judge` as paired outcomes, one per test
+    case, and the gate decides.
+
+    `reason` keeps the local diagnosis -- regression, no improvement, or a
+    strict improvement -- because that is what a person needs to read.
+    Whether it is accepted is the gate's `status`. With the handful of
+    cases a target carries and no hidden set for source patches, that
+    status is NOT_EVALUATED or REJECTED: the gate cannot confirm a patch
+    on this evidence, and saying so is the change.
+    """
     if not evaluation.get("ok"):
-        return {"accepted": False, "reason": evaluation.get("reason", "evaluation failed")}
+        return {"accepted": False, "status": "NOT_EVALUATED",
+                "reason": evaluation.get("reason", "evaluation failed")}
+    from .core.gates import Claim, Evidence, PairedOutcome, judge
+
     base_passed = set(evaluation["baseline"]["passed"])
     cand_passed = set(evaluation["candidate"]["passed"])
+    total = int(evaluation["candidate"]["total"])
     regressed = base_passed - cand_passed
     newly_fixed = cand_passed - base_passed
-    if regressed:
-        return {"accepted": False, "reason": "regression", "regressed_cases": sorted(regressed)}
-    if not newly_fixed:
-        return {"accepted": False, "reason": "no_improvement",
-                "baseline_pass_rate": len(base_passed) / max(1, evaluation["baseline"]["total"])}
-    return {"accepted": True, "reason": "strict_improvement",
+    outcomes = [PairedOutcome(task_id=f"case-{index}", domain="code",
+                              baseline_correct=index in base_passed,
+                              candidate_correct=index in cand_passed)
+                for index in range(total)]
+    claim = Claim(claim_id=f"code:{evaluation.get('target_id', '')}", kind="code",
+                  description="патч собственного кода")
+    verdict = judge(claim, Evidence(paired_dev=outcomes,
+                                    counterexamples_sought=len(base_passed),
+                                    counterexamples_found=len(regressed)))
+    diagnosis = ("regression" if regressed
+                 else "no_improvement" if not newly_fixed
+                 else "strict_improvement")
+    return {"accepted": bool(verdict.accepted), "status": verdict.status,
+            "reason": diagnosis, "gate": verdict.as_dict(),
+            "regressed_cases": sorted(regressed),
             "newly_fixed_cases": sorted(newly_fixed),
             "before_pass_rate": len(base_passed) / max(1, evaluation["baseline"]["total"]),
-            "after_pass_rate": len(cand_passed) / max(1, evaluation["candidate"]["total"])}
+            "after_pass_rate": len(cand_passed) / max(1, total)}
 
 
 def _locate_function(file_text: str, class_name: str, function_name: str) -> Dict[str, Any]:
@@ -375,6 +399,15 @@ def apply_patch(target_id: str, candidate_source: str, evaluation: Dict[str, Any
     new_block = _render_method(target, candidate_source).rstrip("\n")
     patched = "\n".join(lines[:loc["start"] - 1]) + "\n" + new_block + "\n" + "\n".join(lines[loc["end"]:])
 
+    # Opened before anything is written and committed after the source is
+    # replaced: a process killed in between leaves the transaction open,
+    # which is how `core.transaction.unfinished()` finds a half-applied
+    # patch after a crash.
+    from .core import transaction
+    txn = transaction.TransactionScope(f"code:{target_id}", "code",
+                                       instruction or target_id)
+    txn.step(transaction.SNAPSHOT, file=target.file_path,
+             status=decision.get("status", ""))
     HISTORY_ROOT.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     backup_path = HISTORY_ROOT / f"{target.file_path.replace('/', '__')}.{target_id}.{stamp}.bak"
@@ -394,6 +427,7 @@ def apply_patch(target_id: str, candidate_source: str, evaluation: Dict[str, Any
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     file_path.write_text(patched, encoding="utf-8")
+    txn.commit(backup=str(backup_path))
     return {"applied": True, "backup": str(backup_path), "diff": diff, "decision": decision}
 
 

@@ -251,6 +251,23 @@ def _no_ambient_findings(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_ambient_transactions(tmp_path_factory, monkeypatch):
+    """No test writes the machine's self-modification journal.
+
+    `core/transaction.py` writes under the data root, which during tests
+    was the repository itself: a brain-retirement test left three lines in
+    `experiments/transactions.jsonl` on every run. Every adoption now opens
+    a transaction, so every test that adopts would have done the same.
+    """
+    from mana.core import transaction
+
+    root = _isolation_dir(tmp_path_factory)
+    mark = _next_id()
+    monkeypatch.setattr(transaction, "journal_path",
+                        lambda: root / f"transactions-{mark}.jsonl")
+
+
+@pytest.fixture(autouse=True)
 def _no_ambient_player_version(tmp_path_factory, monkeypatch):
     """No test reads or writes the machine's adopted player.
 

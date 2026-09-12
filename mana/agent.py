@@ -18,6 +18,7 @@ from .agent_parts.execution import ExecutionMixin
 from .agent_parts.benchmarking import BenchmarkingMixin
 from .agent_parts.evolution import EvolutionMixin
 from .agent_parts.knowledge_ops import KnowledgeOpsMixin
+from .agent_parts.planning import PlanningMixin
 
 
 class ManaAgent(
@@ -29,6 +30,7 @@ class ManaAgent(
     BenchmarkingMixin,
     EvolutionMixin,
     KnowledgeOpsMixin,
+    PlanningMixin,
 ):
     """Persistent, self-improving MANA agent.
 

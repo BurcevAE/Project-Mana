@@ -230,7 +230,14 @@ def test_the_default_state_of_the_world_needs_no_proof():
 @pytest.fixture
 def journal(tmp_path, monkeypatch):
     monkeypatch.setenv("MANA_DATA_DIR", str(tmp_path))
-    return tmp_path / "experiments" / "transactions.jsonl"
+    path = tmp_path / "experiments" / "transactions.jsonl"
+    # The suite-wide isolation points the journal at a file of its own;
+    # these tests open the journal directly, so they name the same one.
+    def here():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+    monkeypatch.setattr(transaction, "journal_path", here)
+    return path
 
 
 def test_a_completed_transaction_is_not_reported_as_unfinished(journal):

@@ -35,6 +35,7 @@ from ..knowledge import KnowledgeBase
 from ..web import WebSearcher
 from ..llm import LLMClient, LLMCallMeta
 from ..pipeline import PipelineSpec, PipelineFactory, BenchmarkTask, BenchmarkSuite
+from .planning import APP_ACTION, CLARIFY, REMEMBER
 from ..experience import ExperienceDB
 from ..verifier import LocalVerifier
 from ..journal import Journal
@@ -49,7 +50,7 @@ from ..intent import is_ambiguous_followup, format_clarifying_question
 from ..optional_deps import fitz, HAS_FITZ, HAS_SKLEARN, LogisticRegression, HAS_TORCH, DEVICE, HAS_WEB, WEB_BACKEND, torch
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "2.0"
+__version__ = "2.1"
 
 
 class CoreMixin:
@@ -236,7 +237,7 @@ class CoreMixin:
             self.mutation_failure_history = list(d.get("mutation_failure_history", []))[-300:]
             self._fit_learned_router(force=True)
             p_data = d.get("pipeline")
-            if p_data: self.pipeline = PipelineSpec(**p_data).normalize(self.config)
+            if p_data: self.pipeline = PipelineSpec.from_dict(p_data).normalize(self.config)
             rng = d.get("rng_state")
             if rng: self.rm.load_state(rng)
         except Exception as exc:
@@ -391,6 +392,16 @@ class CoreMixin:
     def leave_evaluation(self) -> None:
         self._eval_mode = evaluation.normal()
 
+    def capabilities_status(self) -> List[Dict[str, Any]]:
+        """Everything the agent can use right now: tools, brains, and what
+        was acquired and proved. Read-only -- see mana/capabilities.py."""
+        from .. import capabilities
+        try:
+            pool = self.llm.pool
+        except Exception:
+            pool = None
+        return [row.as_dict() for row in capabilities.snapshot(self.tools, pool)]
+
     def brains_status(self) -> Dict[str, Any]:
         """Everything about the pool: which brains exist, which are ready,
         which are cooling down or out of free-tier quota, and their measured
@@ -466,7 +477,7 @@ class CoreMixin:
             from ..intent import AmbiguousReference
             return AmbiguousReference(False, reason=f"check failed: {exc}")
 
-    def _perform_app_intent(self, task: str) -> Optional[Dict[str, Any]]:
+    def _perform_app_intent(self, task: str, found: Any = None) -> Optional[Dict[str, Any]]:
         """Carry out "запусти X", or return None and let the model answer.
 
         None is the usual answer. This must stay out of the way of every
@@ -480,7 +491,8 @@ class CoreMixin:
         """
         try:
             from ..apps import intent as app_intent
-            found = app_intent.match(task)
+            if found is None:
+                found = app_intent.match(task)
             if found is None:
                 return None
             outcome = app_intent.perform(found, self.tools, goal=task)
@@ -643,7 +655,55 @@ class CoreMixin:
         episode = self.journal.finish(str(result.get("answer") or ""),
                                       self._route_of(result))
         self._note_observed_failures(episode)
+        self._note_capability_gaps(task, result)
+        self._note_standing(task, result)
         return result
+
+    def _note_standing(self, task: str, result: Dict[str, Any]) -> None:
+        """Step 4 of docs/RESEARCH_CONTRACT.md: the turn as an observation,
+        and how the capability it used stands now -- status, boundary, the
+        assumptions that rests on -- on `result["standing"]`.
+
+        Observation only: nothing here acts on the machine or changes the
+        answer, and it never fails the turn, for the same reason as the
+        two calls above. "Served" is phase 3's: a turn with no gap.
+        """
+        try:
+            from ..cognition import gaps
+            from ..research.adapters import turns
+            capability = str((result.get("plan") or {}).get("capability") or "")
+            if not capability:
+                return
+            if getattr(self, "_turn_standings", None) is None:
+                self._turn_standings = turns.TurnStandings(
+                    Path(self.config.findings_path).with_name("turn_observations.jsonl"))
+            served = gaps.from_turn(task, result, self.tools) is None
+            self._turn_standings.observe(capability, turns.situation_of(result), served)
+            result["standing"] = self._turn_standings.standing_of(capability)
+        except Exception as exc:
+            self._vlog(f"standing record failed: {exc}")
+
+    def _note_capability_gaps(self, task: str, result: Dict[str, Any]) -> None:
+        """AGENT -> GAP: write down the capability this turn lacked.
+
+        Until this, the only thing a turn left behind was an invariant
+        violation; a request the agent could not serve at all -- a program
+        that is not installed, an answer a check refuted, a question with
+        no brain to ask -- reached nobody unless a person noticed. Nothing
+        is built or changed here: the gap is recorded, with what would
+        close it, for self-improvement to pick up.
+
+        Never fails the turn, for the same reason as the call above.
+        """
+        try:
+            from ..cognition import gaps
+            from ..cognition.findings import Ledger
+            gap = gaps.from_turn(task, result, self.tools)
+            if gap is not None:
+                said = gaps.record_observed(gap, Ledger(Path(self.config.findings_path)))
+                self._vlog(f"capability gap: {said['capability']}×{said['seen']}")
+        except Exception as exc:
+            self._vlog(f"capability-gap record failed: {exc}")
 
     def _note_observed_failures(self, episode) -> None:
         """Write down what objectively went wrong, without being asked.
@@ -673,8 +733,11 @@ class CoreMixin:
             self._vlog(f"observed-failure record failed: {exc}")
 
     def _solve_task(self, task: str) -> Dict[str, Any]:
-        if self.config.clarify_ambiguous_followups:
-            ambiguous = self._ambiguous_followup(task)
+        # One decision about how this turn is served, made before any of it
+        # runs and carried on the result -- see agent_parts/planning.py.
+        plan = self.plan_task(task)
+        if plan.kind == CLARIFY:
+            ambiguous = plan.detail
             if ambiguous:
                 question = format_clarifying_question(ambiguous.candidates)
                 result = {"task": task, "answer": question, "latency": 0.0,
@@ -686,17 +749,19 @@ class CoreMixin:
                           "verification_trust": "UNVERIFIED",
                           "clarification": {"asked": True, "candidates": ambiguous.candidates,
                                             "reason": ambiguous.reason}}
+                result["plan"] = plan.as_dict()
                 self.history.append({"type": "clarification", "task": task, "cycle": self.cycle,
                                       "latency": 0.0, "reliability": 1.0, "quality": None,
                                       "timestamp": time.time(), **result})
                 self._save_state()
                 return result
 
-        if self._is_memory_write_request(task):
+        if plan.kind == REMEMBER:
             text=self._extract_memory_text(task)
             saved=self.persistent_memory.store_explicit_memory(self.session_id,text,scope="session")
             answer = f"Запомнила: {text}" if saved.get("stored") else "Не удалось сохранить эту запись в память."
             result={"task":task,"answer":answer,"latency":0.0,"trace":{"persistent_memory":1,"memory_action":"STORE"},"pipeline":asdict(self.pipeline),"critic_score":0.0,"critic_trace":{},"llm_ok":False,"passes_used":0,"timeout_count":0,"fallback":False,"llm_latency":0.0,"memory_action":"STORE","memory_store":saved}
+            result["plan"] = plan.as_dict()
             self.history.append({"type":"memory_action","task":task,"cycle":self.cycle,"latency":0.0,"reliability":1.0,"quality":None,"timestamp":time.time(),**result})
             self._save_state()
             return result
@@ -714,13 +779,20 @@ class CoreMixin:
         #
         # Checked before the model, so it also works on an installation
         # with no model -- which is the state a fresh one is in.
-        acted = self._perform_app_intent(task)
-        if acted is not None:
-            return acted
+        if plan.kind == APP_ACTION:
+            acted = self._perform_app_intent(task, found=plan.detail)
+            if acted is not None:
+                acted["plan"] = plan.as_dict()
+                return acted
+            # The action could not even be attempted. Answer instead, which
+            # is what happened before there was a planner.
+            plan = self._plan_answer(task)
 
         before = self._previous_exchange()
-        result = self.answer(task, self.pipeline, save_memory=True, context_tag="USER")
+        result = self.answer(task, self.pipeline, save_memory=True, context_tag="USER",
+                             plan=plan)
         result = self._reject_echo(task, result, before)
+        result["plan"] = plan.as_dict()
         self.history.append({
             "type": "user_task", "task": task, "cycle": self.cycle,
             "latency": result["latency"], "reliability": 1.0 if result.get("llm_ok") else 0.0,

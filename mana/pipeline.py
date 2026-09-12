@@ -32,7 +32,47 @@ import numpy as np
 from .config import Config, RandomManager
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "2.0"
+__version__ = "2.1"
+
+#: Who owns each field. PipelineSpec began as one genome in which evolution
+#: could flip anything, so a candidate search tuned by a 21-task substring
+#: score was also deciding whether the web may be used at all, which brain
+#: policy routes a call and how big the context is. Those are different
+#: kinds of decision with different owners:
+#:
+#:   capability  which capabilities a turn may use at all
+#:   routing     how the path and the brain are chosen
+#:   execution   how the LLM brain runs -- the evolvable profile
+#:   config      sizes and budgets, set by the machine and the person
+#:
+#: Evolution moves `execution` only. The others stay one dataclass for now
+#: -- every reader in agent_parts uses `spec.<field>` -- but each has one
+#: owner, and `PipelineFactory.pin` enforces it.
+CAPABILITY, ROUTING, EXECUTION, CONFIG = "capability", "routing", "execution", "config"
+FIELD_ROLES = {
+    "use_memory": CAPABILITY, "use_web": CAPABILITY, "use_llm": CAPABILITY,
+    "use_critic": CAPABILITY,
+    "route_mode": ROUTING, "web_mode": ROUTING, "brain_policy": ROUTING,
+    "llm_provider": ROUTING, "decompose_mode": ROUTING, "architecture": ROUTING,
+    "llm_passes": EXECUTION, "temperature": EXECUTION, "synthesis_style": EXECUTION,
+    "critic_threshold": EXECUTION, "compute_budget": EXECUTION,
+    "confidence_threshold": EXECUTION, "graph_nodes": EXECUTION,
+    "stop_policy": EXECUTION, "confidence_calibration": EXECUTION,
+    "second_pass_mode": EXECUTION, "prompt_strategy": EXECUTION,
+    "critic_prompt_strategy": EXECUTION, "verification_policy": EXECUTION,
+    "generated_test_cases": EXECUTION, "brain_ensemble": EXECUTION,
+    "memory_top_k": CONFIG, "min_memory_confidence": CONFIG, "web_results": CONFIG,
+    "max_context_chars": CONFIG, "cost_budget": CONFIG,
+}
+EVOLVABLE = frozenset(name for name, role in FIELD_ROLES.items() if role == EXECUTION)
+
+#: Mutations that are not named after the one field they change.
+_MUTATION_FIELD = {"graph_add_node": "graph_nodes", "graph_remove_node": "graph_nodes",
+                   "graph_reorder": "graph_nodes"}
+
+
+def _mutated_field(mutation: str) -> str:
+    return _MUTATION_FIELD.get(mutation, mutation)
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +98,6 @@ class PipelineSpec:
     # v4.0 adaptive-compute genome
     compute_budget: int = 3              # maximum cognitive stages for AUTO
     confidence_threshold: float = 0.62   # stop when confidence reaches this value
-    verification_mode: str = "adaptive" # never/adaptive/always
     architecture: str = "adaptive"     # adaptive/minimal/verify/research/deep
     # v4.2 real computation graph / meta-control genome
     graph_nodes: Tuple[str, ...] = ("LLM", "EVALUATE")
@@ -67,7 +106,6 @@ class PipelineSpec:
     confidence_calibration: float = 1.0
     second_pass_mode: str = "auto"
     llm_provider: str = "auto"
-    web_provider: str = "auto"
     prompt_strategy: str = "direct"
     critic_prompt_strategy: str = "balanced"
     # v4.6 learned routing / verification genome
@@ -80,6 +118,24 @@ class PipelineSpec:
     brain_policy: str = "capability_first"   # + fastest/cheapest/least_loaded/strongest/round_robin
     brain_ensemble: int = 1                  # 1 = single brain; >1 = consensus across N brains
     decompose_mode: str = "never"            # never/auto/always
+
+    @classmethod
+    def from_dict(cls, data):
+        """Build from stored data, ignoring fields this version retired.
+
+        Saved states and the experience database hold specs written by
+        older versions. Constructing them with `**data` raised on the first
+        retired field, and `experience.best` swallowed the error -- so old
+        experience silently disappeared instead of loading.
+        """
+        from dataclasses import fields as _fields
+        known = {f.name for f in _fields(cls)}
+        return cls(**{k: v for k, v in dict(data or {}).items() if k in known})
+
+    def part(self, role: str) -> dict:
+        """The fields one owner is responsible for."""
+        return {name: value for name, value in asdict(self).items()
+                if FIELD_ROLES.get(name) == role}
 
     def normalize(self, cfg: Config) -> "PipelineSpec":
         self.memory_top_k = max(1, min(8, int(self.memory_top_k)))
@@ -124,7 +180,6 @@ class PipelineSpec:
         if "LLM" not in nodes: nodes = ("LLM",) + nodes
         cap = max(2, min(int(cfg.graph_max_nodes), 10))
         self.graph_nodes = nodes[: max(1, cap - 1)] + ("EVALUATE",)
-        if self.verification_mode not in {"never", "adaptive", "always"}: self.verification_mode = "adaptive"
         if self.architecture not in {"adaptive", "minimal", "verify", "research", "deep"}: self.architecture = "adaptive"
         if self.second_pass_mode not in {"auto", "always", "never"}: self.second_pass_mode = "auto"
         # v5.10: llm_provider is no longer a closed set. It names a brain
@@ -137,7 +192,6 @@ class PipelineSpec:
         # ranking when it does not.
         provider = str(self.llm_provider or "auto").strip()
         self.llm_provider = provider if provider and " " not in provider else "auto"
-        if self.web_provider not in {"auto", "ddgs"}: self.web_provider = "auto"
         if self.prompt_strategy not in cfg.prompt_strategies: self.prompt_strategy = "direct"
         if self.critic_prompt_strategy not in cfg.critic_prompt_strategies: self.critic_prompt_strategy = "balanced"
         if self.verification_policy not in {"adaptive", "never", "always", "code_only", "arithmetic_only"}: self.verification_policy = "adaptive"
@@ -256,8 +310,9 @@ class PipelineFactory:
         s.graph_nodes = tuple(nodes)
 
     @staticmethod
-    def random(rm: RandomManager, cfg: Config) -> PipelineSpec:
-        return PipelineSpec(
+    def random(rm: RandomManager, cfg: Config,
+               parent: Optional[PipelineSpec] = None) -> PipelineSpec:
+        spec = PipelineSpec(
             use_memory=rm.random() < 0.9, use_web=rm.random() < 0.5, use_llm=True,
             use_critic=rm.random() < 0.5, memory_top_k=rm.randint(2, 5),
             min_memory_confidence=rm.uniform(.25, .65), web_results=rm.randint(1, min(cfg.max_web_results, 4)),
@@ -265,15 +320,17 @@ class PipelineFactory:
             temperature=rm.uniform(.05, .45), synthesis_style=rm.choice(PipelineFactory.STYLES),
             critic_threshold=rm.uniform(.55, .75), web_mode=rm.choice(PipelineFactory.WEB_MODES),
             compute_budget=rm.randint(1, 4), confidence_threshold=rm.uniform(.52, .78),
-            verification_mode=rm.choice(["adaptive", "adaptive", "always", "never"]),
             architecture=rm.choice(["adaptive", "minimal", "verify", "research", "deep"]),
             graph_nodes=PipelineFactory.random_graph(rm, cfg),
             stop_policy=rm.choice(["adaptive","adaptive","risk_aware","fixed"]),
             cost_budget=rm.uniform(4.0, 20.0), confidence_calibration=rm.uniform(.85,1.15),
             second_pass_mode=rm.choice(PipelineFactory.PASS_MODES), llm_provider="ollama",
-            web_provider="auto", prompt_strategy=rm.choice(cfg.prompt_strategies),
+            prompt_strategy=rm.choice(cfg.prompt_strategies),
             critic_prompt_strategy=rm.choice(cfg.critic_prompt_strategies),
         ).normalize(cfg)
+        # A random candidate is a random execution profile. What it may use
+        # and how it is routed are not evolution's to invent.
+        return spec if parent is None else PipelineFactory.pin(spec, parent, cfg)
 
     @staticmethod
     def mutate(spec: PipelineSpec, rm: RandomManager, cfg: Config, rate: float, frozen=None, max_changes: Optional[int] = None) -> PipelineSpec:
@@ -302,7 +359,6 @@ class PipelineFactory:
             "verification": [
                 ("verification_policy", lambda: setattr(s, "verification_policy", rm.choice(["adaptive","never","always","code_only","arithmetic_only"]))),
                 ("generated_test_cases", lambda: setattr(s, "generated_test_cases", s.generated_test_cases + rm.choice([-1, 1]))),
-                ("verification_mode", lambda: setattr(s, "verification_mode", rm.choice(["never","adaptive","always"]))),
             ],
             "graph": [
                 # Structural, single-effect graph mutations replace the old
@@ -346,14 +402,13 @@ class PipelineFactory:
             "web": [
                 ("web_results", lambda: setattr(s, "web_results", s.web_results + rm.choice([-1, 1]))),
                 ("web_mode", lambda: setattr(s, "web_mode", rm.choice(PipelineFactory.WEB_MODES))),
-                ("web_provider", lambda: setattr(s, "web_provider", "auto")),
             ],
         }
 
         available = []
         for group, items in mutations.items():
             for name, fn in items:
-                if name not in frozen:
+                if name not in frozen and _mutated_field(name) in EVOLVABLE:
                     available.append((group, name, fn))
         if not available:
             return s.normalize(cfg)
@@ -372,13 +427,22 @@ class PipelineFactory:
             pool = [x for x in pool if x[1] != item[1] and x[0] not in groups_used]
         for _, _, fn in chosen:
             fn()
-        return s.normalize(cfg)
+        return PipelineFactory.pin(s.normalize(cfg), spec, cfg)
+
+    @staticmethod
+    def pin(candidate: PipelineSpec, parent: PipelineSpec, cfg: Config) -> PipelineSpec:
+        """The candidate's execution profile on the parent's everything else."""
+        data = asdict(parent)
+        mine = asdict(candidate)
+        for name in EVOLVABLE:
+            data[name] = mine[name]
+        return PipelineSpec(**data).normalize(cfg)
 
     @staticmethod
     def crossover(a: PipelineSpec, b: PipelineSpec, rm: RandomManager, cfg: Config) -> PipelineSpec:
         aa, bb = asdict(a), asdict(b)
-        data = {k: (aa[k] if rm.random() < .5 else bb[k]) for k in aa}
-        return PipelineSpec(**data).normalize(cfg)
+        data = {k: (bb[k] if k in EVOLVABLE and rm.random() >= .5 else aa[k]) for k in aa}
+        return PipelineFactory.pin(PipelineSpec(**data).normalize(cfg), a, cfg)
 
 
 @dataclass

@@ -23,6 +23,8 @@ So the boundary moves from convention to structure:
     `hidden_score()` gives a number, and there is no function that hands
     out the tasks. An agent cannot overfit to a set it cannot read;
   * acceptance, regression and rollback rules live here;
+  * what an answer may claim to know for a task lives here
+    (`standing.py`) -- "verified" is defined once, like "accepted";
   * the evaluation-mode flag lives here rather than on the agent, so
     "am I being measured right now?" is not a property the measured thing
     owns.

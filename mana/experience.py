@@ -66,7 +66,7 @@ class ExperienceDB:
             ).fetchall()
         out = []
         for raw, in rows:
-            try: out.append(PipelineSpec(**json.loads(raw)))
+            try: out.append(PipelineSpec.from_dict(json.loads(raw)))
             except Exception: pass
         return out
 

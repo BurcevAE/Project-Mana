@@ -325,9 +325,10 @@ class ExecutionMixin:
         self._vlog(f"verification refuted the answer; corrected via {source}: {before[:60]!r} -> {corrected[:60]!r}")
         return {"corrected": True, "source": source, "expected": rendered, "before": before}
 
-    def _adaptive_answer_v41(self, task: str, spec: PipelineSpec, save_memory: bool, context_tag: str) -> Dict[str, Any]:
+    def _adaptive_answer_v41(self, task: str, spec: PipelineSpec, save_memory: bool, context_tag: str,
+                             route: Optional[str] = None) -> Dict[str, Any]:
         started = time.perf_counter()
-        route = self._effective_route(task, spec)
+        route = route or self._effective_route(task, spec)
         graph = self._graph_for_task(task, spec, route)
         budget = max(1, min(self.config.adaptive_max_steps, int(spec.compute_budget)))
         threshold = self._risk_threshold(task, spec)
@@ -529,12 +530,16 @@ class ExecutionMixin:
             self._learn_stop_outcome(task, len(attempts), confidence >= threshold, float(confidence))
         return current
 
-    def answer(self, task: str, spec: Optional[PipelineSpec] = None, save_memory: bool = True, context_tag: str = "") -> Dict[str, Any]:
+    def answer(self, task: str, spec: Optional[PipelineSpec] = None, save_memory: bool = True, context_tag: str = "",
+               plan: Any = None) -> Dict[str, Any]:
         spec = PipelineSpec(**asdict(spec or self.pipeline)).normalize(self.config)
+        # The route the planner chose, when there was a plan. Benchmarks and
+        # evolution call this without one and route here, as before.
+        route = getattr(plan, "route", "") or None
         # v4.0: AUTO uses adaptive compute; forced routes retain the deterministic v3.4.11 path.
         if getattr(spec, "route_mode", "auto") == "auto":
-            return self._adaptive_answer_v41(task, spec, save_memory, context_tag)
-        return self._answer_routed(task, spec, save_memory, context_tag)
+            return self._adaptive_answer_v41(task, spec, save_memory, context_tag, route=route)
+        return self._answer_routed(task, spec, save_memory, context_tag, route=route)
 
     def _record_brain_outcome(self, trace: Dict[str, Any], quality: float) -> None:
         """Credit/debit whichever brains contributed to this answer.

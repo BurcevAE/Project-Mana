@@ -95,6 +95,100 @@ class Gap:
                 f"→ {self.suggested_action}")
 
 
+#: A gap seen in real work, as opposed to one derived from a measured
+#: capability interval. One turn could not be served, and the record says
+#: how many times that has happened. Kept apart from `detect()`: that one
+#: ranks what is worth learning from measurements; this one only writes
+#: down what the agent ran into, and ranks nothing.
+OBSERVED_QUESTION = "разрыв способности: {capability}"
+OBSERVED_APPROACH = {"source": "обычная работа", "detector": "gaps.from_turn"}
+
+
+def from_turn(task: str, result: Dict[str, Any], registry: Any = None) -> "Optional[Gap]":
+    """The capability this turn needed and did not have, or None.
+
+    Three things count, each read off the result rather than guessed:
+
+      * an instruction to a program that was not carried out -- the tool
+        is missing on this machine, or it refused;
+      * an answer an independent check refuted and nothing corrected;
+      * an answer that came from the canned fallback because no brain was
+        ready, and that nothing verified.
+
+    None is the usual answer. A turn the agent served, including one it
+    corrected itself after a refuted check, is not a gap.
+    """
+    from .brain_factory import choose_mechanism
+
+    plan = result.get("plan") or {}
+    trace = result.get("trace") or {}
+    kind = plan.get("kind")
+    capability = str(plan.get("capability") or "")
+    if kind == "app_action" and trace.get("performed") is False:
+        name = capability.split(":", 1)[-1]
+        tool = registry.get(name) if registry is not None else None
+        present = bool(tool is not None and tool.is_available())
+        why = (f"инструмент {name} отказал: {trace.get('tool_error') or 'без объяснения'}"
+               if present else f"инструмента {name} на этой машине нет")
+        return _observed(capability, "tool", why, task,
+                         "проверить инструмент" if present
+                         else "подключить или установить инструмент")
+    if kind != "answer":
+        return None
+    verification = result.get("verification") or {}
+    checked = str(verification.get("kind") or "none")
+    if checked != "none" and verification.get("verified") is False:
+        mechanism = choose_mechanism(checked, exactly_computable=checked == "arithmetic")
+        return _observed(f"{capability}@{checked}", checked,
+                         f"ответ опровергнут проверкой «{checked}» и не исправлен",
+                         task, f"{mechanism.mechanism}: {mechanism.reason}")
+    if (result.get("fallback") and capability == "fallback:local"
+            and result.get("verification_trust") != "INDEPENDENTLY_VERIFIED"):
+        mechanism = choose_mechanism("общие вопросы")
+        return _observed("brain:pool", "general",
+                         "ни одного готового мозга: ответ из заготовки, ничем не проверен",
+                         task, f"{mechanism.mechanism}: {mechanism.reason}")
+    return None
+
+
+def _observed(capability_id: str, domain: str, description: str, task: str,
+              action: str) -> "Gap":
+    """A gap from one turn. Its numbers stay zero: one turn measures nothing,
+    and inventing a severity here would put a guess where `detect()` puts
+    an interval."""
+    return Gap(gap_id=f"observed:{capability_id}", kind=COMPETENCE,
+               capability_id=capability_id, domain=domain, band="",
+               description=description, severity=0.0, uncertainty=0.0,
+               frequency=0.0, information_gain=0.0, capability_gain=0.0,
+               cost=0.0, priority=0.0,
+               evidence={"request": str(task or "")[:160], "measured": False},
+               suggested_action=action)
+
+
+def record_observed(gap: "Gap", ledger: Any) -> Dict[str, Any]:
+    """Write the gap down, counting repeats rather than repeating the row."""
+    from .findings import NOT_EVALUATED, Finding
+
+    question = OBSERVED_QUESTION.format(capability=gap.capability_id)
+    probe = Finding(question=question, approach=dict(OBSERVED_APPROACH),
+                    verdict=NOT_EVALUATED)
+    seen = 1
+    for finding in ledger.latest():
+        if finding.finding_id == probe.finding_id:
+            try:
+                seen = int(finding.measurement.get("observed_failures", 0)) + 1
+            except Exception:
+                seen = 1
+    finding = Finding(question=question, approach=dict(OBSERVED_APPROACH),
+                      verdict=NOT_EVALUATED,
+                      measurement={"observed_failures": seen, "domain": gap.domain,
+                                   "last_request": gap.evidence.get("request", "")},
+                      note=f"{gap.description}. Что закрыло бы: {gap.suggested_action}")
+    ledger.record(finding)
+    return {"capability": gap.capability_id, "seen": seen,
+            "finding_id": finding.finding_id}
+
+
 def expected_information_gain(capability: Capability, probe: int = PROBE_SIZE) -> float:
     """How much narrower the interval would get after `probe` more trials.
 
