@@ -24,7 +24,7 @@ from typing import Any
 from ..tools import BaseTool, ToolResult
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 
 class _AppTool(BaseTool):
@@ -304,11 +304,50 @@ class OneCCreateBaseTool(_AppTool):
         return ToolResult(ok=True, output=data)
 
 
+# ------------------------------------------------------------------ chess stand
+
+class _StandTool(_AppTool):
+    """The chess stand needs no desktop application; whether it can run
+    (a Lichess token, a BOT account) is decided when it is asked to, and a
+    refusal says which is missing."""
+    requires_exec = False
+    requires_network = True
+
+    def is_available(self, name: str = "") -> bool:
+        return True
+
+
+class ChessStandStartTool(_StandTool):
+    name = "chess_stand_start"
+    description = ("Запустить шахматный стенд в фоне: лестница против Stockfish на "
+                   "Lichess с уровня 1, 10 побед подряд — следующий уровень, 30 подряд "
+                   "на 8 — конец; в паузах Lichess — самоигра и опыты.")
+    cost_hint = 1.0
+
+    def run(self, **kwargs: Any) -> ToolResult:
+        from . import chess_stand
+        data = chess_stand.start(from_level=int(kwargs.get("from_level", 1) or 1))
+        if not data.get("ok"):
+            return ToolResult(ok=False, error=str(data.get("error", "")))
+        return ToolResult(ok=True, output=data)
+
+
+class ChessStandStopTool(_StandTool):
+    name = "chess_stand_stop"
+    description = "Остановить шахматный стенд и сказать, где он остановился."
+    cost_hint = 1.0
+    requires_network = False
+
+    def run(self, **kwargs: Any) -> ToolResult:
+        from . import chess_stand
+        return ToolResult(ok=True, output=chess_stand.stop())
+
+
 #: Registered by build_default_registry. Order is presentation only.
 APP_TOOLS = (ReadDocumentTool, WriteDocumentTool, OpenInEditorTool,
              OneCListBasesTool, OneCLaunchTool, OneCCreateBaseTool,
              OneCQueryTool, OneCMetadataTool, OneCProposeWriteTool,
-             OneCConfirmWriteTool)
+             OneCConfirmWriteTool, ChessStandStartTool, ChessStandStopTool)
 
 
 def register_app_tools(registry: Any) -> None:

@@ -49,7 +49,7 @@ from typing import Dict
 __version__ = "2.0"
 
 #: The release as a whole.
-PRODUCT_VERSION = "2.89.0"
+PRODUCT_VERSION = "2.90.0"
 
 #: Modules that carry their own version. Kept as an explicit list rather
 #: than discovered by scanning, so a module added without a version number
@@ -85,7 +85,7 @@ VERSIONED_MODULES = (
     "policy", "acquire", "outcome", "echo_guard", "console", "capabilities",
     "core.identity", "cognition.exchange",
     "apps.documents", "apps.editor", "apps.intent", "apps.ollama_setup",
-    "apps.onec", "apps.onec_dataset", "apps.onec_launch", "apps.tools",
+    "apps.onec", "apps.onec_dataset", "apps.onec_launch", "apps.tools", "apps.chess_stand",
     "net.cli", "net.link", "net.peers",
     "pipeline", "experience", "verifier", "memory", "graph_memory", "intent",
     "tools", "code_evolution", "voice", "cli", "version", "episode_affinity",

@@ -44,7 +44,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..outcome import UNOBSERVED, Outcome
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.1"
+__version__ = "1.2"
 
 #: Imperatives that mean "do it", at the start of the message. A verb in
 #: the middle ("расскажи, как запустить") is describing, not asking.
@@ -268,6 +268,35 @@ def _base_named(text: str) -> str:
     return after.group(1).strip() if after else ""
 
 
+#: The chess stand. Narrow like the rest: the word "стенд" must be there,
+#: and a question about it starts nothing.
+_STAND_STOP = re.compile(
+    r"\b(?:останови|остановить|остановись|стоп|прекрати|прекратить|заверши|"
+    r"завершить|выключи|выключить)\b.*\bстенд", re.IGNORECASE)
+_STAND_START = re.compile(
+    r"\b(?:поиграй|поиграть|сыграй|сыграть|играй|запусти|запустить|начни|"
+    r"начать|включи|включить)\b", re.IGNORECASE)
+_STAND_NOT = re.compile(r"\bне\s+(?:\w+\s+)?(?:останавл|остановл|игра|запуск|включа)",
+                        re.IGNORECASE)
+
+
+def _stand_intent(text: str) -> Optional[Intent]:
+    """«Мана, поиграй в шахматы на стенде» / «останови стенд», or None."""
+    head = re.sub(r"^\s*мана[\s,!.:]*", "", (text or "").lower())
+    if "стенд" not in head:
+        return None
+    if "?" in head or _ASKS_ABOUT.match(head) or _STAND_NOT.search(head):
+        return None
+    stop = _STAND_STOP.search(head)
+    if stop:
+        return Intent("stop_chess_stand", "chess_stand_stop", {}, stop.group(0))
+    start = _STAND_START.search(head)
+    if start and re.search(r"шахмат", head):
+        return Intent("start_chess_stand", "chess_stand_start", {"from_level": 1},
+                      start.group(0))
+    return None
+
+
 def match(task: str) -> Optional[Intent]:
     """The action this message asks for, or None.
 
@@ -278,6 +307,9 @@ def match(task: str) -> Optional[Intent]:
     text = (task or "").strip()
     if not text:
         return None
+    stand = _stand_intent(text)
+    if stand is not None:
+        return stand
     head = text.lower()
 
     # Where the imperative may sit. The default requires the start of the
@@ -416,6 +448,18 @@ def describe(intent: Intent, outcome: Dict[str, Any]) -> str:
                 f"Прочитать введённое обратно отсюда нельзя.")
     if intent.action == "launch_onec":
         return _describe_launch(data)
+    if intent.action == "start_chess_stand":
+        window = f" Наблюдение: {data['url']}." if data.get("url") else " Окно наблюдения не открылось."
+        if data.get("already"):
+            return f"Стенд уже идёт: {data.get('status')}.{window}"
+        return (f"Стенд запущен: Lichess, аккаунт {data.get('account')}, с уровня "
+                f"{data.get('level')}. Правило: {data.get('rule')}. Пока Lichess держит "
+                f"паузу, играю сама с собой и ставлю опыты.{window} "
+                f"Остановить — «останови стенд».")
+    if intent.action == "stop_chess_stand":
+        if not data.get("stopped"):
+            return f"Стенд не идёт. {data.get('summary') or ''}".strip()
+        return f"Стенд остановлен. {data.get('summary') or ''}".strip()
     return "Сделано."
 
 
