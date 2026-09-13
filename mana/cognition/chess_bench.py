@@ -120,6 +120,19 @@ DUEL_SLICE = 4
 #: 8.9% of the time. On: `core.sequential` weighs every decided game in
 #: the order it was played and stops at the first boundary it crosses.
 #: Off by default until a run on real self-play has compared the two.
+#:
+#: Compared 2026-09-13 (scripts/run_sequential_duel.py, 700 duel games
+#: per arm from a copy of the 167-game record of 2026-09-12, same seeds):
+#: fixed -- 15 experiments, 44 games each, all REJECTED; sequential -- 7
+#: experiments, 94 games each, all REJECTED, no adoption in either. The
+#: clearly worse levers were decided sooner than thirty (pawn_moves on 15
+#: decided, king_moves on 24); the three the fixed rule rejected at 57-59%
+#: on thirty games were played on to 98-138 decided and came down to
+#: 51-52% -- those 59% were noise. So on this record no tie-break lever
+#: moves the result by ten points, and the sequential rule says so with
+#: evidence that means it; the absence of adoptions is the levers', not
+#: the test's. (captures and material duelled identically in both arms:
+#: at depth two they pick the same moves.)
 SEQUENTIAL_DUEL = False
 
 #: The smallest improvement worth adopting: the changed player winning
