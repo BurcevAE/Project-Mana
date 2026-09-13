@@ -119,7 +119,7 @@ from . import chess_outcome as outcome
 from . import findings as ledger_mod
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.2"
+__version__ = "1.3"
 
 QUESTION = "меняет ли исход выбор среди равных ходов по этому свойству"
 
@@ -262,6 +262,33 @@ class Change:
                 "also_from": list(self.also_from), "what": self.describe(),
                 "then": [[prop, way] for prop, way in self.then],
                 "learned_entries": len(self.table or {})}
+
+    def to_state(self) -> Dict[str, Any]:
+        """Everything that makes this change this change, for a restart.
+
+        `as_dict` is for reading and drops the learned table; a change
+        brought back without it would be a different lever continuing
+        someone else's experiment.
+        """
+        return {"property": self.property, "direction": int(self.direction),
+                "window": self.window, "from_finding": self.from_finding,
+                "share_seen": float(self.share_seen),
+                "also_from": list(self.also_from),
+                "then": [[prop, int(way)] for prop, way in self.then],
+                "table": (dict(self.table) if self.table is not None else None)}
+
+    @classmethod
+    def from_state(cls, row: Dict[str, Any]) -> "Change":
+        table = row.get("table")
+        return cls(property=str(row["property"]), direction=int(row["direction"]),
+                   window=str(row.get("window", outcome.WHOLE)),
+                   from_finding=str(row.get("from_finding", "")),
+                   share_seen=float(row.get("share_seen", 0.0)),
+                   also_from=tuple(row.get("also_from", ())),
+                   then=tuple((str(prop), int(way))
+                              for prop, way in row.get("then", ())),
+                   table=({str(key): float(value) for key, value in table.items()}
+                          if table is not None else None))
 
     def identity(self) -> Dict[str, Any]:
         """What this experiment asks, with nothing that drifts.

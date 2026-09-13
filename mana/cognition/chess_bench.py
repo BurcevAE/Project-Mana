@@ -56,7 +56,7 @@ from .. import events
 from ..net import lichess as api
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.3"
+__version__ = "1.4"
 
 FIRST_LEVEL = 1
 LAST_LEVEL = 8
@@ -164,6 +164,20 @@ def chess_bot_default() -> Any:
     from . import chess_bot
 
     return chess_bot._default_player()
+
+
+def running_path() -> Path:
+    """The sequential tests under way, so a restart continues them.
+
+    Beside the ladder's own state, and derived from it, so whatever moves
+    one moves the other.
+    """
+    return state_path().with_name("experiment_running.json")
+
+
+def _duel_totals(duel: Any) -> Dict[str, int]:
+    return {"games": int(duel.games), "changed_won": int(duel.changed_won),
+            "unchanged_won": int(duel.unchanged_won), "drawn": int(duel.drawn)}
 
 
 def state_path() -> Path:
@@ -378,6 +392,7 @@ class Bench:
         #: player does not.
         self._ties: Optional[List[Any]] = None
         self._reach: Dict[str, Any] = {}
+        self._restore_running()
 
     def stop(self) -> None:
         self._stop.set()
@@ -763,6 +778,106 @@ class Bench:
         return chess_version.player(chess_bot_default(),
                                     chess_version.confirmed())
 
+    def _save_running(self) -> None:
+        """Write down the sequential tests under way; remove the file when
+        none is. Only with the sequential rule on: the fixed rule's state
+        is exactly what it was, in memory.
+
+        Without this a restart threw away every game of a test in
+        progress, and a test that needs a hundred decided games across
+        fifteen-minute cooldowns rarely finished inside one run.
+        """
+        if not self.sequential:
+            return
+        from . import chess_version
+
+        row: Dict[str, Any] = {"control": chess_version.confirmed_fingerprint()}
+        if self._trying is not None and self._trying_test is not None:
+            change, reached, sofar = self._trying
+            row["trying"] = {"change": change.to_state(), "reached": dict(reached),
+                             "duel": _duel_totals(sofar),
+                             "test": self._trying_test.as_dict()}
+        if self._confirming is not None and self._confirming_test is not None:
+            adoption, sofar = self._confirming
+            row["confirming"] = {"version": int(adoption.version),
+                                 "at": float(adoption.at),
+                                 "duel": _duel_totals(sofar),
+                                 "test": self._confirming_test.as_dict()}
+        path = running_path()
+        try:
+            if "trying" in row or "confirming" in row:
+                path.write_text(json.dumps(row, ensure_ascii=False, indent=1),
+                                encoding="utf-8")
+            elif path.exists():
+                path.unlink()
+        except OSError as exc:
+            events.emit(events.WARNING, f"идущий опыт не сохранён: {exc}")
+
+    def _restore_running(self) -> None:
+        """Continue the sequential tests a previous run left under way.
+
+        Only on the same player: a test is a question about the
+        composition in force, and its games say nothing about another. A
+        re-test continues only while its adoption is still provisional.
+        What cannot be read is said and dropped, never guessed at.
+        """
+        if not self.sequential:
+            return
+        path = running_path()
+        try:
+            row = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return
+        except Exception as exc:
+            events.emit(events.WARNING,
+                        f"сохранённый опыт не читается ({type(exc).__name__}); "
+                        f"начинаю заново")
+            return
+        from ..core.sequential import SequentialTest
+        from . import chess_action, chess_version
+
+        if row.get("control") != chess_version.confirmed_fingerprint():
+            events.emit(events.STATUS,
+                        f"сохранённый опыт шёл на составе {row.get('control')}, "
+                        f"а сейчас {chess_version.confirmed_fingerprint()} — "
+                        f"не продолжаю")
+            return
+        said = []
+        try:
+            trying = row.get("trying")
+            if trying:
+                test = SequentialTest.from_dict(trying["test"])
+                change = chess_action.Change.from_state(trying["change"])
+                if not test.decided:
+                    sofar = chess_action.Duel(change=change, **trying["duel"])
+                    self._trying = (change, dict(trying["reached"]), sofar)
+                    self._trying_test = test
+                    said.append(f"опыт «{change.name()}», {sofar.games} партий")
+            confirming = row.get("confirming")
+            if confirming:
+                test = SequentialTest.from_dict(confirming["test"])
+                match = [a for a in chess_version.provisional()
+                         if a.version == int(confirming["version"])
+                         and abs(a.at - float(confirming["at"])) < 1e-6]
+                if match and not test.decided:
+                    adoption = match[0]
+                    change = chess_action.Change(
+                        property=adoption.property, direction=adoption.direction,
+                        then=tuple(adoption.then), table=dict(adoption.table) or None)
+                    sofar = chess_action.Duel(change=change, **confirming["duel"])
+                    self._confirming = (adoption, sofar)
+                    self._confirming_test = test
+                    said.append(f"перепроверка «{adoption.property}», "
+                                f"{sofar.games} партий")
+        except (KeyError, TypeError, ValueError) as exc:
+            self._trying = self._trying_test = None
+            self._confirming = self._confirming_test = None
+            events.emit(events.WARNING,
+                        f"сохранённый опыт не читается ({exc}); начинаю заново")
+            return
+        if said:
+            events.emit(events.STATUS, "продолжаю с прошлого раза: " + "; ".join(said))
+
     def _plan(self) -> Any:
         """The stopping rule, fixed before the first game of a test."""
         from ..core import sequential as seq
@@ -812,6 +927,7 @@ class Bench:
             test = self._running_test("_confirming_test")
             test.observe_all(won for won in fresh.outcomes if won is not None)
             if not test.decided:
+                self._save_running()
                 return (f"перепроверка «{adoption.property}»: {sofar.games} "
                         f"партий; {test.note()}")
         elif (sofar.decided < chess_version.CONFIRM_GAMES
@@ -828,6 +944,7 @@ class Bench:
             sequential=test)
         self._confirming = None
         self._confirming_test = None
+        self._save_running()
         measured = chess_action.measure(sofar)
         enough = test is not None or sofar.decided >= chess_version.CONFIRM_GAMES
         if finding.verdict == chess_action.ACCEPTED and enough:
@@ -926,6 +1043,7 @@ class Bench:
                 sequential=test)
             self._trying = None
             self._trying_test = None
+            self._save_running()
             events.emit(events.STATUS, f"опыт: {finding.verdict}: {finding.note}",
                         chess={"kind": "finding", "text": finding.note})
             # Where the verdict becomes a decision. Not in `record`: that
@@ -941,6 +1059,7 @@ class Bench:
                                    sequential=test)
             return f"опыт закончен: {finding.verdict}"
         if test is not None:
+            self._save_running()
             return f"опыт «{change.name()}»: {sofar.games} партий; {test.note()}"
         return (f"опыт «{change.name()}»: {sofar.games} партий, "
                 f"{sofar.decided} решённых из "

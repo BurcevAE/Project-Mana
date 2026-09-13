@@ -1784,3 +1784,85 @@ def test_a_forged_sequential_record_is_unclassified_and_the_fixed_reading_unchan
     assert findings.classify("ACCEPTED", forged).failure == "UNCLASSIFIED"
     # No record: the fixed floor reads it exactly as before.
     assert findings.classify("ACCEPTED", base).failure == "NOT_MEASURED"
+
+
+# --------------------------------------------------------------------------
+# a sequential test survives a restart
+# --------------------------------------------------------------------------
+
+def _restarted(tmp_path, monkeypatch):
+    monkeypatch.setattr(bench_mod, "state_path", lambda: tmp_path / "bench.json")
+    bot = _Bot([])
+    return bench_mod.Bench(client=_Client(bot), bot=bot, ladder=_ladder(),
+                           gap=0.0, sequential=True)
+
+
+def test_on_a_restart_continues_the_experiment_to_the_same_verdict(tmp_path, monkeypatch):
+    from mana.cognition import chess_action
+
+    bench, chess_version = _sequential_trial(tmp_path, monkeypatch, [True] * 16)
+    bench._experiment()
+    bench._experiment()                                   # eight wins so far
+    assert bench_mod.running_path().exists()
+
+    again = _restarted(tmp_path, monkeypatch)
+    change, _, sofar = again._trying
+    assert change.property == "pawn_moves" and sofar.games == 8
+    assert (again._trying_test.won, again._trying_test.lost) == (8, 0)
+
+    monkeypatch.setattr(chess_action, "duel", _slices(*([True] * 8)))
+    said = [again._experiment() for _ in range(2)]
+    assert "принято условно" in said[-1]
+    assert chess_version.provisional()[0].trials == 16
+    assert not bench_mod.running_path().exists()
+
+
+def test_on_a_saved_experiment_on_another_player_is_not_continued(tmp_path, monkeypatch):
+    bench, chess_version = _sequential_trial(tmp_path, monkeypatch, [True] * 16)
+    bench._experiment()
+    monkeypatch.setattr(chess_version, "confirmed_fingerprint", lambda: "v1-other")
+    again = _restarted(tmp_path, monkeypatch)
+    assert again._trying is None and again._trying_test is None
+
+
+def test_on_a_re_test_continues_across_a_restart(tmp_path, monkeypatch):
+    from mana.cognition import chess_action
+
+    bench, chess_version = _bench_for(tmp_path, monkeypatch)
+    bench.sequential = True
+    change = chess_action.Change("pawn_moves", chess_action.LESS)
+    adopted = chess_version.adopt({
+        "change": change, "causal_finding": "old-duel",
+        "observational_finding": "o1", "reach": 0.6, "trials": 40,
+        "verdict": "ACCEPTED"})
+    bench._confirming = (adopted, chess_action.Duel(change=change))
+    monkeypatch.setattr(chess_action, "duel", _slices(*([True] * 16)))
+    bench._confirm_or_revert()
+    bench._confirm_or_revert()
+
+    again = _restarted(tmp_path, monkeypatch)
+    assert again._confirming is not None and again._confirming_test.won == 8
+    said = [again._confirm_or_revert() for _ in range(2)]
+    assert "подтверждено" in said[-1]
+
+
+def test_off_nothing_is_written_down(tmp_path, monkeypatch):
+    from mana.cognition import chess_action
+
+    bench, _ = _bench_for(tmp_path, monkeypatch)
+    change = chess_action.Change("pawn_moves", chess_action.LESS)
+    bench._trying = (change, {"share": 0.6, "ties": 400, "varies": 240},
+                     chess_action.Duel(change=change))
+    monkeypatch.setattr(chess_action, "duel", _slices(*([True] * 4)))
+    bench._experiment()
+    assert not bench_mod.running_path().exists()
+
+
+def test_a_learned_lever_comes_back_with_its_table():
+    from mana.cognition import chess_action
+
+    learned = chess_action.Change(chess_action.LEARNED, chess_action.MORE,
+                                  then=(("material", 1),),
+                                  table={"e2e4": 0.7, "d2d4": 0.4})
+    back = chess_action.Change.from_state(learned.to_state())
+    assert back == learned
