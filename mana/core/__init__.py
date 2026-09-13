@@ -25,6 +25,9 @@ So the boundary moves from convention to structure:
   * acceptance, regression and rollback rules live here;
   * what an answer may claim to know for a task lives here
     (`standing.py`) -- "verified" is defined once, like "accepted";
+  * how much experience is enough for a verdict lives here
+    (`sequential.py`) -- a stopping rule fixed before the first
+    observation, so the claimant cannot stop when the numbers look good;
   * the evaluation-mode flag lives here rather than on the agent, so
     "am I being measured right now?" is not a property the measured thing
     owns.
@@ -45,7 +48,7 @@ from __future__ import annotations
 from pathlib import Path
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "2.0"
+__version__ = "2.1"
 
 #: The protected directory itself.
 CORE_ROOT = Path(__file__).resolve().parent
