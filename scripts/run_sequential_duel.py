@@ -6,7 +6,11 @@ no ladder: pick a lever, play duel slices, decide, adopt, re-test. Same
 record, same candidates, same duel seeds; the arms differ only in when an
 experiment stops.
 
-    python scripts/run_sequential_duel.py RECORD.jsonl OUT_DIR fixed|sequential [max_games]
+    python scripts/run_sequential_duel.py RECORD.jsonl OUT_DIR fixed|sequential [max_games] [LEDGER.jsonl]
+
+LEDGER seeds the findings ledger, so questions already answered there are
+not asked again -- the way to measure a later stage (weighted levers)
+without replaying the earlier ones.
 """
 from __future__ import annotations
 
@@ -20,6 +24,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 RECORD, OUT, ARM = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
 MAX_GAMES = int(sys.argv[4]) if len(sys.argv) > 4 else 700
+LEDGER = Path(sys.argv[5]) if len(sys.argv) > 5 else None
 if ARM not in ("fixed", "sequential"):
     raise SystemExit("arm: fixed | sequential")
 
@@ -27,6 +32,9 @@ DATA = OUT / ARM
 shutil.rmtree(DATA, ignore_errors=True)
 (DATA / "lichess").mkdir(parents=True)
 shutil.copy(RECORD, DATA / "lichess" / "games.jsonl")
+if LEDGER is not None:
+    (DATA / "findings").mkdir(parents=True)
+    shutil.copy(LEDGER, DATA / "findings" / "findings.jsonl")
 os.environ["MANA_DATA_DIR"] = str(DATA)       # before anything reads a path
 sys.path.insert(0, str(ROOT))
 

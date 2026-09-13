@@ -119,7 +119,7 @@ from . import chess_outcome as outcome
 from . import findings as ledger_mod
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.3"
+__version__ = "1.4"
 
 QUESTION = "меняет ли исход выбор среди равных ходов по этому свойству"
 
@@ -138,6 +138,15 @@ LEARNED = "learned_outcome"
 #: gets the neutral value, so it can neither win nor lose a tie.
 MIN_SEEN = 5
 NEUTRAL = 0.5
+
+#: Weights a stronger lever puts on its property, in hundredths of a pawn
+#: of the search's score (chess_arena.PIECE_VALUE: a pawn is 100) per unit
+#: of the property -- per pawn for material, which chess_features counts
+#: in pawns. A tie-break -- weight 0 -- speaks only where the search is
+#: indifferent, and on the record of 2026-09-12 none of them moved the
+#: result by ten points. A weight overrules the search wherever two moves
+#: differ by less than it, which is what makes it the stronger lever.
+WEIGHTS = (25.0, 50.0, 100.0)
 
 
 def _material_after(board: Any, move: Any) -> float:
@@ -216,6 +225,10 @@ class Change:
     #: None for every declared property, which is every change before
     #: the action space could grow.
     table: Optional[Dict[str, float]] = None
+    #: Zero: a tie-break, as every change before weights existed, and
+    #: byte-identical to one. Above zero: hundredths of a pawn added to a
+    #: move's score per unit of the property, on every move.
+    weight: float = 0.0
 
     def value(self, name: str, board: Any, move: Any) -> float:
         """One key for one move, declared or learned."""
@@ -240,9 +253,23 @@ class Change:
         body = f"{self.property}{self.direction:+d}"
         for prop, way in self.then:
             body += f"×{prop}{way:+d}"
+        if self.weight:
+            body += f"@{self.weight:g}"
         return body
 
+    def bonus(self, board: Any, move: Any) -> float:
+        """What a weighted lever adds to a move's score, in hundredths of
+        a pawn. Zero for a tie-break."""
+        if not self.weight:
+            return 0.0
+        return self.weight * self.direction * self.value(self.property, board, move)
+
     def describe(self) -> str:
+        if self.weight:
+            way = "выше" if self.direction == MORE else "ниже"
+            unit = "пешку" if self.property == "material" else "единицу"
+            return (f"оценивать ход на {self.weight:g} сотых пешки {way} "
+                    f"за каждую {unit} «{self.property}»")
         way = "больше" if self.direction == MORE else "меньше"
         said = (f"среди равных ходов выбирать тот, у которого "
                 f"«{self.property}» {way}")
@@ -261,7 +288,8 @@ class Change:
                 "from_finding": self.from_finding,
                 "also_from": list(self.also_from), "what": self.describe(),
                 "then": [[prop, way] for prop, way in self.then],
-                "learned_entries": len(self.table or {})}
+                "learned_entries": len(self.table or {}),
+                **({"weight": self.weight} if self.weight else {})}
 
     def to_state(self) -> Dict[str, Any]:
         """Everything that makes this change this change, for a restart.
@@ -275,7 +303,8 @@ class Change:
                 "share_seen": float(self.share_seen),
                 "also_from": list(self.also_from),
                 "then": [[prop, int(way)] for prop, way in self.then],
-                "table": (dict(self.table) if self.table is not None else None)}
+                "table": (dict(self.table) if self.table is not None else None),
+                "weight": float(self.weight)}
 
     @classmethod
     def from_state(cls, row: Dict[str, Any]) -> "Change":
@@ -288,7 +317,8 @@ class Change:
                    then=tuple((str(prop), int(way))
                               for prop, way in row.get("then", ())),
                    table=({str(key): float(value) for key, value in table.items()}
-                          if table is not None else None))
+                          if table is not None else None),
+                   weight=float(row.get("weight", 0.0) or 0.0))
 
     def identity(self) -> Dict[str, Any]:
         """What this experiment asks, with nothing that drifts.
@@ -307,6 +337,10 @@ class Change:
         # answered on v0-base come back as if nothing had been tried.
         if self.then:
             out["then"] = [[prop, way] for prop, way in self.then]
+        # The same rule for a weight: absent on a tie-break, so everything
+        # already answered keeps matching.
+        if self.weight:
+            out["weight"] = self.weight
         return out
 
     def choose(self, board: Any, tied: Sequence[Any],
@@ -386,7 +420,8 @@ def propose(findings: Sequence[ledger_mod.Finding]
 
 
 class Tuned:
-    """The unchanged player with one tie-break added.
+    """The unchanged player with one change added: a tie-break, or a
+    weight on every move.
 
     A wrapper rather than a new player: A and B have to differ in exactly
     one thing, and the surest way to guarantee that is for B to be A with
@@ -406,6 +441,8 @@ class Tuned:
         scores = getattr(self.player, "_root_scores", None)
         if not scores:
             return move
+        if self.change.weight:
+            return self._weighed(board, scores, rng) or move
         top = max(score for _, score in scores)
         tied_san = [san for san, score in scores if score == top]
         if len(tied_san) < 2:
@@ -413,6 +450,27 @@ class Tuned:
         tied = [candidate for candidate in board.legal_moves
                 if board.san(candidate) in tied_san]
         return self.change.choose(board, tied, rng) if tied else move
+
+    def _weighed(self, board: Any, scores: Sequence[Tuple[str, float]],
+                 rng: random.Random) -> Any:
+        """The best move once the lever's bonus is added to every score.
+
+        The search's own scores, read off the search that just ran: the
+        change adds one term and nothing else, so A and B still differ in
+        exactly one thing. Equal totals are broken by the shuffle.
+        """
+        by_san = {board.san(candidate): candidate for candidate in board.legal_moves}
+        best, chosen = None, []
+        for san, score in scores:
+            candidate = by_san.get(san)
+            if candidate is None:
+                continue
+            total = score + self.change.bonus(board, candidate)
+            if best is None or total > best:
+                best, chosen = total, [candidate]
+            elif total == best:
+                chosen.append(candidate)
+        return rng.choice(chosen) if chosen else None
 
 
 @dataclass
@@ -583,6 +641,84 @@ def reach(change: Change, ties: Sequence[Tuple[Any, List[str]]]
             varies += 1
     return {"share": round(varies / len(ties), 3) if ties else 0.0,
             "ties": len(ties), "varies": varies}
+
+
+def scored_positions(games: Sequence[Dict[str, Any]], player: Any,
+                     limit: int = POSITIONS_FOR_REACH,
+                     every: int = 7) -> List[Tuple[Any, List[Tuple[str, float]]]]:
+    """Positions from the record with every root move's score.
+
+    `ties_in` keeps only the positions where the top is shared, because a
+    tie-break can act nowhere else. A weight can move the choice in any
+    position, so its reach is measured over all of them.
+    """
+    import chess
+
+    out: List[Tuple[Any, List[Tuple[str, float]]]] = []
+    for game in games:
+        board = chess.Board()
+        for index, uci in enumerate(game.get("moves", [])):
+            if len(out) >= limit:
+                return out
+            try:
+                move = chess.Move.from_uci(uci)
+            except ValueError:
+                break
+            if move not in board.legal_moves:
+                break
+            if index % every == 0 and not board.is_game_over():
+                player.choose(board, random.Random(1))
+                scores = list(getattr(player, "_root_scores", None) or [])
+                if len(scores) > 1:
+                    out.append((board.copy(), scores))
+            board.push(move)
+    return out
+
+
+def reach_weighted(change: Change,
+                   positions: Sequence[Tuple[Any, List[Tuple[str, float]]]]
+                   ) -> Dict[str, Any]:
+    """How often a weighted lever would play another move than the search.
+
+    The weighted counterpart of `reach`, and for the same reason: a lever
+    that changes no move is decided before a game is played. Costs no
+    games -- the scores are the ones the search already gave.
+    """
+    if not known(change) or not change.weight:
+        return {"share": 0.0, "ties": len(positions), "varies": 0, "over": "позиций"}
+    varies = 0
+    for board, scores in positions:
+        by_san = {board.san(candidate): candidate for candidate in board.legal_moves}
+        top = max(score for _, score in scores)
+        before = {san for san, score in scores if score == top}
+        totals = [(san, score + change.bonus(board, by_san[san]))
+                  for san, score in scores if san in by_san]
+        if not totals:
+            continue
+        best = max(total for _, total in totals)
+        if {san for san, total in totals if total == best} != before:
+            varies += 1
+    return {"share": round(varies / len(positions), 3) if positions else 0.0,
+            "ties": len(positions), "varies": varies, "over": "позиций"}
+
+
+def weighted(changes: Sequence[Change]) -> List[Change]:
+    """The same levers acting on every move, at each of WEIGHTS.
+
+    Primitives only: a composite's second key speaks where the first ties,
+    and a weight leaves nothing tied to consult. Each keeps its provenance
+    -- how hard a finding is acted on is not a new finding.
+    """
+    out: List[Change] = []
+    for change in changes:
+        if change.then or change.weight or change.property not in SCORERS:
+            continue
+        for weight in WEIGHTS:
+            out.append(Change(property=change.property, direction=change.direction,
+                              window=change.window, from_finding=change.from_finding,
+                              share_seen=change.share_seen,
+                              also_from=change.also_from, weight=weight))
+    return out
 
 
 def disagreement(first: Change, second: Change,
@@ -843,13 +979,18 @@ def _sequential_note(change: Change, measurement: Dict[str, Any],
     if reached is not None and not reached["varies"]:
         return _note(change, measurement, reached)
     seen = ("" if reached is None
-            else f"; рычаг работал в {reached['share']:.0%} ничьих")
+            else f"; рычаг работал в {reached['share']:.0%} "
+                 f"{reached.get('over', 'ничьих')}")
     return f"{change.describe()}: {test.note()}{seen}"
 
 
 def _note(change: Change, measurement: Dict[str, Any],
           reached: Optional[Dict[str, Any]] = None) -> str:
     if reached is not None and not reached["varies"]:
+        if reached.get("over", "ничьих") != "ничьих":
+            return (f"{change.describe()}: рычаг не меняет выбор ни в одной "
+                    f"из {reached['ties']} {reached['over']}. Эксперимент "
+                    f"не о находке, а о жребии.")
         return (f"{change.describe()}: рычаг не двигает ничего — свойство "
                 f"одинаково у всех равных ходов в {reached['ties']} ничьих. "
                 f"Эксперимент не о находке, а о жребии.")
@@ -866,6 +1007,7 @@ def _note(change: Change, measurement: Dict[str, Any],
     else:
         said = "исход не изменился"
     seen = ("" if reached is None
-            else f", рычаг работал в {reached['share']:.0%} ничьих")
+            else f", рычаг работал в {reached['share']:.0%} "
+                 f"{reached.get('over', 'ничьих')}")
     return (f"{change.describe()}: {said} ({share:.0%} из {trials} решённых, "
             f"интервал {low:.0%}…{high:.0%}{seen})")

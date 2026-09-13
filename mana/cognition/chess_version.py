@@ -64,7 +64,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from ..core.gates import ACCEPTED, MIN_PAIRED_TRIALS
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.2"
+__version__ = "1.3"
 
 #: What an adoption must carry. Named here so a caller can see what to
 #: bring, and so a record missing one comes back refused rather than
@@ -115,14 +115,25 @@ class Adoption:
     #: A learned scorer's values, frozen at adoption. Refitting later
     #: would change the player in force without an experiment.
     table: Dict[str, float] = field(default_factory=dict)
+    #: Hundredths of a pawn per unit of the property, on every move; zero
+    #: for a tie-break, so a file written before weights reads unchanged
+    #: and names -- and so fingerprints -- do not move.
+    weight: float = 0.0
 
     def name(self) -> str:
         body = f"{self.property}{self.direction:+d}"
         for prop, way in self.then:
             body += f"×{prop}{way:+d}"
+        if self.weight:
+            body += f"@{self.weight:g}"
         return body
 
     def describe(self) -> str:
+        if self.weight:
+            way = "выше" if self.direction > 0 else "ниже"
+            return (f"версия {self.version}: оценивать ход на {self.weight:g} "
+                    f"сотых пешки {way} за каждую единицу «{self.property}» "
+                    f"[{self.state}]")
         way = "больше" if self.direction > 0 else "меньше"
         said = (f"версия {self.version}: среди равных ходов выбирать тот, "
                 f"у которого «{self.property}» {way}")
@@ -139,7 +150,8 @@ class Adoption:
                 "causal_finding": self.causal_finding,
                 "observational_finding": self.observational_finding,
                 "reach": self.reach, "trials": self.trials,
-                "effect": self.effect, "at": self.at, "note": self.note}
+                "effect": self.effect, "at": self.at, "note": self.note,
+                "weight": self.weight}
 
     @classmethod
     def from_dict(cls, row: Dict[str, Any]) -> "Adoption":
@@ -157,7 +169,8 @@ class Adoption:
                    then=tuple((str(prop), int(way))
                               for prop, way in row.get("then", ())),
                    table={str(key): float(value) for key, value
-                          in (row.get("table") or {}).items()})
+                          in (row.get("table") or {}).items()},
+                   weight=float(row.get("weight", 0.0) or 0.0))
 
 
 def _load() -> Dict[str, Any]:
@@ -330,7 +343,8 @@ def check(evidence: Dict[str, Any]) -> str:
     already = [row for row in in_force()
                if row.property == getattr(change, "property", "")
                and row.direction == getattr(change, "direction", 0)
-               and tuple(row.then) == tuple(getattr(change, "then", ()))]
+               and tuple(row.then) == tuple(getattr(change, "then", ()))
+               and float(row.weight) == float(getattr(change, "weight", 0.0) or 0.0)]
     if already:
         return "это изменение уже в силе"
     return ""
@@ -353,6 +367,7 @@ def adopt(evidence: Dict[str, Any]) -> Adoption:
         then=tuple((str(prop), int(way))
                    for prop, way in getattr(change, "then", ())),
         table=dict(getattr(change, "table", None) or {}),
+        weight=float(getattr(change, "weight", 0.0) or 0.0),
         version=version() + 1, state=PROVISIONAL,
         causal_finding=str(evidence["causal_finding"]),
         observational_finding=str(evidence["observational_finding"]),
@@ -431,7 +446,7 @@ def player(base: Any, rows: Optional[Sequence[Adoption]] = None) -> Any:
         out = chess_action.Tuned(out, chess_action.Change(
             property=row.property, direction=row.direction,
             then=tuple(row.then), table=dict(row.table) or None,
-            from_finding=row.causal_finding))
+            weight=float(row.weight), from_finding=row.causal_finding))
     return out
 
 

@@ -1271,8 +1271,10 @@ def _picking(bench, monkeypatch, properties):
                                               "varies": 1})
     # These ask about the first order only. Composition is a real
     # measurement on real positions and has its own tests; here it would
-    # answer a question nobody asked, on a stand-in tie.
+    # answer a question nobody asked, on a stand-in tie. The weighted
+    # stage likewise: it is measured on real positions, with its own tests.
     monkeypatch.setattr(chess_action, "compose", lambda parts, ties: [])
+    monkeypatch.setattr(chess_action, "weighted", lambda parts: [])
     bench._sides = {"g": object()}
     bench._ties = None
     bench._reach = {}
@@ -1409,6 +1411,8 @@ def test_a_high_observational_score_does_not_reopen_an_answered_question(
                         lambda change, ties: {"share": 0.9, "ties": 1,
                                               "varies": 1})
     monkeypatch.setattr(chess_action, "compose", lambda parts, ties: [])
+    # A weight on it is a new question, not this one reopened.
+    monkeypatch.setattr(chess_action, "weighted", lambda parts: [])
     bench._sides = {"g": object()}
     bench._ties = None
     bench._reach = {}
@@ -1554,6 +1558,7 @@ def test_a_new_kind_of_action_appears_only_when_the_declared_ones_are_out(
     bench, _ = _bench_for(tmp_path, monkeypatch)
     changes = _first_order(bench, monkeypatch)
     monkeypatch.setattr(chess_action, "compose", lambda parts, ties: [])
+    monkeypatch.setattr(chess_action, "weighted", lambda parts: [])
     _record_of(monkeypatch)
 
     first = bench._pick()
@@ -1577,6 +1582,7 @@ def test_the_new_action_is_closed_by_its_own_result(tmp_path, monkeypatch):
     bench, _ = _bench_for(tmp_path, monkeypatch)
     changes = _first_order(bench, monkeypatch)
     monkeypatch.setattr(chess_action, "compose", lambda parts, ties: [])
+    monkeypatch.setattr(chess_action, "weighted", lambda parts: [])
     _record_of(monkeypatch)
     for change in changes:
         _answered(bench, change.property, "REJECTED")
@@ -1873,3 +1879,149 @@ def test_a_learned_lever_comes_back_with_its_table():
                                   table={"e2e4": 0.7, "d2d4": 0.4})
     back = chess_action.Change.from_state(learned.to_state())
     assert back == learned
+
+
+# --------------------------------------------------------------------------
+# stronger levers: a weight on the property, acting on every move
+# --------------------------------------------------------------------------
+
+#: White to move; Bxf7+ is the only check, O-O is legal.
+ITALIAN = "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4"
+
+
+class _Scored:
+    """A player whose search result the test sets: SAN -> score."""
+    name = "scored"
+
+    def __init__(self, scores):
+        self.scores = scores
+        self._root_scores = []
+
+    def choose(self, board, rng):
+        self._root_scores = [(board.san(m), self.scores.get(board.san(m), 0.0))
+                             for m in board.legal_moves]
+        top = max(score for _, score in self._root_scores)
+        return next(m for m in board.legal_moves
+                    if self.scores.get(board.san(m), 0.0) == top)
+
+
+def test_a_weight_can_overrule_the_search_and_a_tie_break_cannot():
+    import chess
+    import random
+    from mana.cognition import chess_action as act
+
+    board = chess.Board(ITALIAN)
+    scores = {"O-O": 30.0}                      # the search prefers castling
+
+    def played(change):
+        return board.san(act.Tuned(_Scored(scores), change).choose(board, random.Random(1)))
+
+    assert played(act.Change("checks_given", act.MORE)) == "O-O"
+    assert played(act.Change("checks_given", act.MORE, weight=50.0)) == "Bxf7+"
+    assert played(act.Change("checks_given", act.MORE, weight=25.0)) == "O-O"
+
+
+def test_material_is_weighed_per_pawn():
+    import chess
+    from mana.cognition import chess_action as act
+
+    board = chess.Board(ITALIAN)
+    move = {board.san(m): m for m in board.legal_moves}
+    change = act.Change("material", act.MORE, weight=50.0)
+    gained = change.bonus(board, move["Bxf7+"]) - change.bonus(board, move["O-O"])
+    assert gained == pytest.approx(50.0)           # one pawn, fifty hundredths
+
+
+def test_a_tie_break_keeps_its_identity_and_a_weight_is_a_new_question():
+    from mana.cognition import chess_action as act
+
+    plain = act.Change("pawn_moves", act.LESS)
+    assert set(plain.identity()) == {"property", "direction", "what"}
+    assert "@" not in plain.name() and "weight" not in plain.as_dict()
+    heavy = act.Change("pawn_moves", act.LESS, weight=50.0)
+    assert heavy.identity()["weight"] == 50.0 and heavy.name() == "pawn_moves-1@50"
+    assert heavy.identity() != plain.identity()
+    assert act.Change.from_state(heavy.to_state()) == heavy
+
+
+def test_weighted_candidates_are_primitives_with_their_provenance():
+    from mana.cognition import chess_action as act
+
+    made = act.weighted([act.Change("checks_given", act.MORE, from_finding="obs-c"),
+                         act.Change("pawn_moves", act.LESS, then=(("material", 1),))])
+    assert [c.weight for c in made] == list(act.WEIGHTS)
+    assert all(c.property == "checks_given" and c.from_finding == "obs-c" for c in made)
+
+
+def test_the_reach_of_a_weight_counts_positions_where_the_move_changes():
+    import chess
+    from mana.cognition import chess_action as act
+
+    board = chess.Board(ITALIAN)
+    scores = [(board.san(m), 30.0 if board.san(m) == "O-O" else 0.0)
+              for m in board.legal_moves]
+    positions = [(board, scores)]
+    strong = act.reach_weighted(act.Change("checks_given", act.MORE, weight=50.0), positions)
+    weak = act.reach_weighted(act.Change("checks_given", act.MORE, weight=25.0), positions)
+    assert (strong["varies"], weak["varies"]) == (1, 0)
+    assert strong["over"] == "позиций"
+
+
+def test_an_adoption_carries_its_weight_and_old_rows_read_as_tie_breaks(tmp_path, monkeypatch):
+    from mana.cognition import chess_action as act
+
+    _, chess_version = _bench_for(tmp_path, monkeypatch)
+    old = chess_version.Adoption.from_dict({"property": "pawn_moves", "direction": -1,
+                                            "version": 1})
+    assert old.weight == 0.0 and "@" not in old.name()
+    evidence = {"causal_finding": "c", "observational_finding": "o", "reach": 0.3,
+                "trials": 40, "verdict": "ACCEPTED"}
+    heavy = chess_version.adopt(dict(evidence, change=act.Change(
+        "checks_given", act.MORE, weight=50.0)))
+    assert heavy.weight == 50.0 and heavy.name().endswith("@50")
+    assert chess_version.Adoption.from_dict(heavy.as_dict()).weight == 50.0
+    assert chess_version.player(object(), [heavy]).change.weight == 50.0
+    # The tie-break on the same property is another change, not "already in force".
+    assert chess_version.check(dict(evidence, change=act.Change(
+        "checks_given", act.MORE))) == ""
+    assert "уже в силе" in chess_version.check(dict(evidence, change=act.Change(
+        "checks_given", act.MORE, weight=50.0)))
+
+
+@pytest.mark.parametrize("change", [
+    {"property": "checks_given", "direction": 1, "weight": 50.0},
+    {"property": "pawn_moves", "direction": -1, "then": (("material", 1),)},
+])
+def test_the_re_test_duels_the_whole_change_in_force(tmp_path, monkeypatch, change):
+    """It was rebuilt from property and direction alone: a composite was
+    re-tested as its primitive, and a weight would have been dropped."""
+    from mana.cognition import chess_action as act
+
+    bench, chess_version = _bench_for(tmp_path, monkeypatch)
+    adopted = chess_version.adopt({"change": act.Change(**change), "causal_finding": "c",
+                                   "observational_finding": "o", "reach": 0.3,
+                                   "trials": 40, "verdict": "ACCEPTED"})
+    bench._confirming = (adopted, act.Duel(change=act.Change(**change)))
+    seen = []
+    monkeypatch.setattr(act, "duel",
+                        lambda made, **kw: seen.append(made) or act.Duel(change=made))
+    bench._confirm_or_revert()
+    assert seen[0].weight == change.get("weight", 0.0)
+    assert seen[0].then == tuple(change.get("then", ()))
+
+
+def test_pick_turns_to_weights_once_every_tie_break_is_answered(tmp_path, monkeypatch):
+    from mana.cognition import chess_action as act
+
+    bench, _ = _bench_for(tmp_path, monkeypatch)
+    real_weighted = act.weighted
+    _picking(bench, monkeypatch, ["pawn_moves", "king_moves"])
+    monkeypatch.setattr(act, "weighted", real_weighted)
+    for prop in ("pawn_moves", "king_moves"):
+        _answered(bench, prop, "REJECTED")
+    monkeypatch.setattr(act, "scored_positions", lambda *a, **kw: ["pos"])
+    monkeypatch.setattr(act, "reach_weighted", lambda change, positions: {
+        "share": 0.4 if change.weight == 100.0 else 0.2, "ties": 1, "varies": 1,
+        "over": "позиций"})
+    picked = bench._pick()
+    assert picked is not None and picked[0].weight == 100.0

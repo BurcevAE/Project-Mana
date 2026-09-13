@@ -56,7 +56,7 @@ from .. import events
 from ..net import lichess as api
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.4"
+__version__ = "1.5"
 
 FIRST_LEVEL = 1
 LAST_LEVEL = 8
@@ -409,6 +409,11 @@ class Bench:
         #: player does not.
         self._ties: Optional[List[Any]] = None
         self._reach: Dict[str, Any] = {}
+        #: Recorded positions with every root move's score, for the reach
+        #: of weighted levers. Computed once per run, like the ties.
+        self._positions: Optional[List[Any]] = None
+        #: Said once per composition when the weighted stage opens.
+        self._weighted_on = ""
         self._restore_running()
 
     def stop(self) -> None:
@@ -880,7 +885,8 @@ class Bench:
                     adoption = match[0]
                     change = chess_action.Change(
                         property=adoption.property, direction=adoption.direction,
-                        then=tuple(adoption.then), table=dict(adoption.table) or None)
+                        then=tuple(adoption.then), table=dict(adoption.table) or None,
+                        weight=float(adoption.weight))
                     sofar = chess_action.Duel(change=change, **confirming["duel"])
                     self._confirming = (adoption, sofar)
                     self._confirming_test = test
@@ -929,8 +935,16 @@ class Bench:
         from . import chess_action, chess_bot, chess_version
 
         adoption, sofar = self._confirming
+        # The whole change in force, not its primary key. Rebuilt from the
+        # property and direction alone, a composite was re-tested as the
+        # primitive it started from and a learned lever without its table
+        # -- confirming, or reverting, a change that was not the one
+        # playing. A weight would have been dropped the same way.
         change = chess_action.Change(property=adoption.property,
                                      direction=adoption.direction,
+                                     then=tuple(adoption.then),
+                                     table=dict(adoption.table) or None,
+                                     weight=float(adoption.weight),
                                      from_finding=adoption.causal_finding)
         fresh = chess_action.duel(change, games=DUEL_SLICE,
                                   seed=int(adoption.at) + sofar.games * 31,
@@ -1021,7 +1035,8 @@ class Bench:
                                         property=waiting[0].property,
                                         direction=waiting[0].direction,
                                         then=tuple(waiting[0].then),
-                                        table=dict(waiting[0].table) or None)))
+                                        table=dict(waiting[0].table) or None,
+                                        weight=float(waiting[0].weight))))
         if self._confirming is not None:
             return self._confirm_or_revert()
 
@@ -1145,6 +1160,8 @@ class Bench:
         book = self._book()
         best = self._best([(change, None) for change in changes], book)
         if best is None:
+            best = self._weigh(changes, book)
+        if best is None:
             best = self._compose(changes, book)
         if best is None:
             best = self._invent(book)
@@ -1164,7 +1181,7 @@ class Bench:
         self._nothing_left = ""
         events.emit(events.STATUS,
                     f"беру опыт «{best[0].name()}»: рычаг работает в "
-                    f"{best[1]['share']:.0%} ничьих",
+                    f"{best[1]['share']:.0%} {best[1].get('over', 'ничьих')}",
                     chess={"kind": "finding",
                            "text": f"опыт: {best[0].describe()}"})
         return (best[0], best[1], chess_action.Duel(change=best[0]))
@@ -1195,11 +1212,48 @@ class Bench:
             if any(row.property == change.property
                    and row.direction == change.direction
                    and tuple(row.then) == tuple(change.then)
+                   and float(row.weight) == float(change.weight)
                    for row in in_force):
                 continue
             if best is None or reached["share"] > best[1]["share"]:
                 best = (change, reached)
         return best
+
+    def _weigh(self, changes: Any, book: Any) -> Optional[Any]:
+        """Stronger levers: the same properties, acting on every move.
+
+        Reached once every tie-break is answered on this composition. A
+        tie-break speaks only where the search is indifferent, and on the
+        record of 2026-09-12 none moved the result by ten points. A weight
+        lets the property overrule the search wherever two moves differ by
+        less than it -- a change in how MANA actually plays. Same
+        provenance, same reach check, same duel and verdict as any other.
+        """
+        from . import chess_action, chess_bot, chess_version
+        from .chess_arena import SearchPlayer
+
+        if self._positions is None:
+            played = [row for row in chess_bot.recorded()
+                      if str(row.get("source", "")) == chess_bot.LOCAL][:60]
+            self._positions = chess_action.scored_positions(
+                played, SearchPlayer(depth=chess_bot.PLAY_DEPTH, trace=True))
+        candidates = []
+        for made in chess_action.weighted(changes):
+            reached = self._reach.get(made.name())
+            if reached is None:
+                reached = chess_action.reach_weighted(made, self._positions)
+            candidates.append((made, reached))
+        control = chess_version.confirmed_fingerprint()
+        if self._weighted_on != control:
+            self._weighted_on = control
+            events.emit(events.STATUS,
+                        f"выбор среди равных исчерпан на составе {control}: "
+                        f"пробую рычаги с весом — кандидатов {len(candidates)}, "
+                        f"охват по {len(self._positions)} позициям",
+                        chess={"kind": "version", "step": "weighted",
+                               "control": control,
+                               "candidates": [made.name() for made, _ in candidates]})
+        return self._best(candidates, book)
 
     def _compose(self, changes: Any, book: Any) -> Optional[Any]:
         """Second-order discovery: run only when the first order is out.
