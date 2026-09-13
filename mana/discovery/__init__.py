@@ -39,14 +39,44 @@ training states, 300 other states held out)
          the training states 2665; held-out 1.000 against a decision
          tree 0.746 (132 nodes) and the table 0.087
     W3   the rule itself 10/10 and not one exception bought: bits equal
-         the truth's on every seed; held-out 0.913 = the truth's 0.913
-         (the noise caps it), tree 0.603, table 0.094
-    about 110 000 programs a run, 1.8 s
+         the truth's on every seed (163.0 on average); held-out 0.913 =
+         the truth's 0.913 (the noise caps it), tree 0.603, table 0.094
+    about 110 000 programs a run, 2.6 s
+
+Re-measured after step 2 corrected the currency -- a wrong guess inside
+the outcome alphabet now costs log2(K-1), not log2(K). The verdicts did
+not move; W3's bits went from 165.4 to 163.0.
 
 Said plainly: W0 is easy. Its rule is one edit away from a single
 variable -- "add a condition" turns z into if(x < 6, z, y) -- so this step
 checks the machinery and the resistance to noise, not depth. Depth is
 what W2 is for.
+
+Step 2, measured 2026-09-13 (scripts/run_invention.py, 10 seeds, 20
+training episodes of 20 steps, 50 new episodes held out)
+----------------------------------------------------------------------
+    W2   a hidden switch: every a = 1 flips it, the outcome is x while
+         it is on and y while it is off. The language changed 10/10,
+         to the same thing every time:
+
+             v1      = if(a == v1_prev, 0, 1)      starting at 0
+             outcome = if(v1, x, y)
+
+         which is the switch -- "v1 is 1 where a differs from its last
+         value" -- written with a comparison where the world was written
+         with a sum. 51.5 bits against 889.9 without it; on new episodes
+         1.000 against 0.562 for the same search without the variable,
+         a decision tree 0.542, a table 0.506; the switch itself recovered
+         on 1.000 of new steps. About 22 s a seed.
+    W0   language changed 0/10: nothing to explain.
+    W3   language changed 0/10: an invented variable cost 148.8 bits
+         against 129.2 without it -- noise earns no cause.
+
+Two things this step found about itself, both kept in the code: the
+currency of step 1 charged a wrong guess log2(K), which on two outcomes
+made "always wrong" cheaper than "right seven times in ten"; and the pair
+a hidden variable chooses between has to be picked for what it covers
+together, not taken from the best program's errors (see invent.py).
 
 Steps
 -----

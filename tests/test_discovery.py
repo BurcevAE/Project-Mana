@@ -105,3 +105,66 @@ def test_no_learner_module_can_see_the_worlds():
             else:
                 continue
             assert not any("worlds" in name for name in named), module.__name__
+
+
+# --------------------------------------------------------------------------
+# step 2: a variable nobody observed
+# --------------------------------------------------------------------------
+
+def test_a_transition_is_run_along_each_episode_from_its_start():
+    from mana.discovery import invent
+    from mana.discovery.language import SUB
+
+    flips = if_(get("a"), (SUB, const(1), get(invent.PREV)), get(invent.PREV))
+    a = np.array([[0, 1, 0, 1, 1], [1, 0, 0, 0, 0]])
+    assert invent.run(flips, 0, {"a": a}).tolist() == [[0, 1, 1, 0, 1], [1, 1, 1, 1, 1]]
+
+
+def test_the_hidden_switch_of_w2_is_invented_and_pays_for_itself():
+    from mana.discovery import invent
+    from mana.discovery.worlds import W2
+
+    train, test = W2.split(20, 50, seed=0)
+    found = invent.invent(train.columns, train.outcomes)
+    assert found.accepted, found.note
+    assert found.bits < found.base.bits
+    predicted = invent.predict(found, test.columns)
+    assert float(np.mean(predicted == test.clean)) >= 0.99
+    value = invent.hidden(found, test.columns)
+    recovered = max(np.mean(value == test.hidden), np.mean(value != test.hidden))
+    assert recovered >= 0.99
+    # Without the new variable the same search is near a coin between x and y.
+    flat = {name: values.reshape(-1) for name, values in test.columns.items()}
+    base = discovery.predict(found.base.program, flat)
+    assert float(np.mean(base == test.clean.reshape(-1))) <= 0.65
+
+
+def test_where_the_program_is_right_there_is_nothing_to_invent():
+    from mana.discovery import invent
+
+    split = W0.split(200, 50, seed=0)
+    shaped = {name: values.reshape(10, 20) for name, values in split.train.items()}
+    found = invent.invent(shaped, split.train_outcomes.reshape(10, 20))
+    assert not found.accepted and "объяснять нечего" in found.note
+
+
+def test_noise_does_not_earn_an_invented_cause():
+    """The same currency that refuses a table of exceptions refuses a
+    hidden variable made up to explain them."""
+    from mana.discovery import invent
+
+    split = W3.split(200, 50, seed=0)
+    shaped = {name: values.reshape(10, 20) for name, values in split.train.items()}
+    found = invent.invent(shaped, split.train_outcomes.reshape(10, 20))
+    assert not found.accepted, found.describe()
+
+
+def test_the_inventor_cannot_see_the_worlds_either():
+    from mana.discovery import invent
+
+    tree = ast.parse(inspect.getsource(invent))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            named = ([getattr(node, "module", "") or ""]
+                     + [alias.name for alias in node.names])
+            assert not any("worlds" in name for name in named)

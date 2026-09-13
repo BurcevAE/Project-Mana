@@ -107,3 +107,57 @@ W3 = World("W3", ("x", "y", "z"), 0, 9, _w0, _W0_TRUTH, noise=0.10,
            note="W0 и 10% случайных исходов")
 
 WORLDS: Dict[str, World] = {"W0": W0, "W3": W3}
+
+
+# ------------------------------------------------------------ with a memory
+
+@dataclass(frozen=True)
+class Sequences:
+    """Episodes, each a row of `steps` observations in time order."""
+    columns: Dict[str, np.ndarray]          # name -> (episodes, steps)
+    outcomes: np.ndarray                    # what the world reported
+    #: For grading only: the rule's own outcome and its hidden state.
+    clean: np.ndarray
+    hidden: np.ndarray
+
+
+@dataclass(frozen=True)
+class SequenceWorld:
+    """A world whose rule reads something the observation does not show.
+
+    W2: x, y in 0..9 and an event a in {0, 1} are seen at every step. A
+    switch h is not: it starts off, and every a = 1 flips it. The outcome
+    is x while h is on and y while it is off. No program over what is seen
+    at one step can do much better than a coin between x and y; the rule
+    needs a quantity the language does not have.
+    """
+    name: str
+    variables: Tuple[str, ...]
+    steps: int
+    press: float
+    noise: float = 0.0
+    note: str = ""
+
+    def episodes(self, n: int, rng: np.random.Generator) -> Sequences:
+        x = rng.integers(0, 10, (n, self.steps))
+        y = rng.integers(0, 10, (n, self.steps))
+        a = (rng.random((n, self.steps)) < self.press).astype(np.int64)
+        hidden = np.cumsum(a, axis=1) % 2          # off at the start; a flips
+        clean = np.where(hidden == 1, x, y).astype(np.int64)
+        reported = clean.copy()
+        if self.noise:
+            hit = rng.random(clean.shape) < self.noise
+            reported[hit] = rng.integers(0, 10, int(hit.sum()))
+        return Sequences(columns={"x": x, "y": y, "a": a}, outcomes=reported,
+                         clean=clean, hidden=hidden)
+
+    def split(self, n_train: int, n_test: int, seed: int) -> Tuple[Sequences, Sequences]:
+        """Held-out episodes are new episodes: fresh switches, fresh events."""
+        rng = np.random.default_rng(seed)
+        return self.episodes(n_train, rng), self.episodes(n_test, rng)
+
+
+W2 = SequenceWorld("W2", ("x", "y", "a"), steps=20, press=0.3,
+                   note="скрытый переключатель: a=1 переключает h; исход x при h, иначе y")
+
+SEQUENCE_WORLDS: Dict[str, SequenceWorld] = {"W2": W2}

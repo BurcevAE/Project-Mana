@@ -36,7 +36,7 @@ from .language import (ADD, CMP, EQUAL, IF, LESS, SUB, Evaluator, Program,
                        add, cmp, const, get, if_, nodes, replace, show, size, sub)
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 BEAM = 4
 MAX_SIZE = 15
@@ -137,12 +137,13 @@ def search(columns: Dict[str, Sequence[int]], outcomes: Sequence[int],
     evaluator = Evaluator(columns)
     variables = len(columns)
     alphabet = description.alphabet_of(actual)
+    known = description.membership(actual)
     leaves, conditions = vocabulary(columns, actual)
     seen: Dict[Program, Tuple[float, float, float]] = {}
 
     def score(p: Program) -> Tuple[float, float, float]:
         program_part = description.program_bits(p, variables)
-        error_part = description.error_bits(evaluator(p), actual, alphabet)
+        error_part = description.error_bits(evaluator(p), actual, alphabet, known)
         return (program_part + error_part, program_part, error_part)
 
     def rank(p: Program) -> Tuple[float, int, str]:
