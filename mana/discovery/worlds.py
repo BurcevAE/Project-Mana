@@ -68,6 +68,11 @@ class World:
                                     for name in self.variables})
                          for i in range(n)], dtype=np.int64)
 
+    def rule_on(self, columns: Dict[str, np.ndarray]) -> np.ndarray:
+        """The rule's own outcomes on these states, noise and all left out.
+        For measuring instruments only -- never for a learner."""
+        return self._rule_on(columns)
+
     def _observed(self, clean: np.ndarray, rng: np.random.Generator) -> np.ndarray:
         noisy = clean.copy()
         if self.noise:

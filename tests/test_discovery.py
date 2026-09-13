@@ -252,3 +252,49 @@ def test_a_word_naming_a_variable_the_world_lacks_is_not_offered_there():
     found = discovery.search(split.train, split.train_outcomes, library=words,
                              budget=2000)
     assert "f1" not in show(found.program)
+
+
+# --------------------------------------------------------------------------
+# step 4: measuring the search, not changing it
+# --------------------------------------------------------------------------
+
+def test_the_search_says_why_it_stopped_and_what_it_found():
+    split = W0.split(200, 50, seed=0)
+    found = discovery.search(split.train, split.train_outcomes)
+    assert found.termination == discovery.SEARCH_EXHAUSTED
+    assert found.status == discovery.FOUND_EXACT and found.train_errors == 0
+    assert found.seconds > 0
+    cut = discovery.search(split.train, split.train_outcomes, budget=300)
+    assert cut.termination == discovery.SEARCH_LIMIT
+
+
+def test_the_ceiling_finds_the_smallest_exact_program():
+    from mana.discovery import ceiling
+
+    rng = np.random.default_rng(0)
+    columns = {"x": rng.integers(0, 10, 60), "y": rng.integers(0, 10, 60)}
+    leaves, _ = discovery.vocabulary(columns, columns["x"] + columns["y"])
+    assert ceiling.smallest_fit(columns, columns["y"], leaves).smallest == 1
+    found = ceiling.smallest_fit(columns, columns["x"] + columns["y"], leaves)
+    assert found.smallest == 3 and found.stopped == ceiling.FOUND
+
+
+def test_a_ceiling_that_stops_says_only_what_it_knows():
+    from mana.discovery import ceiling
+
+    split = W0.split(200, 50, seed=0)
+    leaves, _ = discovery.vocabulary(split.train, split.train_outcomes)
+    cut = ceiling.smallest_fit(split.train, split.train_outcomes, leaves,
+                               max_classes=50)
+    assert cut.smallest is None and cut.stopped == ceiling.CLASSES
+    assert cut.lower_bound >= 1
+
+
+def test_every_question_measured_has_a_certificate_inside_the_searched_space():
+    """What makes a miss the search's and not the language's: the rule
+    itself, written in the language, within the size the search explores."""
+    from mana.discovery.worlds import FAMILY
+
+    for world in [W0, W3] + list(FAMILY.values()):
+        assert size(world.truth) <= discovery.MAX_SIZE, world.name
+        assert world.grade(lambda cols: discovery.predict(world.truth, cols)) == 1.0

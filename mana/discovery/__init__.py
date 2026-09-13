@@ -98,6 +98,38 @@ has the table)
     was seen; they do not pay for generality, and a larger vocabulary is
     not free for the questions that do not need it.
 
+Step 4, measured 2026-09-13 (scripts/run_search_reliability.py, 7
+questions x 10 seeds; the search measured, not changed)
+----------------------------------------------------------------------
+    A solution exists in all 70 runs: every world's rule, written in the
+    same language, reproduces every state and fits within the size the
+    search explores (the certificate; the bottom-up ceiling adds that no
+    exact program of 7 nodes or fewer exists for T1..W4, so their smallest
+    lies between 8 and the rule's own size). Every miss is the search's.
+
+        question   found   +strong   budget  local end   held-out
+        W0         10/10      -        0        0        1.000 +- 0.000
+        W3         10/10      -        0        0        1.000 +- 0.000
+        T1          8/10     +2        0        2        0.890 +- 0.221
+        T2          4/10     +6        6        0        0.647 +- 0.292
+        T3          4/10     +6        6        0        0.662 +- 0.289
+        T4          4/10     +2        0        6        0.838 +- 0.133
+        W4          4/10     +6        6        0        0.647 +- 0.292
+
+    P(found | a solution exists) = 44/70 = 63% as the search stands; 66/70
+    = 94% when every miss is retried with a beam of 16 and a budget of two
+    million (about five times the evaluations). Of the 26 misses, 18 ran
+    out of budget with their neighbourhood unexhausted -- all rescued -- and
+    8 stopped at a local end, 4 of them rescued. The four left are all T4,
+    whose rule is 15 nodes: exactly the size limit. Even the successes on
+    T2 and T3 mostly stopped at the budget, the answer first seen around
+    the 300 000th program of 400 000. W4 is T2 with other names and failed
+    on the same seeds: the search does not depend on what things are called.
+
+    What this bounds: everything built above the search. The library's
+    14 of 25 and the invention's boundary were measured through a search
+    that finds an existing solution six times in ten.
+
 Steps
 -----
     1  language, edit search, description length; worlds W0 and W3

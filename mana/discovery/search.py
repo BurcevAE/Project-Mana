@@ -26,6 +26,7 @@ outcomes and returns a program. A test asserts it does not import
 from __future__ import annotations
 
 import itertools
+import time
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Dict, Iterator, List, Optional, Sequence, Tuple
@@ -38,7 +39,7 @@ from .language import (ADD, CMP, EQUAL, IF, LESS, SUB, Evaluator, Primitive,
                        prim, replace, show, size, sub)
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.2"
+__version__ = "1.3"
 
 BEAM = 4
 MAX_SIZE = 15
@@ -49,6 +50,20 @@ BUDGET = 400000
 #: Most constants taken from the data. A world with many distinct values
 #: keeps the most frequent; the search never invents a number.
 MAX_CONSTANTS = 16
+
+#: Why a search stopped. LIMIT: the evaluation budget or the round limit
+#: ran out while the neighbourhood of the beam was not yet exhausted --
+#: more budget might have found more. EXHAUSTED: every neighbour of the
+#: beam was tried for PATIENCE rounds and none shortened the description
+#: -- a local end. Neither says anything about the rest of the space; that
+#: is what `ceiling` is for.
+SEARCH_LIMIT = "SEARCH_LIMIT"
+SEARCH_EXHAUSTED = "SEARCH_EXHAUSTED"
+
+#: What it found, by what it could see: exact on the training points, or
+#: not.
+FOUND_EXACT = "FOUND_EXACT"
+FOUND_APPROX = "FOUND_APPROX"
 
 
 @dataclass
@@ -64,6 +79,17 @@ class Found:
     #: Programs evaluated before the final best was first seen: the cost
     #: of finding it, as opposed to the cost of making sure.
     found_at: int = 0
+    #: Why it stopped -- SEARCH_LIMIT or SEARCH_EXHAUSTED, see below.
+    termination: str = ""
+    seconds: float = 0.0
+    #: Training points the program gets wrong.
+    train_errors: int = 0
+
+    @property
+    def status(self) -> str:
+        """FOUND_EXACT: no error on what it saw -- which is not the same
+        claim as being the rule, and says nothing about unseen states."""
+        return FOUND_EXACT if self.train_errors == 0 else FOUND_APPROX
 
     def describe(self) -> str:
         return (f"{show(self.program)}  — {self.bits:.1f} бит "
@@ -151,6 +177,7 @@ def search(columns: Dict[str, Sequence[int]], outcomes: Sequence[int],
            budget: int = BUDGET,
            library: Optional[Dict[str, Primitive]] = None) -> Found:
     """The shortest description of the outcomes this search can reach."""
+    started = time.time()
     actual = np.asarray(outcomes, dtype=np.int64)
     library = dict(library or {})
     evaluator = Evaluator(columns, library)
@@ -201,9 +228,13 @@ def search(columns: Dict[str, Sequence[int]], outcomes: Sequence[int],
         if stalled >= patience or len(seen) >= budget:
             break
     bits, program_part, error_part = seen[best]
+    exhausted = stalled >= patience and len(seen) < budget
     return Found(program=best, bits=bits, program_bits=program_part,
                  error_bits=error_part, evaluations=len(seen), rounds=rounds,
-                 history=history, found_at=first_seen.get(best, len(seen)))
+                 history=history, found_at=first_seen.get(best, len(seen)),
+                 termination=SEARCH_EXHAUSTED if exhausted else SEARCH_LIMIT,
+                 seconds=time.time() - started,
+                 train_errors=int(np.count_nonzero(evaluator(best) != actual)))
 
 
 def predict(p: Program, columns: Dict[str, Sequence[int]],
