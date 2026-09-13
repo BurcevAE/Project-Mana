@@ -145,7 +145,18 @@ NEUTRAL = 0.5
 #: in pawns. A tie-break -- weight 0 -- speaks only where the search is
 #: indifferent, and on the record of 2026-09-12 none of them moved the
 #: result by ten points. A weight overrules the search wherever two moves
-#: differ by less than it, which is what makes it the stronger lever.
+#: differ by less than it.
+#:
+#: Measured 2026-09-13, and it did not make the lever stronger. The search
+#: scores material only, so root scores differ in whole pawns: of 400
+#: recorded positions 328 had several equally best moves and the next
+#: level a pawn or more below, and only 12 had a gap under a pawn. Weights
+#: 25 and 100 picked a different best set in 1 to 8 of the 400; on real
+#: self-play pawn_moves at 25, 50 and 100 duelled to the same 16 of 37,
+#: game for game. Below a pawn a weight IS a tie-break; at a pawn and
+#: above it trades material for the property. A lever that changes how
+#: MANA plays has to change what the search sees -- the evaluation at the
+#: leaves -- not the order of moves it already scored.
 WEIGHTS = (25.0, 50.0, 100.0)
 
 
