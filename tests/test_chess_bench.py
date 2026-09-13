@@ -1607,3 +1607,180 @@ def test_an_adopted_learned_action_keeps_its_table_and_plays_it(
     played = version.player(object(), [version.history()[-1]])
     assert played.change.table == {"e2e4": 0.7}
     assert chess_action.known(played.change)
+
+
+# --------------------------------------------------------------------------
+# the sequential rule, behind its flag
+# --------------------------------------------------------------------------
+
+def _slices(*outcomes):
+    """A duel stand-in handing out these games in order, a slice at a time:
+    True the changed player won, False the unchanged one, None a draw."""
+    from mana.cognition import chess_action
+
+    queue = list(outcomes)
+
+    def play(change, games=4, **kw):
+        out = chess_action.Duel(change=change)
+        for won in queue[:games]:
+            out.games += 1
+            out.outcomes.append(won)
+            if won is None:
+                out.drawn += 1
+            elif won:
+                out.changed_won += 1
+            else:
+                out.unchanged_won += 1
+        del queue[:games]
+        return out
+
+    return play
+
+
+def _sequential_trial(tmp_path, monkeypatch, outcomes):
+    from mana.cognition import chess_action
+
+    bench, chess_version = _bench_for(tmp_path, monkeypatch)
+    bench.sequential = True
+    change = chess_action.Change("pawn_moves", chess_action.LESS,
+                                 from_finding="obs-1")
+    bench._trying = (change, {"share": 0.6, "ties": 400, "varies": 240},
+                     chess_action.Duel(change=change))
+    monkeypatch.setattr(chess_action, "duel", _slices(*outcomes))
+    return bench, chess_version
+
+
+def _causal(bench):
+    from mana.cognition import chess_action
+
+    return [f for f in bench._book().latest()
+            if f.question == chess_action.QUESTION]
+
+
+def test_off_by_default_the_duel_is_decided_as_before(tmp_path, monkeypatch):
+    bench, _ = _bench_for(tmp_path, monkeypatch)
+    assert bench_mod.SEQUENTIAL_DUEL is False and bench.sequential is False
+
+
+def test_on_a_strong_lever_is_adopted_before_thirty(tmp_path, monkeypatch):
+    """Sixteen wins in a row cross the boundary; waiting for thirty would
+    spend fourteen games on a question already answered."""
+    bench, chess_version = _sequential_trial(tmp_path, monkeypatch, [True] * 16)
+    said = [bench._experiment() for _ in range(4)]
+    assert "принято условно" in said[-1]
+    adopted = chess_version.provisional()[0]
+    assert adopted.trials == 16
+    record = _causal(bench)[-1].measurement["sequential"]
+    assert record["status"] == "ACCEPTED" and record["won"] == 16
+
+
+def test_on_seven_straight_losses_reject_and_adopt_nothing(tmp_path, monkeypatch):
+    bench, chess_version = _sequential_trial(tmp_path, monkeypatch, [False] * 8)
+    bench._experiment()
+    assert bench._experiment() == "опыт закончен: REJECTED"
+    assert chess_version.provisional() == []
+    record = _causal(bench)[-1].measurement["sequential"]
+    assert (record["lost"], record["late"]) == (7, 1)   # the eighth is late
+
+
+def test_on_thirty_decided_games_are_not_the_end(tmp_path, monkeypatch):
+    """A coin toss after thirty decided games is not yet an answer either
+    way -- the fixed rule called it REJECTED."""
+    bench, _ = _sequential_trial(tmp_path, monkeypatch,
+                                 [True, False] * 16 + [None] * 4)
+    said = [bench._experiment() for _ in range(9)]
+    assert "до решения примерно ещё" in said[-1]
+    assert bench._trying is not None and _causal(bench) == []
+
+
+def test_on_a_draw_is_played_but_not_weighed(tmp_path, monkeypatch):
+    bench, _ = _sequential_trial(tmp_path, monkeypatch, [None] * 4 + [True] * 16)
+    said = [bench._experiment() for _ in range(5)]
+    assert "принято условно" in said[-1]
+    assert _causal(bench)[-1].measurement["games"] == 20
+
+
+def test_on_the_re_test_confirms_on_what_the_core_decided(tmp_path, monkeypatch):
+    from mana.cognition import chess_action
+
+    bench, chess_version = _bench_for(tmp_path, monkeypatch)
+    bench.sequential = True
+    change = chess_action.Change("pawn_moves", chess_action.LESS)
+    adopted = chess_version.adopt({
+        "change": change, "causal_finding": "old-duel",
+        "observational_finding": "o1", "reach": 0.6, "trials": 40,
+        "verdict": "ACCEPTED"})
+    bench._confirming = (adopted, chess_action.Duel(change=change))
+    monkeypatch.setattr(chess_action, "duel", _slices(*([True] * 16)))
+    said = [bench._confirm_or_revert() for _ in range(4)]
+    assert "подтверждено" in said[-1]
+    assert chess_version.confirmed()[0].property == "pawn_moves"
+    assert bench._confirming is None and bench._confirming_test is None
+
+
+def test_on_a_re_test_that_crosses_the_other_way_reverts(tmp_path, monkeypatch):
+    from mana.cognition import chess_action
+
+    bench, chess_version = _bench_for(tmp_path, monkeypatch)
+    bench.sequential = True
+    change = chess_action.Change("king_moves", chess_action.LESS)
+    adopted = chess_version.adopt({
+        "change": change, "causal_finding": "old-duel",
+        "observational_finding": "o1", "reach": 0.6, "trials": 40,
+        "verdict": "ACCEPTED"})
+    bench._confirming = (adopted, chess_action.Duel(change=change))
+    monkeypatch.setattr(chess_action, "duel", _slices(*([False] * 8)))
+    said = [bench._confirm_or_revert() for _ in range(2)]
+    assert "откат" in said[-1]
+    assert chess_version.confirmed() == []
+
+
+def test_a_sequential_record_licenses_an_adoption_only_on_its_own_numbers(
+        tmp_path, monkeypatch):
+    from mana.cognition import chess_action
+    from mana.core import sequential as seq
+
+    _, chess_version = _bench_for(tmp_path, monkeypatch)
+    strong = seq.SequentialTest(seq.Plan(min_effect=0.10))
+    strong.observe_all([True] * 16)
+    base = {"change": chess_action.Change("pawn_moves", chess_action.LESS),
+            "causal_finding": "c", "observational_finding": "o",
+            "reach": 0.5, "trials": 16, "verdict": "ACCEPTED"}
+    assert "нужно 30" in chess_version.check(base)        # unchanged without it
+    assert chess_version.check(dict(base, sequential=strong.as_dict())) == ""
+
+    forged = dict(strong.as_dict(), won=10)             # claims ACCEPTED on 10
+    assert "не читается" in chess_version.check(dict(base, sequential=forged))
+    halfway = seq.SequentialTest(seq.Plan(min_effect=0.10))
+    halfway.observe_all([True] * 10)
+    assert "CONTINUE" in chess_version.check(dict(base, sequential=halfway.as_dict()))
+
+
+def test_on_the_class_read_from_a_sequential_finding_is_the_cores(tmp_path, monkeypatch):
+    """lessons and lawgiver read classes, not verdicts. A change the core
+    accepted on sixteen games read as NOT_MEASURED there would be taught
+    back to the next choice as never measured."""
+    bench, _ = _sequential_trial(tmp_path, monkeypatch, [True] * 16)
+    for _ in range(4):
+        bench._experiment()
+    assert _causal(bench)[-1].failure.failure == "BETTER"
+
+
+def test_on_seven_losses_read_as_no_better_or_worse(tmp_path, monkeypatch):
+    bench, _ = _sequential_trial(tmp_path, monkeypatch, [False] * 8)
+    bench._experiment()
+    bench._experiment()
+    assert _causal(bench)[-1].failure.failure in ("WORSE", "NOT_BETTER")
+
+
+def test_a_forged_sequential_record_is_unclassified_and_the_fixed_reading_unchanged():
+    from mana.cognition import findings
+    from mana.core import sequential as seq
+
+    strong = seq.SequentialTest(seq.Plan(min_effect=0.10))
+    strong.observe_all([True] * 16)
+    base = findings.measurement_of(trials=16, interval=[0.8, 1.0], null=0.5)
+    forged = dict(base, sequential=dict(strong.as_dict(), won=3))
+    assert findings.classify("ACCEPTED", forged).failure == "UNCLASSIFIED"
+    # No record: the fixed floor reads it exactly as before.
+    assert findings.classify("ACCEPTED", base).failure == "NOT_MEASURED"

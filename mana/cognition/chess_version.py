@@ -64,7 +64,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from ..core.gates import ACCEPTED, MIN_PAIRED_TRIALS
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.1"
+__version__ = "1.2"
 
 #: What an adoption must carry. Named here so a caller can see what to
 #: bring, and so a record missing one comes back refused rather than
@@ -269,6 +269,25 @@ def _name(rows: Sequence[Adoption]) -> str:
     return f"v{len(rows)}-{digest}"
 
 
+def _sequential_refusal(record: Dict[str, Any]) -> str:
+    """Why a sequential record does not license this, or "" when it does.
+
+    The verdict is re-derived by the core from the record's own counts,
+    never read off the record: a record claiming ACCEPTED on numbers that
+    do not reach the boundary is refused, not believed.
+    """
+    from ..core.sequential import SequentialTest
+
+    try:
+        test = SequentialTest.from_dict(record)
+    except (KeyError, TypeError, ValueError) as exc:
+        return f"последовательная запись не читается: {exc}"
+    if test.status != ACCEPTED:
+        return (f"последовательная проверка говорит {test.status}, а "
+                f"принимать можно только {ACCEPTED}")
+    return ""
+
+
 def check(evidence: Dict[str, Any]) -> str:
     """Why this may not be adopted, or "" when it may.
 
@@ -296,7 +315,15 @@ def check(evidence: Dict[str, Any]) -> str:
                 f"а принимать можно только {ACCEPTED}")
     if float(evidence["reach"]) <= 0.0:
         return "рычаг ничего не двигает — опыт был не о находке, а о жребии"
-    if int(evidence["trials"]) < MIN_PAIRED_TRIALS:
+    # A sequential record replaces the fixed floor: how much evidence is
+    # enough is then the core's stopping rule, which may stop before
+    # thirty on a strong effect -- that is the point of it.
+    record = evidence.get("sequential")
+    if record is not None:
+        refused = _sequential_refusal(record)
+        if refused:
+            return refused
+    elif int(evidence["trials"]) < MIN_PAIRED_TRIALS:
         return (f"решённых партий {evidence['trials']}, нужно "
                 f"{MIN_PAIRED_TRIALS}")
     change = evidence["change"]
@@ -338,14 +365,19 @@ def adopt(evidence: Dict[str, Any]) -> Adoption:
 
 
 def confirm(adoption: Adoption, trials: int, effect: float,
-            finding_id: str = "", created: float = 0.0) -> Adoption:
+            finding_id: str = "", created: float = 0.0,
+            sequential: Optional[Dict[str, Any]] = None) -> Adoption:
     """Mark an adoption confirmed on experience gathered after it.
 
     Refuses to confirm on less than a full re-test: an adoption that
     calls itself confirmed on four games is worse than one that stays
     provisional, because the word stops meaning anything.
     """
-    if int(trials) < CONFIRM_GAMES:
+    if sequential is not None:
+        refused = _sequential_refusal(sequential)
+        if refused:
+            raise Refused(refused)
+    elif int(trials) < CONFIRM_GAMES:
         raise Refused(f"подтверждать на {trials} партиях нельзя, "
                       f"нужно {CONFIRM_GAMES}")
     # The duel that justified the change cannot confirm it. Refused twice

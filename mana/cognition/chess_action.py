@@ -119,7 +119,7 @@ from . import chess_outcome as outcome
 from . import findings as ledger_mod
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.1"
+__version__ = "1.2"
 
 QUESTION = "меняет ли исход выбор среди равных ходов по этому свойству"
 
@@ -396,6 +396,10 @@ class Duel:
     changed_won: int = 0
     unchanged_won: int = 0
     drawn: int = 0
+    #: Every game in the order played: True when the changed player won,
+    #: False when the unchanged one did, None for a draw. The totals above
+    #: are what the fixed rule reads; a sequential rule needs the order.
+    outcomes: List[Optional[bool]] = field(default_factory=list)
 
     @property
     def decided(self) -> int:
@@ -707,14 +711,17 @@ def duel(change: Change, games: int = GAMES_PER_EXPERIMENT, depth: int = 2,
         result = board.result()
         if result == "1/2-1/2" or not board.is_game_over():
             out.drawn += 1
+            out.outcomes.append(None)
             said = "ничья"
         else:
             white_won = result == "1-0"
             if white_won == changed_is_white:
                 out.changed_won += 1
+                out.outcomes.append(True)
                 said = "изменённый"
             else:
                 out.unchanged_won += 1
+                out.outcomes.append(False)
                 said = "прежний"
         if on_game is not None:
             on_game(number + 1, said)
@@ -751,8 +758,8 @@ def verdict_for(measurement: Dict[str, Any]) -> str:
 def record(change: Change, result: Duel, depth: int,
            questions: int = 1, ledger: Optional[Any] = None,
            reached: Optional[Dict[str, Any]] = None,
-           control_name: str = "", candidate_name: str = ""
-           ) -> ledger_mod.Finding:
+           control_name: str = "", candidate_name: str = "",
+           sequential: Optional[Any] = None) -> ledger_mod.Finding:
     """Write the experiment down, with the finding it came from.
 
     A causal claim, and the record says so: the approach carries the
@@ -765,7 +772,16 @@ def record(change: Change, result: Duel, depth: int,
     if reached is not None:
         measurement["reach"] = reached["share"]
         measurement["reach_ties"] = reached["ties"]
-    verdict = verdict_for(measurement)
+    if sequential is not None:
+        # The core's stopping rule decided when enough had been seen, and
+        # it decides the verdict: the interval above describes the games,
+        # it is not a second test of them.
+        if not sequential.decided:
+            raise ValueError("последовательная проверка ещё не решила")
+        verdict = sequential.status
+        measurement["sequential"] = sequential.as_dict()
+    else:
+        verdict = verdict_for(measurement)
     # An inert lever is not a tested claim. Calling it REJECTED says the
     # finding failed, when what failed was the experiment's ability to
     # differ from doing nothing -- and "tested and false" against "never
@@ -787,11 +803,21 @@ def record(change: Change, result: Duel, depth: int,
                         "learned_entries": len(change.table)}
                        if change.table else {}),
                     "version": PRODUCT_VERSION, "questions_asked": questions},
-        note=_note(change, measurement, reached),
+        note=(_sequential_note(change, measurement, reached, sequential)
+              if sequential is not None else _note(change, measurement, reached)),
         version=PRODUCT_VERSION)
     book = ledger if ledger is not None else ledger_mod.Ledger()
     book.record(finding)
     return finding
+
+
+def _sequential_note(change: Change, measurement: Dict[str, Any],
+                     reached: Optional[Dict[str, Any]], test: Any) -> str:
+    if reached is not None and not reached["varies"]:
+        return _note(change, measurement, reached)
+    seen = ("" if reached is None
+            else f"; рычаг работал в {reached['share']:.0%} ничьих")
+    return f"{change.describe()}: {test.note()}{seen}"
 
 
 def _note(change: Change, measurement: Dict[str, Any],

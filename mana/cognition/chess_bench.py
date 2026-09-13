@@ -56,7 +56,7 @@ from .. import events
 from ..net import lichess as api
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.2"
+__version__ = "1.3"
 
 FIRST_LEVEL = 1
 LAST_LEVEL = 8
@@ -114,6 +114,22 @@ REJUDGE_PER_TICK = 2
 #: Duel games played in one unit of local work. Small, so a cooldown that
 #: ends is not held open, and an experiment spans several ticks.
 DUEL_SLICE = 4
+
+#: How the duel decides it has seen enough. Off: thirty decided games or
+#: seventy played, as in 2.90 -- where an improvement to 60% was adopted
+#: 8.9% of the time. On: `core.sequential` weighs every decided game in
+#: the order it was played and stops at the first boundary it crosses.
+#: Off by default until a run on real self-play has compared the two.
+SEQUENTIAL_DUEL = False
+
+#: The smallest improvement worth adopting: the changed player winning
+#: 60% of decided games instead of 50%.
+SEQUENTIAL_MIN_EFFECT = 0.10
+
+#: Most decided games one sequential experiment may weigh. Reaching it
+#: without a verdict is NOT_EVALUATED -- not enough experience -- never a
+#: refutation. At the draw share of the record that is about 400 games.
+SEQUENTIAL_CEILING = 300
 
 #: A self-play game is only started when at least this much cooldown is
 #: left. Starting one with ten seconds to go would hold the next
@@ -284,12 +300,16 @@ class Bench:
 
     def __init__(self, client: Optional[api.Lichess] = None,
                  bot: Optional[Any] = None, ladder: Optional[Ladder] = None,
-                 gap: float = GAP_SECONDS) -> None:
+                 gap: float = GAP_SECONDS,
+                 sequential: Optional[bool] = None) -> None:
         from .chess_bot import Bot, Policy
 
         self.client = client or api.Lichess()
         self.ladder = ladder if ladder is not None else Ladder.load()
         self.gap = float(gap)
+        #: Which rule decides an experiment -- see SEQUENTIAL_DUEL.
+        self.sequential = (SEQUENTIAL_DUEL if sequential is None
+                           else bool(sequential))
         #: Consecutive refusals, so the wait can grow with them. Restored
         #: from the saved state, so a restart continues the escalation
         #: rather than beginning it again at sixty seconds.
@@ -347,6 +367,11 @@ class Bench:
         #: duel is a different measurement, run after the adoption, which
         #: is what makes PROVISIONAL mean anything.
         self._confirming: Optional[Any] = None
+        #: The sequential tests of the experiment and of the re-test, when
+        #: `sequential` is on. Kept beside the tuples rather than inside
+        #: them, so the fixed rule's state is exactly what it was.
+        self._trying_test: Optional[Any] = None
+        self._confirming_test: Optional[Any] = None
         #: Positions from the record where the search rated moves equal,
         #: and what each lever can move in them. Computed once per run:
         #: it costs a search per position and does not change while the
@@ -738,6 +763,29 @@ class Bench:
         return chess_version.player(chess_bot_default(),
                                     chess_version.confirmed())
 
+    def _plan(self) -> Any:
+        """The stopping rule, fixed before the first game of a test."""
+        from ..core import sequential as seq
+
+        return seq.Plan(min_effect=SEQUENTIAL_MIN_EFFECT,
+                        consequence=seq.REVERSIBLE,
+                        ceiling=SEQUENTIAL_CEILING)
+
+    def _running_test(self, attr: str) -> Any:
+        """The sequential test held in `attr`, started on first use.
+
+        Reversible, because an adoption is provisional and re-tested on
+        fresh games before the ladder plays it: a false acceptance has to
+        pass twice.
+        """
+        from ..core.sequential import SequentialTest
+
+        test = getattr(self, attr)
+        if test is None:
+            test = SequentialTest(self._plan())
+            setattr(self, attr, test)
+        return test
+
     def _confirm_or_revert(self) -> str:
         """Re-test a provisional adoption, and decide on the result.
 
@@ -759,7 +807,14 @@ class Bench:
         sofar.changed_won += fresh.changed_won
         sofar.unchanged_won += fresh.unchanged_won
         sofar.drawn += fresh.drawn
-        if (sofar.decided < chess_version.CONFIRM_GAMES
+        test = None
+        if self.sequential:
+            test = self._running_test("_confirming_test")
+            test.observe_all(won for won in fresh.outcomes if won is not None)
+            if not test.decided:
+                return (f"перепроверка «{adoption.property}»: {sofar.games} "
+                        f"партий; {test.note()}")
+        elif (sofar.decided < chess_version.CONFIRM_GAMES
                 and sofar.games < chess_action.GAMES_PER_EXPERIMENT):
             return (f"перепроверка «{adoption.property}»: {sofar.games} партий, "
                     f"{sofar.decided} решённых из "
@@ -769,15 +824,19 @@ class Bench:
             reached={"share": adoption.reach, "ties": 0,
                      "varies": 1 if adoption.reach else 0},
             control_name=chess_version.confirmed_fingerprint(),
-            candidate_name=chess_version.fingerprint())
+            candidate_name=chess_version.fingerprint(),
+            sequential=test)
         self._confirming = None
+        self._confirming_test = None
         measured = chess_action.measure(sofar)
-        if (finding.verdict == chess_action.ACCEPTED
-                and sofar.decided >= chess_version.CONFIRM_GAMES):
-            chess_version.confirm(adoption, trials=sofar.decided,
+        enough = test is not None or sofar.decided >= chess_version.CONFIRM_GAMES
+        if finding.verdict == chess_action.ACCEPTED and enough:
+            chess_version.confirm(adoption,
+                                  trials=test.trials if test else sofar.decided,
                                   effect=float(measured.get("effect") or 0.0),
                                   finding_id=finding.finding_id,
-                                  created=finding.created)
+                                  created=finding.created,
+                                  sequential=test.as_dict() if test else None)
             said = f"подтверждено: {adoption.property}"
             self._say_version(
                 "confirmed", chess_version.confirmed()[-1],
@@ -834,6 +893,7 @@ class Bench:
 
         if self._trying is None:
             self._trying = self._pick()
+            self._trying_test = None
             if self._trying is None:
                 return ""
         change, reached, sofar = self._trying
@@ -845,15 +905,27 @@ class Bench:
         sofar.changed_won += slice_result.changed_won
         sofar.unchanged_won += slice_result.unchanged_won
         sofar.drawn += slice_result.drawn
-        if (sofar.decided >= chess_action.MIN_PAIRED_TRIALS
-                or sofar.games >= chess_action.GAMES_PER_EXPERIMENT):
+        test = None
+        if self.sequential:
+            # One game at a time, in the order played: the verdict is the
+            # first crossing, so the order is part of the evidence.
+            test = self._running_test("_trying_test")
+            test.observe_all(won for won in slice_result.outcomes
+                             if won is not None)
+            done = test.decided
+        else:
+            done = (sofar.decided >= chess_action.MIN_PAIRED_TRIALS
+                    or sofar.games >= chess_action.GAMES_PER_EXPERIMENT)
+        if done:
             finding = chess_action.record(
                 change, sofar, depth=chess_bot.PLAY_DEPTH,
                 questions=max(1, len(self._reach)), reached=reached,
                 control_name=chess_version.confirmed_fingerprint(),
                 candidate_name=f"{chess_version.confirmed_fingerprint()}"
-                               f"+{change.name()}")
+                               f"+{change.name()}",
+                sequential=test)
             self._trying = None
+            self._trying_test = None
             events.emit(events.STATUS, f"опыт: {finding.verdict}: {finding.note}",
                         chess={"kind": "finding", "text": finding.note})
             # Where the verdict becomes a decision. Not in `record`: that
@@ -865,14 +937,17 @@ class Bench:
             # thing the experiment was run for.
             if (finding.verdict == chess_action.ACCEPTED
                     and _improved(finding.measurement)):
-                return self._adopt(change, reached, sofar, finding)
+                return self._adopt(change, reached, sofar, finding,
+                                   sequential=test)
             return f"опыт закончен: {finding.verdict}"
+        if test is not None:
+            return f"опыт «{change.name()}»: {sofar.games} партий; {test.note()}"
         return (f"опыт «{change.name()}»: {sofar.games} партий, "
                 f"{sofar.decided} решённых из "
                 f"{chess_action.MIN_PAIRED_TRIALS} нужных")
 
     def _adopt(self, change: Any, reached: Dict[str, Any], result: Any,
-               finding: Any) -> str:
+               finding: Any, sequential: Optional[Any] = None) -> str:
         """ACCEPTED becomes a provisional version, never a confirmed one.
 
         The duel that justified it ran before the change existed. What it
@@ -887,13 +962,18 @@ class Bench:
                 "change": change,
                 "causal_finding": finding.finding_id,
                 "observational_finding": change.from_finding,
-                "reach": reached["share"], "trials": result.decided,
+                "reach": reached["share"],
+                "trials": (sequential.trials if sequential is not None
+                           else result.decided),
+                **({"sequential": sequential.as_dict()}
+                   if sequential is not None else {}),
                 "verdict": finding.verdict,
                 "effect": float(measured.get("effect") or 0.0),
                 "note": finding.note})
         except chess_version.Refused as exc:
             return f"не принято: {exc}"
         self._confirming = (adoption, chess_action.Duel(change=change))
+        self._confirming_test = None
         self._say_version(
             "adopted", adoption,
             f"ПРИНЯТО УСЛОВНО: {adoption.describe()}; control "

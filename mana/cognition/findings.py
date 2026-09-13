@@ -62,7 +62,7 @@ from ..core.gates import (ACCEPTED, REJECTED, NOT_EVALUATED,
                           MIN_PAIRED_TRIALS)
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.2"
+__version__ = "1.3"
 
 #: The same three states as the acceptance gates, on purpose. "We tested
 #: it and it did not hold" and "we could not test it" are different facts
@@ -167,6 +167,12 @@ def classify(verdict: str, measurement: Dict[str, Any]) -> Classification:
 
     read = {"trials": trials, "interval": [low, high], "null": null}
 
+    # A sequential record says how much was enough, and the core's
+    # stopping rule -- not the fixed floor -- is what decided it. Without
+    # one, everything below reads exactly as it always did.
+    if measurement.get("sequential") is not None and verdict != NOT_EVALUATED:
+        return _classify_sequential(measurement, read, high, null)
+
     if verdict == NOT_EVALUATED or trials < MIN_PAIRED_TRIALS:
         return Classification(
             NOT_MEASURED,
@@ -194,6 +200,53 @@ def classify(verdict: str, measurement: Dict[str, Any]) -> Classification:
                 f"{COST_TOLERANCE}x", read)
 
     return Classification(BETTER, "интервал целиком выше нуля эффекта", read)
+
+
+def _classify_sequential(measurement: Dict[str, Any], read: Dict[str, Any],
+                         high: float, null: float) -> Classification:
+    """The class a sequential verdict puts this in.
+
+    The verdict is re-derived by the core from the record's counts, never
+    read off it. ACCEPTED means an effect of at least `min_effect` in the
+    change's favour; REJECTED means not that much -- WORSE only when the
+    interval itself lies below no effect; a test that never reached a
+    boundary is NOT_MEASURED, as running out of experience should be.
+    """
+    from ..core.sequential import SequentialTest
+
+    try:
+        test = SequentialTest.from_dict(measurement["sequential"])
+    except Exception as exc:
+        return Classification(UNCLASSIFIED,
+                              f"последовательная запись нечитаема: "
+                              f"{type(exc).__name__}", read)
+    read = dict(read, sequential={"won": test.won, "lost": test.lost,
+                                  "status": test.status,
+                                  "min_effect": test.plan.min_effect})
+    if test.status == ACCEPTED:
+        ratio = measurement.get("cost_ratio")
+        try:
+            ratio = None if ratio is None else float(ratio)
+        except Exception:
+            ratio = None
+        if ratio is not None and ratio > COST_TOLERANCE:
+            return Classification(
+                COSTS_MORE_THAN_IT_GAINS,
+                f"выигрыш есть, но цена {ratio}x превышает допуск "
+                f"{COST_TOLERANCE}x", dict(read, cost_ratio=ratio))
+        return Classification(
+            BETTER, f"последовательная проверка приняла: эффект не меньше "
+                    f"{test.plan.min_effect:.0%}", read)
+    if test.status == REJECTED:
+        if high < null:
+            return Classification(WORSE, "интервал целиком ниже нуля эффекта",
+                                  read)
+        return Classification(
+            NOT_BETTER, f"последовательная проверка отвергла эффект в "
+                        f"{test.plan.min_effect:.0%}", read)
+    return Classification(NOT_MEASURED,
+                          "последовательная проверка не дошла до границы: "
+                          "не хватило опыта", read)
 
 
 def measurement_of(trials: int, interval: Sequence[float], null: float,
