@@ -857,12 +857,15 @@ def test_the_ladder_is_not_reset_while_the_baseline_holds(tmp_path, monkeypatch)
 # --------------------------------------------------------------------------
 
 def _bench_for(tmp_path, monkeypatch):
+    """A bench on the fixed rule. The tests using it are about the
+    adoption machinery the fixed rule drives -- and it is still the rule
+    whenever the sequential one is switched off."""
     from mana.cognition import chess_version
 
     monkeypatch.setattr(bench_mod, "state_path", lambda: tmp_path / "bench.json")
     bot = _Bot([])
     bench = bench_mod.Bench(client=_Client(bot), bot=bot, ladder=_ladder(),
-                            gap=0.0)
+                            gap=0.0, sequential=False)
     return bench, chess_version
 
 
@@ -1657,9 +1660,13 @@ def _causal(bench):
             if f.question == chess_action.QUESTION]
 
 
-def test_off_by_default_the_duel_is_decided_as_before(tmp_path, monkeypatch):
-    bench, _ = _bench_for(tmp_path, monkeypatch)
-    assert bench_mod.SEQUENTIAL_DUEL is False and bench.sequential is False
+def test_on_by_default_and_the_fixed_rule_stays_reachable(tmp_path, monkeypatch):
+    monkeypatch.setattr(bench_mod, "state_path", lambda: tmp_path / "bench.json")
+    bot = _Bot([])
+    default = bench_mod.Bench(client=_Client(bot), bot=bot, ladder=_ladder(), gap=0.0)
+    assert bench_mod.SEQUENTIAL_DUEL is True and default.sequential is True
+    fixed, _ = _bench_for(tmp_path, monkeypatch)
+    assert fixed.sequential is False
 
 
 def test_on_a_strong_lever_is_adopted_before_thirty(tmp_path, monkeypatch):

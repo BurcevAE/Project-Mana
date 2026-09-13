@@ -133,7 +133,11 @@ DUEL_SLICE = 4
 #: evidence that means it; the absence of adoptions is the levers', not
 #: the test's. (captures and material duelled identically in both arms:
 #: at depth two they pick the same moves.)
-SEQUENTIAL_DUEL = False
+#:
+#: On since 2.92: a REJECTED that means "no effect of ten points" rather
+#: than "thirty games could not tell", and a real ten-point improvement
+#: caught about four times in five instead of one in eleven.
+SEQUENTIAL_DUEL = True
 
 #: The smallest improvement worth adopting: the changed player winning
 #: 60% of decided games instead of 50%.
