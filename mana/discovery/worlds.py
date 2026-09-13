@@ -109,6 +109,42 @@ W3 = World("W3", ("x", "y", "z"), 0, 9, _w0, _W0_TRUTH, noise=0.10,
 WORLDS: Dict[str, World] = {"W0": W0, "W3": W3}
 
 
+# ------------------------------------------------- a family, for step 3
+#
+# Questions that share a piece -- the distance between two variables --
+# applied to different variables and inside different contexts. T1 and T2
+# are where a word can be learned; T3, T4 and W4 are where it is used:
+# the same kind of question, the piece inside a condition, and a world
+# whose variables have other names.
+
+def _distance(a: Program, b: Program) -> Program:
+    from .language import sub
+    return if_(cmp(LESS, b, a), sub(a, b), sub(b, a))
+
+
+def _family(name: str, variables: Tuple[str, ...], rule, truth: Program,
+            note: str) -> World:
+    return World(name, variables, 0, 9, rule, truth, note=note)
+
+
+from .language import add as _add  # noqa: E402
+
+T1 = _family("T1", ("x", "y", "z"), lambda s: abs(s["x"] - s["y"]),
+             _distance(get("x"), get("y")), "|x - y|")
+T2 = _family("T2", ("x", "y", "z"), lambda s: abs(s["y"] - s["z"]) + s["x"],
+             _add(get("x"), _distance(get("y"), get("z"))), "|y - z| + x")
+T3 = _family("T3", ("x", "y", "z"), lambda s: abs(s["x"] - s["z"]) + s["y"],
+             _add(get("y"), _distance(get("x"), get("z"))), "|x - z| + y")
+T4 = _family("T4", ("x", "y", "z"),
+             lambda s: s["z"] if abs(s["x"] - s["y"]) < 3 else s["y"],
+             if_(cmp(LESS, _distance(get("x"), get("y")), const(3)), get("z"), get("y")),
+             "if(|x - y| < 3, z, y)")
+W4 = _family("W4", ("p", "q", "r"), lambda s: abs(s["q"] - s["r"]) + s["p"],
+             _add(get("p"), _distance(get("q"), get("r"))), "|q - r| + p, другие имена")
+
+FAMILY: Dict[str, World] = {"T1": T1, "T2": T2, "T3": T3, "T4": T4, "W4": W4}
+
+
 # ------------------------------------------------------------ with a memory
 
 @dataclass(frozen=True)
@@ -137,19 +173,29 @@ class SequenceWorld:
     press: float
     noise: float = 0.0
     note: str = ""
+    #: How many states the hidden counter has: every a = 1 adds one.
+    modulus: int = 2
+    #: The outcome from the seen columns and the hidden counter.
+    outcome: Callable[[Dict[str, np.ndarray], np.ndarray], np.ndarray] = (
+        lambda seen, hidden: np.where(hidden == 1, seen["x"], seen["y"]))
 
     def episodes(self, n: int, rng: np.random.Generator) -> Sequences:
-        x = rng.integers(0, 10, (n, self.steps))
-        y = rng.integers(0, 10, (n, self.steps))
-        a = (rng.random((n, self.steps)) < self.press).astype(np.int64)
-        hidden = np.cumsum(a, axis=1) % 2          # off at the start; a flips
-        clean = np.where(hidden == 1, x, y).astype(np.int64)
+        # Drawn in the order the variables are named, so W2 -- x, y, a --
+        # is the same draw it always was.
+        seen: Dict[str, np.ndarray] = {}
+        for name in self.variables:
+            if name == "a":
+                seen[name] = (rng.random((n, self.steps)) < self.press).astype(np.int64)
+            else:
+                seen[name] = rng.integers(0, 10, (n, self.steps))
+        hidden = np.cumsum(seen["a"], axis=1) % self.modulus
+        clean = np.asarray(self.outcome(seen, hidden), dtype=np.int64)
         reported = clean.copy()
         if self.noise:
             hit = rng.random(clean.shape) < self.noise
             reported[hit] = rng.integers(0, 10, int(hit.sum()))
-        return Sequences(columns={"x": x, "y": y, "a": a}, outcomes=reported,
-                         clean=clean, hidden=hidden)
+        return Sequences(columns=seen, outcomes=reported, clean=clean,
+                         hidden=hidden)
 
     def split(self, n_train: int, n_test: int, seed: int) -> Tuple[Sequences, Sequences]:
         """Held-out episodes are new episodes: fresh switches, fresh events."""
@@ -160,4 +206,17 @@ class SequenceWorld:
 W2 = SequenceWorld("W2", ("x", "y", "a"), steps=20, press=0.3,
                    note="скрытый переключатель: a=1 переключает h; исход x при h, иначе y")
 
-SEQUENCE_WORLDS: Dict[str, SequenceWorld] = {"W2": W2}
+# Where the invention of step 2 is expected to break -- the boundary, to
+# be measured and written down rather than fixed on sight.
+W2N = SequenceWorld("W2n", ("x", "y", "a"), steps=20, press=0.3, noise=0.10,
+                    note="W2 и 10% случайных исходов")
+W2K = SequenceWorld("W2k", ("x", "y", "z", "a"), steps=20, press=0.3, modulus=3,
+                    outcome=lambda seen, hidden: np.choose(
+                        hidden, [seen["x"], seen["y"], seen["z"]]),
+                    note="скрытый счётчик на 3 состояния: a прибавляет 1; исход x, y или z")
+W2P = SequenceWorld("W2p", ("x", "a"), steps=20, press=0.3, modulus=4,
+                    outcome=lambda seen, hidden: seen["x"] + hidden,
+                    note="скрытое число c = нажатия по модулю 4; исход x + c")
+
+SEQUENCE_WORLDS: Dict[str, SequenceWorld] = {"W2": W2, "W2n": W2N,
+                                             "W2k": W2K, "W2p": W2P}

@@ -25,18 +25,20 @@ outcomes and returns a program. A test asserts it does not import
 """
 from __future__ import annotations
 
+import itertools
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Dict, Iterator, List, Sequence, Tuple
+from typing import Dict, Iterator, List, Optional, Sequence, Tuple
 
 import numpy as np
 
 from . import description
-from .language import (ADD, CMP, EQUAL, IF, LESS, SUB, Evaluator, Program,
-                       add, cmp, const, get, if_, nodes, replace, show, size, sub)
+from .language import (ADD, CMP, EQUAL, IF, LESS, SUB, Evaluator, Primitive,
+                       Program, add, cmp, const, free_variables, get, if_, nodes,
+                       prim, replace, show, size, sub)
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.1"
+__version__ = "1.2"
 
 BEAM = 4
 MAX_SIZE = 15
@@ -59,6 +61,9 @@ class Found:
     rounds: int
     #: (round, bits, program) each time the best description shortened.
     history: List[Tuple[int, float, str]] = field(default_factory=list)
+    #: Programs evaluated before the final best was first seen: the cost
+    #: of finding it, as opposed to the cost of making sure.
+    found_at: int = 0
 
     def describe(self) -> str:
         return (f"{show(self.program)}  — {self.bits:.1f} бит "
@@ -67,8 +72,12 @@ class Found:
 
 
 def vocabulary(columns: Dict[str, Sequence[int]],
-               outcomes: Sequence[int]) -> Tuple[List[Program], List[Program]]:
-    """Leaves and conditions, from nothing but the data."""
+               outcomes: Sequence[int],
+               library: Optional[Dict[str, Primitive]] = None
+               ) -> Tuple[List[Program], List[Program]]:
+    """Leaves and conditions, from nothing but the data -- and, once the
+    language has grown, every primitive called on the variables. Only on
+    variables: constants inside a call are reached by editing it."""
     variables = sorted(columns)
     counts: Counter = Counter()
     for values in list(columns.values()) + [outcomes]:
@@ -80,6 +89,14 @@ def vocabulary(columns: Dict[str, Sequence[int]],
             values.append(fixed)
     values = sorted(set(values))
     leaves = [get(v) for v in variables] + [const(c) for c in values]
+    for name, word in sorted((library or {}).items()):
+        # A word that names a variable this world does not have means
+        # nothing here. One learned as |#0 - y| crashed the search on a
+        # world of p, q and r before this was checked.
+        if not free_variables(word.template) <= set(variables):
+            continue
+        for args in itertools.product([get(v) for v in variables], repeat=word.arity):
+            leaves.append(prim(name, *args))
     conditions: List[Program] = []
     for v in variables:
         for c in values:
@@ -131,18 +148,22 @@ def neighbours(p: Program, leaves: Sequence[Program],
 def search(columns: Dict[str, Sequence[int]], outcomes: Sequence[int],
            beam_width: int = BEAM, max_size: int = MAX_SIZE,
            patience: int = PATIENCE, max_rounds: int = MAX_ROUNDS,
-           budget: int = BUDGET) -> Found:
+           budget: int = BUDGET,
+           library: Optional[Dict[str, Primitive]] = None) -> Found:
     """The shortest description of the outcomes this search can reach."""
     actual = np.asarray(outcomes, dtype=np.int64)
-    evaluator = Evaluator(columns)
+    library = dict(library or {})
+    evaluator = Evaluator(columns, library)
     variables = len(columns)
     alphabet = description.alphabet_of(actual)
     known = description.membership(actual)
-    leaves, conditions = vocabulary(columns, actual)
+    leaves, conditions = vocabulary(columns, actual, library)
     seen: Dict[Program, Tuple[float, float, float]] = {}
+    first_seen: Dict[Program, int] = {}
 
     def score(p: Program) -> Tuple[float, float, float]:
-        program_part = description.program_bits(p, variables)
+        first_seen.setdefault(p, len(first_seen) + 1)
+        program_part = description.program_bits(p, variables, len(library))
         error_part = description.error_bits(evaluator(p), actual, alphabet, known)
         return (program_part + error_part, program_part, error_part)
 
@@ -182,8 +203,9 @@ def search(columns: Dict[str, Sequence[int]], outcomes: Sequence[int],
     bits, program_part, error_part = seen[best]
     return Found(program=best, bits=bits, program_bits=program_part,
                  error_bits=error_part, evaluations=len(seen), rounds=rounds,
-                 history=history)
+                 history=history, found_at=first_seen.get(best, len(seen)))
 
 
-def predict(p: Program, columns: Dict[str, Sequence[int]]) -> np.ndarray:
-    return Evaluator(columns)(p)
+def predict(p: Program, columns: Dict[str, Sequence[int]],
+            library: Optional[Dict[str, Primitive]] = None) -> np.ndarray:
+    return Evaluator(columns, library)(p)

@@ -72,11 +72,31 @@ training episodes of 20 steps, 50 new episodes held out)
     W3   language changed 0/10: an invented variable cost 148.8 bits
          against 129.2 without it -- noise earns no cause.
 
+Its boundary, measured on three worlds it was not built on (invent.py has
+the numbers): with 10% noise on W2 the switch was found on 3 of 10 seeds;
+a three-state counter 1 of 10; a hidden number added to x 3 of 10, and
+only partly. What it does is find a binary hidden selector seen cleanly.
+
 Two things this step found about itself, both kept in the code: the
 currency of step 1 charged a wrong guess log2(K), which on two outcomes
 made "always wrong" cheaper than "right seven times in ten"; and the pair
 a hidden variable chooses between has to be picked for what it covers
 together, not taken from the best program's errors (see invent.py).
+
+Step 3, measured 2026-09-13 (scripts/run_library.py, 5 seeds; library.py
+has the table)
+----------------------------------------------------------------------
+    The language grew a word on four seeds of five: the distance between
+    two values, if(#0 < #1, #1 - #0, #0 - #1), on two of them as a general
+    function, on two with one variable baked in. With it, questions that
+    use it were found far sooner -- |x - y| at the 15th program instead of
+    the 87 712th, |y - z| + x at the 32 161st instead of the 286 046th --
+    and a question over other names was solved where it had not been. But
+    the total did not move: fourteen of twenty-five questions solved with
+    the word and without, because the word misled the search on a question
+    whose shortest answer does not use it. Bits reward what repeats in what
+    was seen; they do not pay for generality, and a larger vocabulary is
+    not free for the questions that do not need it.
 
 Steps
 -----

@@ -40,6 +40,29 @@ if(x == 2, x, if(x == 3, x, if(x == 4, x, y))), the labels carried x's
 artefacts, and no transition could be found. Two explanations chosen for
 what they cover together -- x and y, a hundred per cent between them --
 do not carry the compromise.
+
+Where it breaks, measured (scripts/run_invention_limits.py, 10 seeds each;
+accuracy on new episodes against the rule, without the variable -> with)
+--------------------------------------------------------------------------
+    W2n  W2 and 10% random outcomes: the language changed 3/10, 0.562 ->
+         0.695. Where it changed it found the switch exactly (1.000, 276
+         to 356 bits against about 950); on the other seven the variable
+         lost by 20-30 bits. Predicted to hold, and did not. A guess, not
+         checked: noise corrupts a label both as the value at t and as the
+         previous value at t+1, so the transition rows are spoiled from
+         two sides and the path to the switch stops shortening at every
+         edit.
+    W2k  a hidden counter of three states choosing among x, y, z: 1/10,
+         0.434 -> 0.440. One binary quantity cannot hold three states; the
+         pairs chosen were compromises of their own.
+    W2p  a hidden number, presses mod 4, added to x: 3/10, 0.291 -> 0.383
+         (0.56-0.63 on the seeds that changed -- part of the number, its
+         parity or its lowest step, not the number).
+
+So the change this module makes finds a hidden BINARY quantity that
+SELECTS between two explanations, cleanly observed. A quantity of more
+states, one that acts by arithmetic, or one seen through noise are beyond
+it -- recorded as the boundary, not repaired here.
 """
 from __future__ import annotations
 

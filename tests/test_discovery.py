@@ -168,3 +168,87 @@ def test_the_inventor_cannot_see_the_worlds_either():
             named = ([getattr(node, "module", "") or ""]
                      + [alias.name for alias in node.names])
             assert not any("worlds" in name for name in named)
+
+
+# --------------------------------------------------------------------------
+# step 3: the language grows a word when a word pays
+# --------------------------------------------------------------------------
+
+from mana.discovery.language import HOLE, Primitive, add, nodes, sub  # noqa: E402
+
+#: What the search found for T1 and T3 on seed 0, written out.
+_T1 = if_(cmp(LESS, get("y"), get("x")), sub(get("x"), get("y")), sub(get("y"), get("x")))
+_T3 = add(get("y"), if_(cmp(LESS, get("x"), get("z")),
+                        sub(get("z"), get("x")), sub(get("x"), get("z"))))
+
+
+def test_two_pieces_generalise_to_a_template_with_holes():
+    from mana.discovery import library
+
+    template, arity = library.generalise(_T1, _T3[2])
+    assert arity == 2
+    assert show(template) == "if((#0 < #1), (#1 - #0), (#0 - #1))"
+    assert sum(1 for _, node in nodes(template) if node[0] == HOLE) == 6
+
+
+def test_rewriting_keeps_what_every_program_computes():
+    from mana.discovery import library
+
+    template, arity = library.generalise(_T1, _T3[2])
+    word = Primitive("f1", template, arity)
+    split = W0.split(200, 50, seed=0)
+    for program in (_T1, _T3):
+        rewritten = library.rewrite(program, word)
+        assert rewritten != program
+        assert (Evaluator(split.train, {"f1": word})(rewritten)
+                == Evaluator(split.train)(program)).all()
+
+
+def test_the_distance_is_found_as_a_word_and_pays_for_itself():
+    from mana.discovery import library
+
+    grown = library.compress([_T1, _T3], 3)
+    assert [name for name, _, _ in grown.kept] == ["f1"]
+    assert grown.library["f1"].arity == 2
+    assert grown.bits_after < grown.bits_before
+    assert [show(p) for p in grown.programs] == ["f1(y, x)", "(y + f1(x, z))"]
+
+
+def test_a_word_used_once_does_not_pay_for_its_definition():
+    from mana.discovery import library
+
+    assert library.compress([_T1], 3).library == {}
+
+
+def test_a_larger_language_costs_at_every_node():
+    assert description.program_bits(_T1, 3, library=1) > description.program_bits(_T1, 3)
+
+
+def test_with_the_word_a_question_over_other_names_is_solved():
+    """Transfer: W4 is |q - r| + p. The starting language did not find it
+    within the budget on this split; with the word learned from T1 and T3
+    it is two edits away."""
+    from mana.discovery import library
+    from mana.discovery.worlds import W4
+
+    grown = library.compress([_T1, _T3], 3)
+    split = W4.split(200, 300, seed=0)
+    found = discovery.search(split.train, split.train_outcomes, library=grown.library)
+    assert W4.grade(lambda cols: discovery.predict(found.program, cols, grown.library)) == 1.0
+    assert show(found.program) == "(p + f1(q, r))"
+
+
+def test_a_word_naming_a_variable_the_world_lacks_is_not_offered_there():
+    """Learned on seed 2 as |#0 - y|: offered on a world of p, q and r it
+    crashed the search. There it simply does not exist."""
+    from mana.discovery.worlds import W4
+
+    template = if_(cmp(LESS, get("y"), (HOLE, 0)), sub((HOLE, 0), get("y")),
+                   sub(get("y"), (HOLE, 0)))
+    words = {"f1": Primitive("f1", template, 1)}
+    split = W4.split(200, 50, seed=0)
+    leaves, _ = discovery.vocabulary(split.train, split.train_outcomes, words)
+    assert not any(leaf[0] == "prim" for leaf in leaves)
+    found = discovery.search(split.train, split.train_outcomes, library=words,
+                             budget=2000)
+    assert "f1" not in show(found.program)

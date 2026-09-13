@@ -18,15 +18,21 @@ share almost every subtree with the program they were edited from.
 """
 from __future__ import annotations
 
-from typing import Dict, Iterator, List, Sequence, Tuple
+from dataclasses import dataclass
+from typing import Dict, Iterator, List, Optional, Sequence, Tuple
 
 import numpy as np
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 GET, CONST, CMP, ADD, SUB, IF = "get", "const", "cmp", "add", "sub", "if"
 KINDS = (GET, CONST, CMP, ADD, SUB, IF)
+
+#: Words the language grows (step 3): a call of a named primitive, and the
+#: holes its template is written with. Not in KINDS -- the six are what
+#: the language starts with; these are what it may add to itself.
+PRIM, HOLE = "prim", "hole"
 
 LESS, EQUAL = "<", "=="
 COMPARISONS = (LESS, EQUAL)
@@ -64,14 +70,32 @@ def if_(cond: Program, then: Program, other: Program) -> Program:
     return (IF, cond, then, other)
 
 
+def prim(name: str, *args: Program) -> Program:
+    return (PRIM, str(name)) + tuple(args)
+
+
+def hole(index: int) -> Program:
+    return (HOLE, int(index))
+
+
+@dataclass(frozen=True)
+class Primitive:
+    """A word the language added to itself: a template with holes."""
+    name: str
+    template: Program
+    arity: int
+
+
 def children(p: Program) -> Tuple[Program, ...]:
     kind = p[0]
-    if kind in (GET, CONST):
+    if kind in (GET, CONST, HOLE):
         return ()
     if kind == CMP:
         return (p[2], p[3])
     if kind in (ADD, SUB):
         return (p[1], p[2])
+    if kind == PRIM:
+        return tuple(p[2:])
     return (p[1], p[2], p[3])
 
 
@@ -83,7 +107,36 @@ def rebuild(p: Program, kids: Sequence[Program]) -> Program:
         return (kind, kids[0], kids[1])
     if kind == IF:
         return (IF, kids[0], kids[1], kids[2])
+    if kind == PRIM:
+        return (PRIM, p[1]) + tuple(kids)
     return p
+
+
+def free_variables(p: Program) -> frozenset:
+    """The observed variables a program -- or a template -- reads."""
+    return frozenset(node[1] for _, node in nodes(p) if node[0] == GET)
+
+
+def substitute(template: Program, args: Sequence[Program]) -> Program:
+    """The template with its holes filled."""
+    if template[0] == HOLE:
+        return args[template[1]]
+    kids = children(template)
+    if not kids:
+        return template
+    return rebuild(template, [substitute(kid, args) for kid in kids])
+
+
+def expand(p: Program, library: Dict[str, "Primitive"]) -> Program:
+    """The same program in the six starting kinds only."""
+    kids = children(p)
+    if p[0] == PRIM:
+        body = substitute(library[p[1]].template,
+                          [expand(kid, library) for kid in kids])
+        return expand(body, library)
+    if not kids:
+        return p
+    return rebuild(p, [expand(kid, library) for kid in kids])
 
 
 def size(p: Program) -> int:
@@ -117,16 +170,22 @@ def show(p: Program) -> str:
         return f"({show(p[1])} + {show(p[2])})"
     if kind == SUB:
         return f"({show(p[1])} - {show(p[2])})"
+    if kind == PRIM:
+        return f"{p[1]}({', '.join(show(arg) for arg in p[2:])})"
+    if kind == HOLE:
+        return f"#{p[1]}"
     return f"if({show(p[1])}, {show(p[2])}, {show(p[3])})"
 
 
 class Evaluator:
     """Evaluates programs on one data set, remembering every subtree."""
 
-    def __init__(self, columns: Dict[str, Sequence[int]]) -> None:
+    def __init__(self, columns: Dict[str, Sequence[int]],
+                 library: Optional[Dict[str, Primitive]] = None) -> None:
         self.columns = {name: np.asarray(values, dtype=np.int64)
                         for name, values in columns.items()}
         self.n = len(next(iter(self.columns.values()))) if self.columns else 0
+        self.library = dict(library or {})
         self._memo: Dict[Program, np.ndarray] = {}
 
     def __call__(self, p: Program) -> np.ndarray:
@@ -134,7 +193,9 @@ class Evaluator:
         if hit is not None:
             return hit
         kind = p[0]
-        if kind == GET:
+        if kind == PRIM:
+            out = self(substitute(self.library[p[1]].template, children(p)))
+        elif kind == GET:
             out = self.columns[p[1]]
         elif kind == CONST:
             out = np.full(self.n, p[1], dtype=np.int64)

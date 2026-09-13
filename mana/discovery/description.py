@@ -24,10 +24,10 @@ from typing import Optional, Sequence, Tuple
 
 import numpy as np
 
-from .language import CMP, COMPARISONS, CONST, GET, KINDS, Program, children
+from .language import CMP, COMPARISONS, CONST, GET, HOLE, KINDS, Program, children
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.1"
+__version__ = "1.2"
 
 _LOG2 = log(2.0)
 
@@ -39,16 +39,26 @@ def integer_bits(value: int) -> float:
     return float(2 * floor(log2(folded + 1)) + 1)
 
 
-def program_bits(p: Program, variables: int) -> float:
+def program_bits(p: Program, variables: int, library: int = 0) -> float:
+    """A prefix code. With `library` words added to the language, naming a
+    node's kind costs log2(6 + library): a larger language is paid for at
+    every node, which is what keeps a primitive from being free."""
     kind = p[0]
-    bits = log2(len(KINDS))
+    bits = log2(len(KINDS) + library + (1 if kind == HOLE else 0))
     if kind == GET:
         bits += log2(max(1, variables))
     elif kind == CONST:
         bits += integer_bits(p[1])
     elif kind == CMP:
         bits += log2(len(COMPARISONS))
-    return bits + sum(program_bits(child, variables) for child in children(p))
+    elif kind == HOLE:
+        bits += 1.0                     # which of at most two holes
+    return bits + sum(program_bits(child, variables, library) for child in children(p))
+
+
+def primitive_bits(template: Program, variables: int, library: int) -> float:
+    """Defining a primitive: its template, written once, holes and all."""
+    return program_bits(template, variables, library) + 1.0   # and its arity
 
 
 def _log2_choose(n: int, k: int) -> float:
