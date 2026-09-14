@@ -466,3 +466,15 @@ def test_the_move_learner_cannot_see_the_worlds():
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             named = [getattr(node, "module", "") or ""] + [a.name for a in node.names]
             assert not any("worlds" in name for name in named)
+
+
+def test_a_kept_program_stays_in_play_however_it_ranks():
+    """The control of step 6: a program kept in the beam is edited every
+    round, so an answer one edit from it is found even if the ranking
+    would never have held it."""
+    split = W0.split(200, 50, seed=0)
+    kept = if_(cmp(LESS, const(5), get("x")), get("y"), const(0))
+    found = discovery.search(split.train, split.train_outcomes, budget=30000, pinned=[kept])
+    assert W0.grade(lambda cols: discovery.predict(found.program, cols)) == 1.0
+    plain = discovery.search(split.train, split.train_outcomes, budget=30000)
+    assert found.evaluations >= plain.evaluations or found.program == plain.program

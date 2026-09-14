@@ -39,7 +39,7 @@ from .language import (ADD, CMP, EQUAL, HOLE, IF, LESS, SUB, Evaluator, Primitiv
                        nodes, prim, rebuild, replace, show, size, sub)
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.5"
+__version__ = "1.6"
 
 BEAM = 4
 MAX_SIZE = 15
@@ -237,13 +237,17 @@ def search(columns: Dict[str, Sequence[int]], outcomes: Sequence[int],
            budget: int = BUDGET,
            library: Optional[Dict[str, Primitive]] = None,
            profile: bool = False, trace: bool = False,
-           macros: Sequence[Macro] = ()) -> Found:
+           macros: Sequence[Macro] = (),
+           pinned: Sequence[Program] = ()) -> Found:
     """The shortest description of the outcomes this search can reach.
 
     `trace` keeps, for every program, the one it was first made from, and
     returns the answer's derivation. `macros` are edits added to the five:
     tried after them, in the same rounds, counted in the same budget.
-    Neither changes anything when left out."""
+    `pinned` programs stay in the beam every round, beside the best, however
+    they rank -- a diagnostic, not a method: it asks whether an answer is
+    reachable from a state the ranking would throw away. None of the three
+    changes anything when left out."""
     started = time.time()
     actual = np.asarray(outcomes, dtype=np.int64)
     library = dict(library or {})
@@ -280,9 +284,15 @@ def search(columns: Dict[str, Sequence[int]], outcomes: Sequence[int],
         # if(5 < x, y, z) in another.
         return (seen[p][0], size(p), show(p))
 
+    def keep(top: List[Program]) -> List[Program]:
+        return top + [p for p in pinned if p not in top]
+
     for leaf in leaves:
         seen[leaf] = score(leaf)
-    beam = sorted(seen, key=rank)[:beam_width]
+    for p in pinned:
+        if p not in seen:
+            seen[p] = score(p)
+    beam = keep(sorted(seen, key=rank)[:beam_width])
     best = beam[0]
     history = [(0, seen[best][0], show(best))]
     stalled = 0
@@ -303,7 +313,7 @@ def search(columns: Dict[str, Sequence[int]], outcomes: Sequence[int],
                     parent[q] = p
                     if learnt:
                         by_macro.add(q)
-        beam = sorted(set(fresh) | set(beam), key=rank)[:beam_width]
+        beam = keep(sorted(set(fresh) | set(beam), key=rank)[:beam_width])
         if seen[beam[0]][0] < seen[best][0] - 1e-9:
             best = beam[0]
             stalled = 0

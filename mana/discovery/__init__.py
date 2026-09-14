@@ -266,6 +266,43 @@ Step 6, measured 2026-09-14 (scripts/run_derive.py; derive.py has the rest)
     search can stand in to use it, and what states it can stand in is set
     by the currency, which nothing grown here changes.
 
+Step 6 control, predicted before the run (2026-09-14; scripts/run_frontier.py)
+----------------------------------------------------------------------
+    Before blaming the measure: H1, the answer is reachable and the beam,
+    ranked by bits, drops the state it is reached from; H2, T4 needs
+    something the language or the edits lack. The measure is left alone;
+    the search is only allowed to keep one given program in its beam,
+    if(x < 3, z, y) -- chosen because the answer is known, a diagnostic.
+    Predicted: kept + move finds the 66-bit rule on 10 of 10, in the first
+    rounds, through the move; kept without the move rarely does -- from the
+    kept program the rule is three plain edits away, through states no
+    better ranked; the kept program stands thousands of places below the
+    beam in the first round. If so, H1, strictly: the path exists and the
+    frontier throws it away. If kept + move fails, H2, and the measure was
+    blamed too soon.
+
+Step 6 control, measured 2026-09-14 (T4, seeds 0..9, beam 4, 800k)
+----------------------------------------------------------------------
+                       solved   programs to the answer   through the move
+        as it stands    4/10          146 285                  0/4
+        move            4/10          136 181                  0/4
+        kept           10/10          104 111                  0/10
+        kept + move    10/10           17 877                 10/10
+
+    H1, and more strongly than predicted. With the measure unchanged,
+    keeping one state the ranking drops -- 234th to 987th of 8 865 in the
+    first round, where the beam keeps 4 -- solves T4 on every seed, and
+    does so without the move: from the kept state three plain edits reach
+    the 66-bit rule. The move makes it six times cheaper (one step instead
+    of three). So T4's "structural limit" of step 4 and 5.0 was never the
+    language or the edits: the rule, a way to it, and a state it is
+    reached from all exist, and the frontier -- a beam ranked by the
+    description length of each state on its own -- throws the state away.
+    Predicted wrongly: that plain edits would rarely finish from the kept
+    state, and that it stood thousands of places down rather than hundreds.
+    What decides whether an answer is reached is which states are kept,
+    and that is decided by a measure MANA cannot change.
+
 Steps
 -----
     1  language, edit search, description length; worlds W0 and W3
