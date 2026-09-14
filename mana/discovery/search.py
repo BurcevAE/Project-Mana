@@ -39,7 +39,7 @@ from .language import (ADD, CMP, EQUAL, HOLE, IF, LESS, SUB, Evaluator, Primitiv
                        nodes, prim, rebuild, replace, show, size, sub)
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.7"
+__version__ = "1.8"
 
 BEAM = 4
 MAX_SIZE = 15
@@ -239,7 +239,8 @@ def search(columns: Dict[str, Sequence[int]], outcomes: Sequence[int],
            profile: bool = False, trace: bool = False,
            macros: Sequence[Macro] = (),
            pinned: Sequence[Program] = (),
-           frontier: Optional[Callable[[float, float, int, int], float]] = None) -> Found:
+           frontier: Optional[Callable[[float, float, int, int], float]] = None,
+           log_rounds: Optional[List[Tuple[List[Program], List[Program]]]] = None) -> Found:
     """The shortest description of the outcomes this search can reach.
 
     `trace` keeps, for every program, the one it was first made from, and
@@ -251,8 +252,10 @@ def search(columns: Dict[str, Sequence[int]], outcomes: Sequence[int],
     (step 7) decides which states the beam keeps -- a score of a state's
     program bits, error bits, size and wrong points, lower kept first --
     and nothing else: the answer returned is still the shortest description
-    of everything evaluated, judged as before. None of these changes
-    anything when left out."""
+    of everything evaluated, judged as before. `log_rounds`, a list, gets
+    (programs made, beam kept) for every round, the starting leaves as
+    round 0: what this frontier generated and what it held. None of these
+    changes anything when left out."""
     started = time.time()
     actual = np.asarray(outcomes, dtype=np.int64)
     library = dict(library or {})
@@ -317,6 +320,8 @@ def search(columns: Dict[str, Sequence[int]], outcomes: Sequence[int],
             seen[p] = score(p)
     beam = keep(sorted(seen, key=order)[:beam_width])
     best = leading(beam)
+    if log_rounds is not None:
+        log_rounds.append((list(seen), list(beam)))
     history = [(0, seen[best][0], show(best))]
     stalled = 0
     rounds = 0
@@ -337,6 +342,8 @@ def search(columns: Dict[str, Sequence[int]], outcomes: Sequence[int],
                     if learnt:
                         by_macro.add(q)
         beam = keep(sorted(set(fresh) | set(beam), key=order)[:beam_width])
+        if log_rounds is not None:
+            log_rounds.append((fresh, list(beam)))
         if seen[leading(beam)][0] < seen[best][0] - 1e-9:
             best = leading(beam)
             stalled = 0

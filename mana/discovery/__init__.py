@@ -373,6 +373,82 @@ Step 7, measured 2026-09-14
     dropped -- regret, bought with the search's own compute, no answer
     shown.
 
+Step 7b, the last control of this branch, predicted before the run
+(2026-09-14; frontier.py, scripts/run_regret.py)
+----------------------------------------------------------------------
+    The question, fixed with the user: can MANA distil a dearer search of
+    its own into a cheaper frontier, from a comparison of the two, within
+    the space of scores already given? Not whether it can grow a measure.
+    Regret: a state on a dear search's way to its answer (beam 16, 2M)
+    that the cheap search (beam 4, 400k) made and never kept, against
+    what the cheap frontier kept that round. A correction to the bits,
+    held near them by a penalty fixed in advance. Controls: its weights
+    permuted, random weights of its norm; and the dear policy itself.
+
+    Fixed before the run: T4 cannot be won in this space. The state its
+    answer is reached from is worse than a bare leaf in all four
+    quantities; no weighting with sensible signs prefers it, and signs
+    that prefer larger or worse-fitting states lose everywhere else.
+
+    Predicted: regret exists on the T1..T3 seeds the cheap search fails;
+    most of it is dominated -- the states the cheap frontier kept no worse
+    in every quantity -- so the correction can move little; T1..T3 gain
+    at most a few seeds of 30 at equal budget, W0, W3, W4 unchanged, T4 at
+    4 of 10, the controls no better, and the wide beam above all of them
+    from 800k where it can afford itself. Whatever comes, the branch stops
+    here: a gain says MANA can distil its dearer search into a cheaper
+    one; none, with the regret dominated, says the four quantities are
+    not enough -- and whether MANA can see that, and make a new way of
+    judging a state, is the next question, and a new one.
+
+Step 7b, measured 2026-09-14
+----------------------------------------------------------------------
+    The cheap search solved 16 of T1..T3's 30, the dear one all 30. Of the
+    140 states on the dear derivations the cheap frontier kept 57, made
+    and dropped 31, and never made 52. The 31 dropped are the regret --
+    and not one was dominated: for every one, the states kept instead were
+    worse in some quantity. The features separate the regret; the
+    predicted ceiling is not what stopped this.
+
+    ordered the regret pairs right    measure as it stands  0%
+                                      learnt correction    44%
+                                      its weights permuted 78%
+                                      random weights       41%
+
+    solved at budget (of 70)   10k  25k  50k  100k  200k  400k  800k
+        as it stands            20   20   20    26    32    51    54
+        learnt from regret      20   20   26    28    28    28    28
+        permuted                20   20   20    20    20    20    20
+        random                   0    0    0     0     0     0     0
+        the dear policy (16)    20   20   20    20    20    30    36
+    T1..T3 on unseen seeds: 6 of 30 at 50k where the search as it stands
+    has none -- the one gain -- then 8 at 800k against its 26. T4: 0.
+
+    Predicted rightly: regret exists where the cheap search fails; the
+    controls no better. Wrongly: that the regret would be dominated (none
+    was), that W0, W3, W4 and T4 would hold (24 fell to 20, 4 to 0), and
+    that the dear policy would lead at 800k (it needs 2M).
+
+    What this control answers -- the user's third outcome: the new measure
+    does not win even where the features separate the regret, so the
+    trouble is not only the teacher. How well a score orders the
+    frontier's known mistakes says nothing about how a search does with
+    it: 0% gives 54, 44% gives 28, 78% gives 20. A frontier is not a
+    ranking of states one at a time: keeping one state is dropping others
+    in the same round and every round after, and a third of the dear
+    path was never made by the cheap search at all -- its beam was
+    elsewhere, a matter of where the frontier went, not of how it ranked
+    what it saw. A score of a state's own quantities, learnt from pairs,
+    is the wrong kind of object for the decision it is asked to make.
+
+    This branch stops here, as agreed. MANA can grow a move of its own
+    search (step 6), and the control showed the frontier is where answers
+    are lost; a frontier learnt inside a given space of scores -- from
+    successes or from regret -- does not recover them. The question left
+    is not another feature: it is whether MANA can see that the way it
+    represents a state's promise is the wrong kind of thing, and make
+    another.
+
 Steps
 -----
     1  language, edit search, description length; worlds W0 and W3

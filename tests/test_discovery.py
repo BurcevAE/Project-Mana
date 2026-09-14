@@ -525,3 +525,28 @@ def test_the_frontier_learner_cannot_see_the_worlds():
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             named = [getattr(node, "module", "") or ""] + [a.name for a in node.names]
             assert not any("worlds" in name for name in named)
+
+
+def test_regret_is_what_the_cheap_frontier_made_and_dropped_on_a_dear_way():
+    from mana.discovery import frontier
+
+    split = W0.split(200, 50, seed=3)
+    x, y, z = get("x"), get("y"), get("z")
+    dear_way = [z, if_(cmp(LESS, const(5), x), y, z)]
+    rounds = [([x, y, z], [x, y]), ([if_(cmp(LESS, const(5), x), y, z), x], [x, y])]
+    found, counts = frontier.regrets(dear_way, rounds, split.train, split.train_outcomes)
+    assert counts == {"path": 2, "kept": 0, "dropped": 2, "never made": 0}
+    assert len(found) == 2 and found[0].kept.shape == (2, 4)
+
+
+def test_a_correction_learnt_from_regret_stays_near_the_bits_without_it():
+    from mana.discovery import frontier
+
+    rng = np.random.default_rng(1)
+    data = [frontier.Regret(rng.uniform(1, 9, 4), rng.uniform(1, 9, (4, 4)), 1.0, 0.0)
+            for _ in range(30)]
+    held = frontier.fit_correction(data, anchor=1000.0)
+    stand = frontier.base(held.scale)
+    cosine = float(held.weights @ stand.weights /
+                   (np.linalg.norm(held.weights) * np.linalg.norm(stand.weights)))
+    assert cosine > 0.99
