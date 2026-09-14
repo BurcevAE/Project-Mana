@@ -57,6 +57,13 @@ it spent 98-100% of the budget looking -- T4 0 of 10, the other six 29
 and 20 of 60, against R1's 4 and 40. The state that leads to T4's rule
 was in the pool and never kept: hundreds deep by score, and a look costs
 a whole neighbourhood of about 6 000 programs.
+
+P2, measured 2026-09-14 (scripts/run_p2.py): the same look, its
+successors made with narrower rules (policy.Selection.ahead) -- A' of R2,
+without "add a condition". A look of the first 256 then solved T4 on 9 of
+10 by 400k against R1's 4, and so did the look through A' with its grown
+move taken out; through R2b', the same move with the width kept, 0. The
+width of the look decided, not the move.
 """
 from __future__ import annotations
 

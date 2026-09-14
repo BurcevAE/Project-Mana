@@ -867,6 +867,59 @@ N3, probe P2, predicted before the run (2026-09-14; scripts/run_p2.py)
     256, three or four seeds of ten, and on a hand-written look. If T4
     does not move, the price of a look was not the only wall.
 
+N3, probe P2, measured 2026-09-14 (declared in commit 4925392, before the run)
+----------------------------------------------------------------------
+    The generator rebuilt A' and R2b' exactly, from R2b's dear runs.
+
+    of what kind: no reversals in any arm (0 of 3 to 6 rounds)
+    solved                10k  25k  50k 100k 200k 400k 800k  looking  made by a look
+      T4 (of 10)
+        R1                  0    0    0    0    4    4    4      0%    0 of 4
+        look 32, A'         0    0    0    0    5    6    6     17%    1 of 6
+        look 256, A'        0    0    0    4    4    9    9     62%    5 of 9
+        256, A', no move    0    0    0    0    0    9    9     62%    1 of 9
+        look 256, R2b'      0    0    0    0    0    0    0    100%    --
+      the other six (of 60)
+        R1                 20   20   20   27   27   40   40      0%    0 of 40
+        look 32, A'        30   55   60   60   60   60   60     18%   40 of 60
+        look 256, A'       30   55   60   60   60   60   60     67%   40 of 60
+        256, A', no move   20   20   20   21   30   30   47     48%    4 of 47
+        look 256, R2b'     30   30   30   36   48   60   60    100%   40 of 60
+    (made by a look: answers no round of the search made, only a look.)
+    Step 6's kept state, round 1 of T4: kept by the two looks of 256
+    through narrow rules on seeds 2 and 8, by no other arm.
+
+    Held: no reversals; the look of 256 through A' first solved T4
+    between 50k and 100k, 4 of 10, the answers made inside the look; the
+    look through R2b' spent the whole budget in round 1 and solved
+    nothing; the family's answers came far sooner through the move, 60 of
+    60 by 50k against R1's 20.
+
+    Wrong, and it is the result: the control without the move. Predicted
+    no better than R1; it solved T4 on 9 of 10 by 400k, as the look
+    through A' did, and 8 of its 9 answers were made by the search's own
+    rounds, not by a look. Wrong too: the look of 32, 6 of 10, not at most
+    4; the look of 256 went to 9, not 3 to 5.
+
+    So what decided T4 was the width of the look, not the move. A look one
+    step ahead through a neighbourhood without "add a condition" -- 239 to
+    343 programs a state against 15 761 -- is cheap enough for 256 states
+    a round, and the states it keeps lead the search's own plain edits to
+    T4's rule, where R1's best four do not. The move made it sooner (4 of
+    10 by 100k, inside the look); without it the 9 came between 200k and
+    400k. The same move through the wide neighbourhood solved nothing.
+    Width necessary, the move not.
+
+    What this is: the first selection written in the meta-language that
+    does better than R1 on T4 at equal programs, every look counted -- 9
+    of 10 against 4 at 400k -- and so the existence proof N3 was to start
+    from. What it is not: N3. The look is written by hand; its narrow
+    rules are A' (MANA's, refused as a search) or A' with the move taken
+    out by hand; seeds 0..9 are the ones the diagnostic before the run
+    looked at, and nothing is claimed before core.gates on fresh seeds.
+    Not measured: which states the narrow look keeps, and why they lead
+    to the rule; wall time per arm (the run took 2 856 s in all).
+
 Steps
 -----
     1  language, edit search, description length; worlds W0 and W3
