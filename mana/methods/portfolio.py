@@ -25,7 +25,7 @@ import numpy as np
 from .solvers import BUDGET, Attempt, Model, Session, run
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.1"
+__version__ = "1.2"
 
 ORDER = ("calculate", "decompose", "experiment", "exhaust")
 
@@ -50,12 +50,13 @@ def cascade(attempts: Dict[str, Attempt], order: Sequence[str] = ORDER) -> Choic
 
 def run_order(ask: Callable[[np.ndarray], np.ndarray], n: int, levels: int, seed: int,
               order: Sequence[str] = ORDER, budget: int = BUDGET,
-              announce: bool = False) -> Tuple[Choice, Optional[Model], List[Attempt]]:
+              announce: bool = False, methods: Optional[Dict[str, Callable]] = None
+              ) -> Tuple[Choice, Optional[Model], List[Attempt]]:
     """The methods in this order in one session, until one believes itself."""
     session = Session(ask, n, levels, budget, announce)
     tried: List[Attempt] = []
     for name in order:
-        tried.append(run(session, name, seed, budget))
+        tried.append(run(session, name, seed, budget, methods))
         if tried[-1].believed:
             return (Choice(name, session.total, tuple(a.method for a in tried)),
                     tried[-1].model, tried)

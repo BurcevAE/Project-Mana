@@ -40,7 +40,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 import numpy as np
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.1"
+__version__ = "1.2"
 
 CHECKS = 10
 BUDGET = 200000
@@ -263,7 +263,8 @@ class Attempt:
     points: np.ndarray = field(default_factory=lambda: np.zeros(0, np.int64), repr=False)
 
 
-def run(session: Session, name: str, seed: int, budget: int = BUDGET) -> Attempt:
+def run(session: Session, name: str, seed: int, budget: int = BUDGET,
+        methods: Optional[Dict[str, Callable]] = None) -> Attempt:
     """One method in a session, then its own check. The same seed gives
     every method the same base point and the same check inputs."""
     session.begin(budget)
@@ -271,7 +272,7 @@ def run(session: Session, name: str, seed: int, budget: int = BUDGET) -> Attempt
     model: Optional[Model] = None
     planned, why = 0, ""
     try:
-        model, planned = METHODS[name](session, np.random.default_rng([seed, 1]))
+        model, planned = (methods or METHODS)[name](session, np.random.default_rng([seed, 1]))
     except Decline as declined:
         planned, why = declined.planned, declined.why
     except OverBudget as over:
@@ -288,6 +289,7 @@ def run(session: Session, name: str, seed: int, budget: int = BUDGET) -> Attempt
 
 
 def attempt(name: str, ask: Callable[[np.ndarray], np.ndarray], n: int, levels: int,
-            seed: int, budget: int = BUDGET, announce: bool = True) -> Attempt:
+            seed: int, budget: int = BUDGET, announce: bool = True,
+            methods: Optional[Dict[str, Callable]] = None) -> Attempt:
     """One method alone on a box."""
-    return run(Session(ask, n, levels, budget, announce), name, seed, budget)
+    return run(Session(ask, n, levels, budget, announce), name, seed, budget, methods)

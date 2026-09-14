@@ -176,6 +176,101 @@ exactly what cannot be learnt from experience gathered at one size. A
 chooser that only solves boxes gathers it by accident; it would have to
 try a method at another size to learn how it grows -- choosing
 experiments about its methods, not only answers about boxes.
+
+M1b, predicted before the run (2026-09-14)
+------------------------------------------
+The Explorer (choice.py): a second kind of action -- a method run on a
+smaller version of the box, the rest held still -- weighed with applying
+a method by one rule, the decision's expected improvement less the
+questions spent; costs as beliefs, with a doubt of extrapolation learnt
+from its own journal of predicted against actual.
+
+    M1 world, M1's protocol (frozen at test)
+        solvable   far below M1's 6.04M and near the cascade's 3.04M: an
+                   exhaust seen at one size is now uncertain at the next,
+                   so it is no longer run before experiment
+        blocks 8   30 of 30: a probe of experiment on a few of the box's
+                   inputs tells a box of pairs (hundreds of questions)
+                   from a global one (10 ** size), and only then is
+                   experiment applied
+        hopeless   far below M1's 13.8M: the same probe says "global", and
+                   it gives up after the probe instead of running
+                   experiment to its budget
+        probes     few in training, at the test's new sizes, mostly of
+                   experiment after calculate and decompose failed
+    M1 world, learning through the test
+        the trajectory: after the first probes the kind's line for
+        experiment-after-two-failures stays wide -- two kinds of box under
+        one line -- and the decisions are carried by probes of the box
+        itself, not by that line
+    the trap (trap.py: explosive 20x cheaper at n = 2..4, dearer from 6,
+    past the budget at 8; steady linear)
+        the Chooser pays explosive's budget on n = 8 boxes more than once
+        before its line catches up; the Explorer, whose priors call a
+        clean line four sizes out safe, pays it on its first n = 8 box --
+        then its drift rises from the surprise, and it does not pay it
+        again. A probe before the first surprise is not predicted: its
+        worth to this box is small under those priors, and its worth to
+        later boxes is not counted
+
+The criterion, fixed with the user before the run: part of the questions
+go to knowledge about a method, not to the box, where the uncertainty is
+large and the choice depends on it -- and the choice changes after the
+knowledge.
+
+M1b, measured 2026-09-14 (scripts/run_probes.py, 10 streams per part)
+----------------------------------------------------------------------
+    M1 world, frozen at test         solvable (300)       hopeless (60)
+        M1 Chooser                   291   6 038 629          13 803 798
+        Explorer                     300   3 131 684          10 812 128
+        cascade (= oracle)           300   3 039 630          24 004 440
+    M1 world, learning through it
+        M1 Chooser                   300   3 240 942          11 204 327
+        Explorer                     300   3 066 906          12 094 370
+    the trap, 12 test boxes, questions (oracle 642 080)
+        sizes 5, 6, 8 in turn        M1 Chooser 1 076 080  Explorer 1 645 769
+        8 first, then 5, 6           M1 Chooser 2 880 080  Explorer 3 487 227
+
+Where the criterion was met -- the trap as posed. After n = 2..4 only,
+straight to n = 8: in 10 streams of 10 the Explorer ran explosive on six
+of the box's inputs (20 017 questions), saw it explode, and applied
+steady: 28 036 questions on that box, against the Chooser's 208 019,
+which ran explosive to its budget first. Knowledge about a method, bought
+where the choice hung on it, and the choice changed. What it expected of
+explosive at n = 8 (stream 0): 743 questions before, 20 794 after that
+probe, 149 576 after four, 193 661 at the end -- the truth is 2 million;
+a line through a bend, censored at the budget, still undershoots.
+
+Where it was not, and why -- read from its own numbers:
+    the worth of the present was taken as the worth of the best single
+        application. The alternative is a sequence -- M1's ratio rule,
+        cheapest likely method first, was the better rule. Worth rewards
+        the likeliest method: training applied exhaust first on 306 of
+        400 boxes (2 to 2.9 times the oracle, M1 1.2), experiment was
+        never run in training in most streams, and at test it was run as
+        an unknown -- which is why blocks at n = 8 came out 30 of 30 (24
+        of them without a probe), and why global boxes still paid its
+        budget: the hopeless boxes cost 10.8M, not the "far below" that
+        was predicted
+    probes were weighed against that same single application, so the
+        cost of the catch-all method looked worth measuring where a cheap
+        sequence settles the box: exhaust on 2 and 3 inputs of every n = 5
+        box, 1.3M questions of probes at test in the frozen protocol
+    success was left out of the uncertainty: steady, applied once, is
+        believed to pass its check with Laplace 0.67. So on the second
+        n = 8 box of every stream a probe of explosive on 7 inputs looked
+        worth it -- and the probe itself spent explosive's whole budget,
+        200 000 questions. The Explorer paid for the trap with the
+        experiment meant to avoid it
+    a line through a bend reads as spread between boxes: every box looks
+        individually uncertain, and explosive on 5 inputs was probed
+        again on box after box where the journal already had it
+
+So: an experiment about a method, weighed with acting, did what it was
+for once, cleanly, where the question was posed for it; everywhere else
+the value it was weighed against was wrong. The next edit is that value:
+the worth of the present as the worth of the best ordered sequence of
+methods, and the uncertainty about success in it, not only about cost.
 """
 from __future__ import annotations
 

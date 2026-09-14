@@ -13,7 +13,7 @@ import inspect
 import numpy as np
 import pytest
 
-from mana.methods import portfolio, solvers
+from mana.methods import portfolio, solvers, trap
 from mana.methods.world import (ADDITIVE, BLOCKS, GLOBAL, LEVELS, LINEAR, STRUCTURES,
                                 BlackBox)
 
@@ -157,3 +157,105 @@ def test_the_chooser_learns_from_boxes_and_keeps_to_what_it_may_see():
             assert not any("world" in name for name in named)
         if isinstance(node, ast.Attribute):
             assert node.attr not in ("planned", "verdict", "structure", "declined"), node.attr
+
+
+# --------------------------------------------------------------------------
+# M1b: experiments about methods
+# --------------------------------------------------------------------------
+
+def _entry(n, queries, before=frozenset(), method="exhaust", box=0, predicted=0.0, distance=0.0):
+    from mana.methods.choice import TASK, Entry
+    return Entry(TASK, box, n, before, method, True, True, queries, predicted, 0.0, distance)
+
+
+def test_one_size_says_nothing_about_growth():
+    from mana.methods.choice import Explorer
+
+    explorer = Explorer()
+    for box in range(5):
+        explorer.journal.add(_entry(4, LEVELS ** 4, box=box))
+    belief = explorer.belief("exhaust", frozenset(), -1, (), explorer.journal.drift())
+    _, at_seen = belief.predict(4)
+    _, two_away = belief.predict(6)
+    assert at_seen < 1.0 and two_away > 3.0          # nats: a factor of 20 either way
+
+
+def test_a_line_seen_at_three_sizes_is_trusted_near_them_and_doubted_far_away():
+    from mana.methods.choice import Explorer
+
+    explorer = Explorer()
+    for box, n in enumerate((2, 3, 4) * 3):
+        explorer.journal.add(_entry(n, LEVELS ** n, box=box))
+    belief = explorer.belief("exhaust", frozenset(), -1, (), explorer.journal.drift())
+    mu, near = belief.predict(5)
+    _, far = belief.predict(8)
+    assert abs(mu - np.log(LEVELS ** 5)) < 0.2 and near < far
+
+
+def test_a_surprise_far_from_what_was_seen_raises_the_doubt_of_extrapolation():
+    from mana.methods.choice import Journal
+
+    journal = Journal()
+    calm = journal.drift()
+    journal.add(_entry(8, 200000, predicted=np.log(600), distance=4))
+    assert journal.drift() > 1.5 * calm              # one surprise against the prior's two
+
+
+def test_a_probe_asks_the_box_itself_and_what_it_learnt_is_remembered():
+    from mana.methods.choice import Explorer
+
+    box = BlackBox(6, BLOCKS, seed=5)
+    explorer = Explorer()
+    session = solvers.Session(box.answer, 6, LEVELS, announce=False)
+    found = explorer._probe(session, "experiment", 4, LEVELS, 5, 6)
+    assert found.believed and found.queries == session.total == box.asked
+    after = solvers.run(session, "exhaust", 5, 10 ** 6)
+    assert after.queries == LEVELS ** 6 - found.queries + 0   # the probe's answers are free now
+
+
+def test_the_trap_costs_what_it_says():
+    for n, cost in ((3, trap.explosive_cost(3)), (6, trap.explosive_cost(6)),
+                    (3, trap.steady_cost(3))):
+        name = "explosive" if cost != trap.steady_cost(3) else "steady"
+        box = BlackBox(n, LINEAR, seed=n, levels=trap.LEVELS)
+        found = solvers.attempt(name, box.answer, n, trap.LEVELS, n, announce=False,
+                                methods=trap.METHODS)
+        assert found.believed and box.verdict(found.model) == 1.0
+        assert cost <= found.queries <= cost + n + 1 + solvers.CHECKS
+
+
+def test_the_explorer_and_the_trap_cannot_see_the_world():
+    from mana.methods import choice
+
+    for module in (choice, trap):
+        for node in ast.walk(ast.parse(inspect.getsource(module))):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                named = [getattr(node, "module", "") or ""] + [a.name for a in node.names]
+                assert not any("world" in name for name in named), module.__name__
+            if isinstance(node, ast.Attribute) and module is choice:
+                assert node.attr not in ("planned", "verdict", "structure", "declined")
+
+
+def test_after_small_boxes_only_the_explorer_probes_before_the_trap_and_the_chooser_falls_in():
+    """The trap as posed, measured 2026-09-14 on 10 streams of 10: after
+    n = 2..4, a box of n = 8. The Explorer runs explosive on six of its
+    inputs, sees it explode, and applies steady; the Chooser runs
+    explosive to its budget first."""
+    from mana.methods import choice
+
+    names = tuple(trap.METHODS)
+    rng = np.random.default_rng([0, 13])
+    sizes = [int(rng.choice((2, 3, 4))) for _ in range(20)]
+    chooser = choice.Chooser(choice.Experience(methods=names), registry=trap.METHODS)
+    explorer = choice.Explorer(methods=names, registry=trap.METHODS)
+    for i, n in enumerate(sizes):
+        for agent in (chooser, explorer):
+            box = BlackBox(n, LINEAR, i, levels=trap.LEVELS)
+            agent.solve(box.answer, n, trap.LEVELS, i)
+    box = BlackBox(8, LINEAR, 500, levels=trap.LEVELS)
+    fell, _ = chooser.solve(box.answer, 8, trap.LEVELS, 500)
+    box = BlackBox(8, LINEAR, 500, levels=trap.LEVELS)
+    looked, model = explorer.solve(box.answer, 8, trap.LEVELS, 500)
+    assert fell.tried == ("explosive", "steady") and fell.cost > solvers.BUDGET
+    assert [(m, size) for m, size, _ in explorer.last_probes] == [("explosive", 6)]
+    assert looked.tried == ("steady",) and looked.cost < 30000 and box.verdict(model) == 1.0

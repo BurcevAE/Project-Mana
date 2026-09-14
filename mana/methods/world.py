@@ -28,7 +28,7 @@ from typing import Callable, List, Optional
 import numpy as np
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 LEVELS = 10
 LINEAR, ADDITIVE, BLOCKS, GLOBAL = "linear", "additive", "blocks", "global"
@@ -36,18 +36,18 @@ STRUCTURES = (LINEAR, ADDITIVE, BLOCKS, GLOBAL)
 HELD_OUT = 500
 
 
-def _codes(X: np.ndarray) -> np.ndarray:
-    return X @ (LEVELS ** np.arange(X.shape[1], dtype=np.int64))
+def _codes(X: np.ndarray, levels: int = LEVELS) -> np.ndarray:
+    return X @ (levels ** np.arange(X.shape[1], dtype=np.int64))
 
 
-def _mix(codes: np.ndarray, seed: int) -> np.ndarray:
+def _mix(codes: np.ndarray, seed: int, levels: int = LEVELS) -> np.ndarray:
     """splitmix64 of the input's code: a value per input, no structure."""
     with np.errstate(over="ignore"):
         z = codes.astype(np.uint64) + np.uint64(seed + 1) * np.uint64(0x9E3779B97F4A7C15)
         z = (z ^ (z >> np.uint64(30))) * np.uint64(0xBF58476D1CE4E5B9)
         z = (z ^ (z >> np.uint64(27))) * np.uint64(0x94D049BB133111EB)
         z = z ^ (z >> np.uint64(31))
-    return (z % np.uint64(LEVELS)).astype(np.int64)
+    return (z % np.uint64(levels)).astype(np.int64)
 
 
 @dataclass
@@ -55,6 +55,8 @@ class BlackBox:
     n: int
     structure: str
     seed: int
+    #: Values each input takes.
+    levels: int = LEVELS
     #: Questions answered, repeats included.
     asked: int = 0
     blocks: List[List[int]] = field(default_factory=list)
@@ -62,14 +64,14 @@ class BlackBox:
     def __post_init__(self) -> None:
         rng = np.random.default_rng([self.seed, self.n, STRUCTURES.index(self.structure)])
         if self.structure == LINEAR:
-            self._intercept = int(rng.integers(0, LEVELS))
+            self._intercept = int(rng.integers(0, self.levels))
             self._slopes = rng.integers(-3, 4, size=self.n)
         elif self.structure == ADDITIVE:
-            self._tables = rng.integers(0, LEVELS, size=(self.n, LEVELS))
+            self._tables = rng.integers(0, self.levels, size=(self.n, self.levels))
         elif self.structure == BLOCKS:
             order = [int(i) for i in rng.permutation(self.n)]
             self.blocks = [sorted(order[i:i + 2]) for i in range(0, self.n, 2)]
-            self._block_tables = [rng.integers(0, LEVELS, size=(LEVELS,) * len(b))
+            self._block_tables = [rng.integers(0, self.levels, size=(self.levels,) * len(b))
                                   for b in self.blocks]
         elif self.structure != GLOBAL:
             raise ValueError(f"unknown structure {self.structure!r}")
@@ -84,7 +86,7 @@ class BlackBox:
             for block, table in zip(self.blocks, self._block_tables):
                 out += table[tuple(X[:, j] for j in block)]
             return out
-        return _mix(_codes(X), self.seed)
+        return _mix(_codes(X, self.levels), self.seed, self.levels)
 
     def answer(self, X) -> np.ndarray:
         X = np.atleast_2d(np.asarray(X, dtype=np.int64))
@@ -97,5 +99,5 @@ class BlackBox:
         exactly right. No model: nothing right."""
         if model is None:
             return 0.0
-        X = np.random.default_rng([self.seed, 7919]).integers(0, LEVELS, size=(held_out, self.n))
+        X = np.random.default_rng([self.seed, 7919]).integers(0, self.levels, size=(held_out, self.n))
         return float(np.mean(np.asarray(model(X)) == self._truth(X)))
