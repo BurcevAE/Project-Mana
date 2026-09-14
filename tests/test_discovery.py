@@ -400,3 +400,69 @@ def test_cells_cannot_see_the_worlds():
             named = ([getattr(node, "module", "") or ""]
                      + [alias.name for alias in node.names])
             assert not any("worlds" in name for name in named)
+
+
+# --------------------------------------------------------------------------
+# step 6: moves of the search, learnt from how answers were reached
+# --------------------------------------------------------------------------
+
+def test_a_traced_search_finds_the_same_and_says_how_one_edit_at_a_time():
+    split = W0.split(200, 50, seed=1)
+    plain = discovery.search(split.train, split.train_outcomes, budget=20000)
+    traced = discovery.search(split.train, split.train_outcomes, budget=20000, trace=True)
+    assert (plain.program, plain.evaluations, plain.found_at) == \
+        (traced.program, traced.evaluations, traced.found_at)
+    leaves, conditions = discovery.vocabulary(split.train, split.train_outcomes)
+    steps = traced.derivation
+    assert steps[-1] == traced.program and steps[0] in leaves
+    for p, q in zip(steps, steps[1:]):
+        assert q in set(discovery.neighbours(p, leaves, conditions, discovery.MAX_SIZE))
+
+
+def test_a_move_rewrites_any_node_with_leaves_of_the_vocabulary():
+    from mana.discovery.language import hole
+
+    move = discovery.Macro("m", sub(add(discovery.SELF, hole(0)), hole(1)), 2)
+    x, y, z = get("x"), get("y"), get("z")
+    made = set(discovery.macro_neighbours(if_(cmp(LESS, x, const(3)), z, y), [x, y, z],
+                                          [move], discovery.MAX_SIZE))
+    assert if_(cmp(LESS, sub(add(x, y), z), const(3)), z, y) in made
+
+
+def _derivations():
+    from mana.discovery import derive
+
+    x, y, z = get("x"), get("y"), get("z")
+    columns = {"x": [0, 5, 9], "y": [3, 1, 7], "z": [2, 8, 4]}
+    leaves, conditions = discovery.vocabulary(columns, [1, 2, 3])
+    chains = [
+        [y, sub(x, y), if_(cmp(LESS, x, y), y, sub(x, y)),
+         if_(cmp(LESS, x, y), sub(y, x), sub(x, y))],
+        [z, add(z, x), add(sub(z, y), x), add(if_(cmp(LESS, z, y), y, sub(z, y)), x),
+         add(if_(cmp(LESS, z, y), sub(y, z), sub(z, y)), x)],
+        [x, add(x, y), add(sub(x, z), y), add(if_(cmp(LESS, x, z), z, sub(x, z)), y),
+         add(if_(cmp(LESS, x, z), sub(z, x), sub(x, z)), y)],
+    ]
+    return [derive.Derivation(chain, leaves, conditions, discovery.MAX_SIZE, f"t{i}")
+            for i, chain in enumerate(chains)]
+
+
+def test_runs_of_steps_several_derivations_share_become_a_move_that_pays():
+    from mana.discovery import derive
+
+    derivations = _derivations()
+    learned = derive.compress(derivations, 3)
+    assert learned.macros and learned.bits_after < learned.bits_before
+    assert all(any(part == discovery.SELF for _, part in nodes(m.template))
+               for m in learned.macros)
+    bits, used = derive.derivation_bits(derivations[1], learned.macros)
+    assert used >= 1 and bits < derive.derivation_bits(derivations[1], [])[0]
+
+
+def test_the_move_learner_cannot_see_the_worlds():
+    from mana.discovery import derive
+
+    for node in ast.walk(ast.parse(inspect.getsource(derive))):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            named = [getattr(node, "module", "") or ""] + [a.name for a in node.names]
+            assert not any("worlds" in name for name in named)

@@ -184,6 +184,88 @@ Cells, measured 2026-09-14 (scripts/run_cells.py; cells.py has the table)
     limit is inside every cell, in the edits and the currency, not in the
     size of the region.
 
+Step 6, the breakthrough experiment, predicted before the run (2026-09-14;
+docs/АУДИТ_ПОРОЖДЕНИЯ.md has the question and the criterion)
+----------------------------------------------------------------------
+    Everything grown so far was about the world. Here the object compressed
+    is how answers were reached: the search's derivations -- each program
+    the one the next was made from, one edit apart -- written in the
+    language the search already had, its edits. Runs of steps that several
+    derivations share become macro-edits, moves of the search, kept only
+    when they shorten the derivations in the currency a search pays in
+    (log2 of each neighbourhood). derive.py.
+
+    Family A, learning: T1, T2, T3, solved with a wide beam. Family B,
+    transfer: T4 -- the distance inside a condition, another surface, and
+    the search's structural limit (4/10 narrow, 6/10 wide). W4 is not B:
+    it is A renamed. Arms on B at equal programs evaluated: the search as it
+    stands; with the moves learnt from A; with the words learnt from the
+    same A answers (step 3, compressing results); with moves learnt from
+    W0 and W3 (control).
+
+    Predicted: moves are learnt from A -- at least one pays -- and some are
+    noise from the search's detours through conditions. In A on unseen
+    seeds they help, as the words did. On T4 they do not: no more than one
+    seed of ten above the search as it stands, and few T4 answers reached
+    through a move -- every move widens every neighbourhood by the square
+    of the vocabulary, and T4's shortest answer says |x - y| < 3 with two
+    comparisons, which no distance-making move reaches. If so, compressing
+    the way of solving carries no further than compressing the answers,
+    and the boundary lies between the program of the world and the
+    program of solving.
+
+Step 6, measured 2026-09-14 (scripts/run_derive.py; derive.py has the rest)
+----------------------------------------------------------------------
+    Learning: the wide beam solved all 30 of T1..T3, derivations of 4 steps
+    (median). Of 54 candidate moves two were kept -- one move, written both
+    ways round: n -> |n - #0|, "put this node at a distance from a leaf" --
+    and the derivations went from 1 655 to 843 bits. No noise from detours
+    was kept. The words compressed from the same answers: the distance,
+    and three whole answers with their variables baked in (f1(x, z) + y).
+
+    solved at budget         10k  25k  50k  100k  200k  400k  800k   used
+    A, T1..T3 unseen seeds (of 30)
+        as it stands           0    0    0     6     8    23    26
+        with the move          9    9   12    22    26    26    27   26/27
+        with the words        30   30   30    30    30    30    30   30/30
+        random moves           0    0    0     6     8    23    26
+    B, T4 (of 10)
+        as it stands           0    0    0     0     4     4     4
+        with the move          0    0    0     1     4     4     4    0/4
+        with the words         0    0    0     0     0     4     4    4/4
+        random moves           0    0    0     0     4     4     4
+
+    (used: answers whose derivation took a step by the move, or which
+    call a word.)
+
+    The chain the user set as the criterion -- tasks, programs of solving,
+    their repeated parts, compression, a new primitive, transfer -- held to
+    its last link and broke there. MANA grew a move of its own search from
+    how its answers were reached, nobody wrote it, it pays in the family:
+    on unseen data the answer came at a median 73 325 programs against
+    297 715, and 26 of 27 answers were reached through it; random moves of
+    the same size change nothing, so it is this move, not a wider
+    neighbourhood. That is level 2 of the audit's scale, for a way of
+    solving -- the first thing MANA has grown that is not about the world.
+    It did not carry to T4: one seed earlier, none more, and not one T4
+    answer took a step by it. The words did no better there and in the
+    family won by memorising the answers.
+
+    Why, read from T4's own numbers: the rule with a distance is 66 bits,
+    far shorter than anything found, so it is expressible and would win.
+    The move reaches it in one step from if(x < 3, z, y) -- and that
+    program costs 470 to 544 bits, more than the bare leaf y (387 to 498).
+    The currency never lets the beam hold the place where the move
+    applies; on the failed seeds the search ends in round 1 at
+    if(x == y, z, y), where no move leads anywhere. The same valley
+    without a gradient that kept (y + x) - z out of reach in the cells
+    experiment keeps a learnt move from being used. The boundary is not
+    between compressing the world and compressing the way of solving --
+    both compressed, and both carried in the family and not outside it. It
+    is that a primitive of a method is only as good as the states the
+    search can stand in to use it, and what states it can stand in is set
+    by the currency, which nothing grown here changes.
+
 Steps
 -----
     1  language, edit search, description length; worlds W0 and W3

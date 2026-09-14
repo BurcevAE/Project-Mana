@@ -34,12 +34,12 @@ from typing import Dict, Iterator, List, Optional, Sequence, Tuple
 import numpy as np
 
 from . import description
-from .language import (ADD, CMP, EQUAL, IF, LESS, SUB, Evaluator, Primitive,
-                       Program, add, cmp, const, free_variables, get, if_, nodes,
-                       prim, replace, show, size, sub)
+from .language import (ADD, CMP, EQUAL, HOLE, IF, LESS, SUB, Evaluator, Primitive,
+                       Program, add, children, cmp, const, free_variables, get, if_,
+                       nodes, prim, rebuild, replace, show, size, sub)
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.4"
+__version__ = "1.5"
 
 BEAM = 4
 MAX_SIZE = 15
@@ -89,6 +89,11 @@ class Found:
     #: same search would have returned at any smaller budget -- see
     #: `at_budget`.
     anytime: List[Tuple[int, Program, float]] = field(default_factory=list)
+    #: With `trace`: how the answer was reached -- from a starting leaf, each
+    #: program the one the next was first made from, one edit apart.
+    derivation: List[Program] = field(default_factory=list)
+    #: Steps of that derivation made by a macro-edit.
+    macro_steps: int = 0
 
     @property
     def status(self) -> str:
@@ -176,13 +181,69 @@ def neighbours(p: Program, leaves: Sequence[Program],
                 yield replace(p, path, sub(leaf, node))
 
 
+#: Where the node a macro-edit rewrites stands in the macro's template. A
+#: variable no data set has, so it can only ever mean "the node itself".
+SELF = get("@self")
+
+
+@dataclass(frozen=True)
+class Macro:
+    """An edit the search did not start with (step 6): the node at some
+    place becomes `template`, SELF standing for the node itself and holes
+    #0.. for leaves of the vocabulary. The five starting edits are of this
+    form too -- n + leaf is (SELF + #0) -- one step long; a macro is what
+    several of them did together, learnt from how answers were reached."""
+    name: str
+    template: Program
+    arity: int
+
+
+def instantiate(template: Program, node: Program, fills: Sequence[Program]) -> Program:
+    if template == SELF:
+        return node
+    if template[0] == HOLE:
+        return fills[template[1]]
+    kids = children(template)
+    if not kids:
+        return template
+    return rebuild(template, [instantiate(kid, node, fills) for kid in kids])
+
+
+def macro_neighbours(p: Program, leaves: Sequence[Program], macros: Sequence[Macro],
+                     max_size: int) -> Iterator[Program]:
+    """Every program one macro-edit away, no larger than `max_size`."""
+    whole = size(p)
+    for path, node in nodes(p):
+        for macro in macros:
+            selves = sum(1 for _, part in nodes(macro.template) if part == SELF)
+            grown = size(macro.template) + selves * (size(node) - 1)
+            if whole - size(node) + grown > max_size:
+                continue
+            for fills in itertools.product(leaves, repeat=macro.arity):
+                yield replace(p, path, instantiate(macro.template, node, fills))
+
+
+def _edits(p: Program, leaves: Sequence[Program], conditions: Sequence[Program],
+           max_size: int, macros: Sequence[Macro]) -> Iterator[Tuple[Program, bool]]:
+    for q in neighbours(p, leaves, conditions, max_size):
+        yield q, False
+    for q in macro_neighbours(p, leaves, macros, max_size):
+        yield q, True
+
+
 def search(columns: Dict[str, Sequence[int]], outcomes: Sequence[int],
            beam_width: int = BEAM, max_size: int = MAX_SIZE,
            patience: int = PATIENCE, max_rounds: int = MAX_ROUNDS,
            budget: int = BUDGET,
            library: Optional[Dict[str, Primitive]] = None,
-           profile: bool = False) -> Found:
-    """The shortest description of the outcomes this search can reach."""
+           profile: bool = False, trace: bool = False,
+           macros: Sequence[Macro] = ()) -> Found:
+    """The shortest description of the outcomes this search can reach.
+
+    `trace` keeps, for every program, the one it was first made from, and
+    returns the answer's derivation. `macros` are edits added to the five:
+    tried after them, in the same rounds, counted in the same budget.
+    Neither changes anything when left out."""
     started = time.time()
     actual = np.asarray(outcomes, dtype=np.int64)
     library = dict(library or {})
@@ -226,16 +287,22 @@ def search(columns: Dict[str, Sequence[int]], outcomes: Sequence[int],
     history = [(0, seen[best][0], show(best))]
     stalled = 0
     rounds = 0
+    parent: Dict[Program, Program] = {}
+    by_macro: set = set()
     for rounds in range(1, max_rounds + 1):
         fresh: List[Program] = []
         for p in beam:
-            for q in neighbours(p, leaves, conditions, max_size):
+            for q, learnt in _edits(p, leaves, conditions, max_size, macros):
                 if q in seen:
                     continue
                 if len(seen) >= budget:
                     break
                 seen[q] = score(q)
                 fresh.append(q)
+                if trace:
+                    parent[q] = p
+                    if learnt:
+                        by_macro.add(q)
         beam = sorted(set(fresh) | set(beam), key=rank)[:beam_width]
         if seen[beam[0]][0] < seen[best][0] - 1e-9:
             best = beam[0]
@@ -247,13 +314,22 @@ def search(columns: Dict[str, Sequence[int]], outcomes: Sequence[int],
             break
     bits, program_part, error_part = seen[best]
     exhausted = stalled >= patience and len(seen) < budget
+    derivation: List[Program] = []
+    if trace:
+        step = best
+        while step in parent:
+            derivation.append(step)
+            step = parent[step]
+        derivation.append(step)
+        derivation.reverse()
     return Found(program=best, bits=bits, program_bits=program_part,
                  error_bits=error_part, evaluations=len(seen), rounds=rounds,
                  history=history, found_at=first_seen.get(best, len(seen)),
                  termination=SEARCH_EXHAUSTED if exhausted else SEARCH_LIMIT,
                  seconds=time.time() - started,
                  train_errors=int(np.count_nonzero(evaluator(best) != actual)),
-                 anytime=anytime)
+                 anytime=anytime, derivation=derivation,
+                 macro_steps=sum(1 for q in derivation[1:] if q in by_macro))
 
 
 def at_budget(found: Found, budget: int) -> Tuple[Program, int, float]:
