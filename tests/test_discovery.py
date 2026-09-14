@@ -478,3 +478,50 @@ def test_a_kept_program_stays_in_play_however_it_ranks():
     assert W0.grade(lambda cols: discovery.predict(found.program, cols)) == 1.0
     plain = discovery.search(split.train, split.train_outcomes, budget=30000)
     assert found.evaluations >= plain.evaluations or found.program == plain.program
+
+
+# --------------------------------------------------------------------------
+# step 7: which states the beam keeps, learnt from the search's history
+# --------------------------------------------------------------------------
+
+def test_a_frontier_that_is_the_bits_is_the_search_as_it_stands():
+    split = W0.split(200, 50, seed=2)
+    plain = discovery.search(split.train, split.train_outcomes, budget=40000)
+    same = discovery.search(split.train, split.train_outcomes, budget=40000,
+                            frontier=lambda program, errors, size_, wrong: program + errors)
+    assert (plain.program, plain.evaluations, plain.found_at) == \
+        (same.program, same.evaluations, same.found_at)
+
+
+def test_a_frontier_decides_what_is_kept_never_what_the_answer_is():
+    split = W0.split(200, 50, seed=2)
+    first = discovery.search(split.train, split.train_outcomes, budget=1)
+    odd = discovery.search(split.train, split.train_outcomes, budget=20000,
+                           frontier=lambda program, errors, size_, wrong: -size_ - wrong)
+    assert odd.bits <= first.bits
+
+
+def test_weights_are_learnt_from_which_state_led_on():
+    from mana.discovery import frontier
+
+    rng = np.random.default_rng(0)
+    data = []
+    for _ in range(20):
+        others = np.column_stack([rng.uniform(10, 20, 50), rng.uniform(100, 200, 50),
+                                  rng.integers(1, 9, 50), rng.integers(20, 90, 50)])
+        # The state that led on is dear in bits but has few wrong points.
+        chosen = np.array([18.0, 190.0, 6.0, 10.0])
+        data.append(frontier.Step(chosen, others.astype(float), 1.0, 40, 50))
+    learnt = frontier.fit(data)
+    stand = frontier.base(learnt.scale)
+    assert frontier.accuracy(learnt, data) > frontier.accuracy(stand, data) + 0.3
+    assert frontier.accuracy(frontier.permuted(learnt, 0), data) < frontier.accuracy(learnt, data)
+
+
+def test_the_frontier_learner_cannot_see_the_worlds():
+    from mana.discovery import frontier
+
+    for node in ast.walk(ast.parse(inspect.getsource(frontier))):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            named = [getattr(node, "module", "") or ""] + [a.name for a in node.names]
+            assert not any("worlds" in name for name in named)

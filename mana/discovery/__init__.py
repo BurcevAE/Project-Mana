@@ -303,6 +303,76 @@ Step 6 control, measured 2026-09-14 (T4, seeds 0..9, beam 4, 800k)
     What decides whether an answer is reached is which states are kept,
     and that is decided by a measure MANA cannot change.
 
+Step 7, predicted before the run (2026-09-14; frontier.py,
+scripts/run_frontier_score.py)
+----------------------------------------------------------------------
+    Which states the beam keeps, learnt from the search's own successful
+    traces instead of fixed. Bounds fixed with the user: the score decides
+    only what the beam keeps -- the answer is still the shortest
+    description seen, judged by the same gates; T4 takes no part in the
+    learning, the features or any setting; the space of scores is given --
+    weighted sums of a state's program bits, error bits, size and wrong
+    points, the measure as it stands being (1, 1, 0, 0) -- so this is a
+    learnt measure in a space we wrote, not yet one MANA invents; the
+    teacher is which of its own states led on, at every step of a
+    derivation, weighted by how close to the answer it stood; two controls
+    of the same size, the weights permuted and random; recall by budget on
+    all seven questions against the search as it stands.
+
+    Predicted: the learnt score orders the history's decisions better than
+    bits, and on T1..T3's unseen seeds brings answers sooner. On T4 it
+    does not reach the ceiling the kept state showed -- no more than 5 of
+    10 at 800k. From numbers already measured: the one state known to lead
+    to T4's rule, if(x < 3, z, y), is worse than the bare leaf y in every
+    quantity a score may read -- more error bits, more program bits, more
+    nodes -- so no weighting of them keeps it ahead of the leaf, and what a
+    score gains on T4 by preferring larger or worse-fitting states it pays
+    for on the others. The controls no better than the search as it
+    stands. If so, the space of measures is too poor for this frontier,
+    and the next question is the one the user set: can MANA see that the
+    quantities it judges a state by are not enough.
+
+Step 7, measured 2026-09-14
+----------------------------------------------------------------------
+    Teacher: 30 solved derivations of T1..T3, 110 decisions of the
+    frontier. Where the measure as it stands put the state that led on,
+    among the programs made from the same parent: first of about 17 000,
+    at the median; outside the first four in 6% of decisions. It ordered
+    the history's decisions right 100% of the time -- and so did the
+    learnt weights, (0.10, 0.01, 0.11, 0.02) on program bits, error bits,
+    size and wrong points, and so, at 99.9%, did the same weights moved
+    onto other features.
+
+    solved at budget     10k  25k  50k  100k  200k  400k  800k  (of 70)
+        as it stands      20   20   20    26    32    51    54
+        learnt            20   20   20    20    20    20    20
+        permuted          20   20   20    20    20    20    20
+        random             0    0    0     0     0     0     0
+    T4: 4 of 10 as it stands, 0 with every learnt or control score. The 20
+    the learnt score keeps are W0 and W3, answered by a leaf or one edit.
+
+    A clean negative, and the user's warning come true: the score learnt
+    the style of the derivations, not the promise of a state. The steps
+    that led on were small edits, most of their siblings wrapped the
+    parent in a condition, so "small and short" ordered the history
+    perfectly -- with almost no weight left on errors, which in a search
+    means never fitting better. The learnt weights did no better than
+    their own permutation. Predicted rightly: T4 not reached; wrongly: that
+    the learnt score would order the history better than bits (there was
+    nothing to improve) and help T1..T3 (it lost all 26).
+
+    Why the teacher had nothing to teach: a successful trace is the record
+    of the frontier's successes. The paths it threw away are exactly the
+    ones that never reach an answer, so they are never in the history it
+    learns from -- the 6% of decisions it got wrong on the way to answers
+    it still found are all it ever sees of its mistakes. Learning the
+    frontier from one's own successes is blind, by construction, to what
+    the frontier loses. What would carry the lesson is a comparison of
+    runs: the same question failed by a cheap search and solved by a dear
+    one, and the states of the dear one's path that the cheap frontier
+    dropped -- regret, bought with the search's own compute, no answer
+    shown.
+
 Steps
 -----
     1  language, edit search, description length; worlds W0 and W3

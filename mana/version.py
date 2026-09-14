@@ -85,7 +85,7 @@ VERSIONED_MODULES = (
     "discovery", "discovery.language", "discovery.description",
     "discovery.search", "discovery.worlds", "discovery.baselines",
     "discovery.invent", "discovery.library", "discovery.ceiling",
-    "discovery.cells", "discovery.derive",
+    "discovery.cells", "discovery.derive", "discovery.frontier",
     "methods", "methods.world", "methods.solvers", "methods.portfolio",
     "methods.choice", "methods.trap",
     "policy", "acquire", "outcome", "echo_guard", "console", "capabilities",

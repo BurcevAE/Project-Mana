@@ -29,7 +29,7 @@ import itertools
 import time
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Dict, Iterator, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -39,7 +39,7 @@ from .language import (ADD, CMP, EQUAL, HOLE, IF, LESS, SUB, Evaluator, Primitiv
                        nodes, prim, rebuild, replace, show, size, sub)
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.6"
+__version__ = "1.7"
 
 BEAM = 4
 MAX_SIZE = 15
@@ -238,7 +238,8 @@ def search(columns: Dict[str, Sequence[int]], outcomes: Sequence[int],
            library: Optional[Dict[str, Primitive]] = None,
            profile: bool = False, trace: bool = False,
            macros: Sequence[Macro] = (),
-           pinned: Sequence[Program] = ()) -> Found:
+           pinned: Sequence[Program] = (),
+           frontier: Optional[Callable[[float, float, int, int], float]] = None) -> Found:
     """The shortest description of the outcomes this search can reach.
 
     `trace` keeps, for every program, the one it was first made from, and
@@ -246,8 +247,12 @@ def search(columns: Dict[str, Sequence[int]], outcomes: Sequence[int],
     tried after them, in the same rounds, counted in the same budget.
     `pinned` programs stay in the beam every round, beside the best, however
     they rank -- a diagnostic, not a method: it asks whether an answer is
-    reachable from a state the ranking would throw away. None of the three
-    changes anything when left out."""
+    reachable from a state the ranking would throw away. `frontier`
+    (step 7) decides which states the beam keeps -- a score of a state's
+    program bits, error bits, size and wrong points, lower kept first --
+    and nothing else: the answer returned is still the shortest description
+    of everything evaluated, judged as before. None of these changes
+    anything when left out."""
     started = time.time()
     actual = np.asarray(outcomes, dtype=np.int64)
     library = dict(library or {})
@@ -260,12 +265,23 @@ def search(columns: Dict[str, Sequence[int]], outcomes: Sequence[int],
     first_seen: Dict[Program, int] = {}
     anytime: List[Tuple[int, Program, float]] = []
     leader: Dict[str, object] = {"key": None, "program": None}
+    promise: Dict[Program, float] = {}
+    shortest: Dict[str, object] = {"key": None, "program": None}
 
     def score(p: Program) -> Tuple[float, float, float]:
         first_seen.setdefault(p, len(first_seen) + 1)
         program_part = description.program_bits(p, variables, len(library))
         error_part = description.error_bits(evaluator(p), actual, alphabet, known)
         total = program_part + error_part
+        if frontier is not None:
+            wrong = int(np.count_nonzero(evaluator(p) != actual))
+            promise[p] = float(frontier(program_part, error_part, size(p), wrong))
+            # The answer is judged as ever: the shortest description seen.
+            key = (total, size(p))
+            held = shortest["key"]
+            if (held is None or key < held
+                    or (key == held and show(p) < show(shortest["program"]))):
+                shortest["key"], shortest["program"] = key, p
         if profile:
             # The same order as `rank`, with the text only asked for on a
             # tie: the best of everything evaluated so far, as it changes.
@@ -284,16 +300,23 @@ def search(columns: Dict[str, Sequence[int]], outcomes: Sequence[int],
         # if(5 < x, y, z) in another.
         return (seen[p][0], size(p), show(p))
 
+    def order(p: Program) -> Tuple[float, int, str]:
+        # Which states the beam keeps: by the frontier's score if given.
+        return (promise[p], size(p), show(p)) if frontier is not None else rank(p)
+
     def keep(top: List[Program]) -> List[Program]:
         return top + [p for p in pinned if p not in top]
+
+    def leading(beam: List[Program]) -> Program:
+        return shortest["program"] if frontier is not None else beam[0]
 
     for leaf in leaves:
         seen[leaf] = score(leaf)
     for p in pinned:
         if p not in seen:
             seen[p] = score(p)
-    beam = keep(sorted(seen, key=rank)[:beam_width])
-    best = beam[0]
+    beam = keep(sorted(seen, key=order)[:beam_width])
+    best = leading(beam)
     history = [(0, seen[best][0], show(best))]
     stalled = 0
     rounds = 0
@@ -313,9 +336,9 @@ def search(columns: Dict[str, Sequence[int]], outcomes: Sequence[int],
                     parent[q] = p
                     if learnt:
                         by_macro.add(q)
-        beam = keep(sorted(set(fresh) | set(beam), key=rank)[:beam_width])
-        if seen[beam[0]][0] < seen[best][0] - 1e-9:
-            best = beam[0]
+        beam = keep(sorted(set(fresh) | set(beam), key=order)[:beam_width])
+        if seen[leading(beam)][0] < seen[best][0] - 1e-9:
+            best = leading(beam)
             stalled = 0
             history.append((rounds, seen[best][0], show(best)))
         else:
