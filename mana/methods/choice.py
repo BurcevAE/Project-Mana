@@ -75,6 +75,7 @@ explored: which method's check passes is learnt only from attempts.
 """
 from __future__ import annotations
 
+import itertools
 import math
 from dataclasses import dataclass
 from statistics import NormalDist
@@ -86,7 +87,7 @@ from . import solvers
 from .portfolio import Choice
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.1"
+__version__ = "1.2"
 
 #: What an answer to a box is worth, in questions: as much as one method
 #: may spend on it. Fixed before any run.
@@ -441,6 +442,288 @@ class Explorer:
             mu, sd = belief.predict(n) if belief is not None else (0.0, 0.0)
             distance = belief.distance(n) if belief is not None else 0.0
             found = solvers.run(session, pick, seed, self.budget, self.registry)
+            tried.append(pick)
+            left.remove(pick)
+            if learn:
+                self.journal.add(Entry(TASK, box, n, before, pick, found.believed,
+                                       found.model is not None, found.queries,
+                                       mu, sd, distance))
+            if found.believed:
+                return Choice(pick, session.total, tuple(tried)), found.model
+            before = before | {pick}
+        return Choice(None, session.total, tuple(tried)), None
+
+
+# --------------------------------------------------------------------------
+# M1c: the Planner
+# --------------------------------------------------------------------------
+#
+# The hypothesis under test: what information is worth is how much it
+# changes the best plan, not how much better one method is known. M1b
+# weighed a probe against the best single application; here the present is
+# worth what the best ordered plan costs, and a probe what it is expected to
+# save on that plan.
+#
+#     plan        an order of methods, stopping at the first that succeeds.
+#                 Its cost: the questions it is expected to spend, plus the
+#                 value of an answer times the chance that none succeeds.
+#                 Giving up is the empty plan, and costs the value
+#     step        cost and success together: a step succeeds if the method
+#                 finishes within its budget and its check passes; it
+#                 spends what it spends whether or not -- the whole budget,
+#                 if it runs out. Each step's chances are taken after the
+#                 steps before it failed
+#     probe       worth the cost of the best plan now, less the expected
+#                 cost of the best plan once its outcome is known, less its
+#                 own expected questions. The outcomes are grouped by the
+#                 plan each leads to -- which is why a probe was made, kept
+#                 with it
+#
+# The beliefs about cost -- the kind's line, the box's offset, the drift --
+# are the Explorer's, unchanged: not what is under test.
+
+@dataclass(frozen=True)
+class Step:
+    method: str
+    #: P(it finishes and its check passes), the steps before having failed.
+    success: float
+    #: Questions it is expected to spend.
+    spend: float
+
+
+@dataclass(frozen=True)
+class Plan:
+    steps: Tuple[Step, ...]
+    questions: float
+    success: float
+    cost: float
+
+    @property
+    def names(self) -> Tuple[str, ...]:
+        return tuple(step.method for step in self.steps)
+
+
+def plan_cost(order: Sequence[str], before: FrozenSet[str],
+              step: Callable[[str, FrozenSet[str]], Tuple[float, float]],
+              value: float) -> Plan:
+    """One order of methods, weighed. `step(method, failed)` gives
+    (success, questions) of a method once the methods in `failed` have
+    failed on this box."""
+    failed = frozenset(before)
+    survive, questions, steps = 1.0, 0.0, []
+    for method in order:
+        chance, spend = step(method, failed)
+        steps.append(Step(method, chance, spend))
+        questions += survive * spend
+        survive *= 1.0 - chance
+        failed = failed | {method}
+    return Plan(tuple(steps), questions, 1.0 - survive, questions + value * survive)
+
+
+def best_plan(left: Sequence[str], before: FrozenSet[str],
+              step: Callable[[str, FrozenSet[str]], Tuple[float, float]],
+              value: float) -> Plan:
+    """The plan of least expected cost among every order of every subset of
+    the methods left."""
+    best = Plan((), 0.0, 0.0, float(value))
+    for k in range(1, len(left) + 1):
+        for order in itertools.permutations(sorted(left), k):
+            plan = plan_cost(order, before, step, value)
+            if plan.cost < best.cost - 1e-9:
+                best = plan
+    return best
+
+
+#: How a probe's worth is reckoned. DIFFERENCE, as first run: the cost of
+#: the best plan now, less the expected cost of the best plan after the
+#: outcome. CHANGE: the expected saving of the best plan after the outcome
+#: over the present plan, both weighed with what the outcome would teach --
+#: nothing, where the plan would not change. The two agree only when the
+#: beliefs are coherent, the expected cost of a plan after an outcome equal
+#: to its cost now; the Explorer's are not -- an observation removes the
+#: doubt of extrapolation outright, and a cost's expectation falls with its
+#: spread -- so DIFFERENCE also pays for spread that goes away.
+DIFFERENCE, CHANGE = "difference", "change"
+
+
+@dataclass(frozen=True)
+class Branch:
+    """Outcomes of a probe that lead to the same plan."""
+    plan: Tuple[str, ...]
+    probability: float
+    cost: float
+
+
+@dataclass
+class Decision:
+    """One decision on a box, and why."""
+    box: int
+    n: int
+    before: Tuple[str, ...]
+    plan: Plan
+    #: "probe", "apply" or "give up".
+    action: str
+    method: Optional[str] = None
+    size: Optional[int] = None
+    #: For a probe: the cost of the plan now less the expected cost of the
+    #: plan after it, its expected questions, and the plans it may lead to.
+    worth: float = 0.0
+    spend: float = 0.0
+    branches: Tuple[Branch, ...] = ()
+    #: The journal already held this probe -- method, size, failures --
+    #: from another box.
+    repeat: bool = False
+    #: The plan once its actual outcome was known, and what it cost.
+    after: Optional[Tuple[str, ...]] = None
+    actual: Optional[int] = None
+
+    @property
+    def predicted_change(self) -> float:
+        """The chance the probe was expected to change the plan."""
+        return sum(b.probability for b in self.branches if b.plan != self.plan.names)
+
+
+class Planner(Explorer):
+    """The Explorer's beliefs, weighed as plans."""
+
+    def __init__(self, *args, worth: str = DIFFERENCE, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.worth = worth
+        #: Every decision on the last box, in order.
+        self.last_decisions: List[Decision] = []
+
+    def _stepper(self, n: int, box: int, own: Dict[str, List[Tuple[int, float]]],
+                 base: Callable, chance_of: Callable, drift: float,
+                 extra: Optional[Tuple[str, Tuple[int, float]]] = None) -> Callable:
+        cache: Dict[Tuple[str, FrozenSet[str]], Tuple[float, float]] = {}
+
+        def step(method: str, failed: FrozenSet[str]) -> Tuple[float, float]:
+            key = (method, failed)
+            if key not in cache:
+                seen = list(own[method])
+                if extra is not None and extra[0] == method:
+                    seen.append(extra[1])
+                belief = base(method, failed)
+                if belief is None and seen:
+                    belief = self.belief(method, failed, box, seen, drift)
+                elif belief is not None:
+                    for size, y in seen:
+                        belief = belief.observe(size, y)
+                if belief is None:
+                    cache[key] = (0.5, 1.0)             # never run: optimism
+                else:
+                    mu, sd = belief.predict(n)
+                    fits = _PHI((math.log(self.budget) - mu) / sd)
+                    spend = _worth(mu, sd, 1.0, 0.0, self.budget)[1]
+                    cache[key] = (chance_of(method, failed) * fits, spend)
+            return cache[key]
+
+        return step
+
+    def _best_probe(self, n, box, before, left, own, base, chance_of, drift, current, probed
+                    ) -> Optional[Decision]:
+        best: Optional[Tuple[float, Decision]] = None
+        for method in sorted(left):
+            belief = base(method, before)
+            if belief is None:
+                continue                                 # never run: it is applied, not probed
+            for size, y in own[method]:
+                belief = belief.observe(size, y)
+            for size in range(2, n):
+                if (method, size) in probed:
+                    continue
+                mu, sd = belief.predict(size)
+                spend = _worth(mu, sd, 1.0, 0.0, self.budget)[1]
+                if spend >= current.cost:
+                    continue                             # no outcome could repay it
+                after, saving, groups = 0.0, 0.0, {}
+                for node, weight in zip(_NODES, _WEIGHTS):
+                    step = self._stepper(n, box, own, base, chance_of, drift,
+                                         (method, (size, mu + sd * node)))
+                    plan = best_plan(left, before, step, self.value)
+                    after += weight * plan.cost
+                    if self.worth == CHANGE:
+                        kept = plan_cost(current.names, before, step, self.value)
+                        saving += weight * (kept.cost - plan.cost)
+                    mass, total = groups.get(plan.names, (0.0, 0.0))
+                    groups[plan.names] = (mass + weight, total + weight * plan.cost)
+                worth = saving if self.worth == CHANGE else current.cost - after
+                if worth - spend > 0 and (best is None or worth - spend > best[0]):
+                    branches = tuple(Branch(names, mass, total / mass) for names, (mass, total)
+                                     in sorted(groups.items(), key=lambda kv: -kv[1][0]))
+                    repeat = any(e.kind == PROBE and e.method == method and e.n == size
+                                 and e.before == before and e.box != box
+                                 for e in self.journal.entries)
+                    best = (worth - spend, Decision(box, n, tuple(sorted(before)), current,
+                                                    "probe", method, size, worth, spend,
+                                                    branches, repeat))
+        return best[1] if best else None
+
+    def solve(self, ask: Callable[[np.ndarray], np.ndarray], n: int, levels: int, seed: int,
+              learn: bool = True) -> Tuple[Choice, Optional[solvers.Model]]:
+        self._box += 1
+        box = self._box
+        session = solvers.Session(ask, n, levels, self.budget, announce=False)
+        before: FrozenSet[str] = frozenset()
+        tried: List[str] = []
+        left = list(self.methods)
+        own: Dict[str, List[Tuple[int, float]]] = {m: [] for m in self.methods}
+        probed = set()
+        self.last_probes, self.last_decisions = [], []
+        drift = self.journal.drift()
+        pending: Optional[Decision] = None
+        while True:
+            beliefs: Dict[Tuple[str, FrozenSet[str]], Optional[Belief]] = {}
+            chances: Dict[Tuple[str, FrozenSet[str]], float] = {}
+
+            def base(method: str, failed: FrozenSet[str]) -> Optional[Belief]:
+                if (method, failed) not in beliefs:
+                    beliefs[(method, failed)] = self.belief(method, failed, box, (), drift)
+                return beliefs[(method, failed)]
+
+            def chance_of(method: str, failed: FrozenSet[str]) -> float:
+                if (method, failed) not in chances:
+                    chances[(method, failed)] = self.journal.success(method, failed, box)
+                return chances[(method, failed)]
+
+            current = best_plan(left, before,
+                                self._stepper(n, box, own, base, chance_of, drift), self.value)
+            if pending is not None:
+                pending.after, pending = current.names, None
+            probe = self._best_probe(n, box, before, left, own, base, chance_of, drift,
+                                     current, probed)
+            if probe is not None:
+                belief = base(probe.method, before)
+                for size, y in own[probe.method]:
+                    belief = belief.observe(size, y)
+                mu, sd = belief.predict(probe.size)
+                found = self._probe(session, probe.method, probe.size, levels, seed, n)
+                probed.add((probe.method, probe.size))
+                self.probes += 1
+                probe.actual = found.queries
+                self.last_probes.append((probe.method, probe.size, found.queries))
+                self.last_decisions.append(probe)
+                pending = probe
+                own[probe.method].append((probe.size, math.log(max(found.queries, 1))))
+                if learn:
+                    self.journal.add(Entry(PROBE, box, probe.size, before, probe.method,
+                                           found.believed, found.model is not None,
+                                           found.queries, mu, sd, belief.distance(probe.size)))
+                continue
+            if not current.steps:
+                self.last_decisions.append(Decision(box, n, tuple(sorted(before)), current,
+                                                    "give up"))
+                break
+            pick = current.steps[0].method
+            belief = base(pick, before)
+            if belief is not None:
+                for size, y in own[pick]:
+                    belief = belief.observe(size, y)
+            mu, sd = belief.predict(n) if belief is not None else (0.0, 0.0)
+            distance = belief.distance(n) if belief is not None else 0.0
+            found = solvers.run(session, pick, seed, self.budget, self.registry)
+            self.last_decisions.append(Decision(box, n, tuple(sorted(before)), current, "apply",
+                                                pick, actual=found.queries))
             tried.append(pick)
             left.remove(pick)
             if learn:

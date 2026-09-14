@@ -259,3 +259,53 @@ def test_after_small_boxes_only_the_explorer_probes_before_the_trap_and_the_choo
     assert fell.tried == ("explosive", "steady") and fell.cost > solvers.BUDGET
     assert [(m, size) for m, size, _ in explorer.last_probes] == [("explosive", 6)]
     assert looked.tried == ("steady",) and looked.cost < 30000 and box.verdict(model) == 1.0
+
+
+# --------------------------------------------------------------------------
+# M1c: a probe is worth what it changes in the best plan
+# --------------------------------------------------------------------------
+
+def test_the_best_plan_orders_methods_and_counts_what_happens_if_all_fail():
+    from mana.methods.choice import best_plan
+
+    table = {"a": (0.6, 50000.0), "b": (0.9, 20000.0)}
+    plan = best_plan(["a", "b"], frozenset(), lambda m, failed: table[m], 200000.0)
+    # b first, then a: 20 000 + 0.1 x 50 000 + 0.1 x 0.4 x 200 000.
+    assert plan.names == ("b", "a") and abs(plan.cost - 33000.0) < 1e-6
+    assert abs(plan.success - 0.96) < 1e-9
+    from mana.methods.choice import plan_cost
+
+    other = plan_cost(("a", "b"), frozenset(), lambda m, failed: table[m], 200000.0)
+    # 50 000 + 0.4 x 20 000 + 0.4 x 0.1 x 200 000: the same methods, dearer in that order.
+    assert abs(other.cost - 66000.0) < 1e-6 and other.cost > plan.cost
+
+
+def test_giving_up_is_a_plan_and_is_chosen_when_every_method_costs_more_than_an_answer():
+    from mana.methods.choice import best_plan
+
+    plan = best_plan(["a"], frozenset(), lambda m, failed: (0.1, 50000.0), 200000.0)
+    assert plan.names == () and plan.cost == 200000.0
+
+
+def test_a_step_is_weighed_after_the_steps_before_it_failed():
+    from mana.methods.choice import best_plan
+
+    def step(method, failed):
+        if method == "second":
+            return (0.9 if "first" in failed else 0.1, 1000.0)
+        return (0.5, 1000.0)
+
+    plan = best_plan(["first", "second"], frozenset(), step, 200000.0)
+    assert plan.names == ("first", "second")
+
+
+def test_every_decision_says_what_the_plan_was_and_why():
+    from mana.methods import choice
+
+    planner = choice.Planner()
+    box = BlackBox(3, ADDITIVE, seed=9)
+    found, model = planner.solve(box.answer, 3, LEVELS, 9)
+    assert box.verdict(model) == 1.0
+    applied = [d for d in planner.last_decisions if d.action == "apply"]
+    assert applied and all(d.plan.steps and d.method == d.plan.names[0] for d in applied)
+    assert [d.method for d in applied] == list(found.tried)
