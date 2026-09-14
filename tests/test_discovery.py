@@ -550,3 +550,71 @@ def test_a_correction_learnt_from_regret_stays_near_the_bits_without_it():
     cosine = float(held.weights @ stand.weights /
                    (np.linalg.norm(held.weights) * np.linalg.norm(stand.weights)))
     assert cosine > 0.99
+
+
+# --------------------------------------------------------------------------
+# stage R1: the search, as an object
+# --------------------------------------------------------------------------
+
+def test_the_search_written_as_a_policy_is_the_search():
+    from mana.discovery import policy as P
+    from mana.discovery.worlds import FAMILY
+
+    for world, seed, budget in ((W0, 0, 30000), (FAMILY["T1"], 1, 60000)):
+        split = world.split(200, 50, seed=seed)
+        a = discovery.search(split.train, split.train_outcomes, budget=budget, profile=True)
+        b = P.run(P.with_budget(P.CURRENT, budget), split.train, split.train_outcomes,
+                  profile=True)
+        assert (a.program, a.bits, a.evaluations, a.rounds, a.history, a.found_at,
+                a.termination, a.train_errors) == \
+            (b.program, b.bits, b.evaluations, b.rounds, b.history, b.found_at,
+             b.termination, b.train_errors)
+        assert a.anytime == b.anytime
+
+
+def test_a_policy_makes_the_same_neighbours_in_the_same_order():
+    from mana.discovery import policy as P
+
+    split = W0.split(200, 50, seed=0)
+    leaves, conditions = discovery.vocabulary(split.train, split.train_outcomes)
+    p = if_(cmp(LESS, get("x"), const(3)), add(get("z"), get("y")), get("y"))
+    plain = [q for q in discovery.neighbours(p, leaves, conditions, discovery.MAX_SIZE)
+             if q != p]
+    ruled = list(P.successors(P.CURRENT, p, leaves, conditions))
+    assert [q for q in plain if q in set(ruled)] == [q for q in ruled if q in set(plain)]
+    assert set(plain) == set(ruled)
+
+
+def test_a_policy_is_read_copied_compared_and_edited():
+    from mana.discovery import policy as P
+
+    text = P.describe(P.CURRENT)
+    assert "combine with a leaf" in text and "4 первых" in text
+    assert P.copy(P.CURRENT) == P.CURRENT and P.difference(P.CURRENT, P.CURRENT) == []
+    narrow = P.with_keep(P.CURRENT, 2)
+    flipped = P.reordered(P.CURRENT, list(reversed(range(len(P.CURRENT.rules)))))
+    poorer = P.without(P.CURRENT, "combine with a leaf")
+    assert any("отбор" in d for d in P.difference(P.CURRENT, narrow))
+    assert P.difference(P.CURRENT, flipped) == ["другой порядок правил"]
+    assert P.difference(P.CURRENT, poorer) == ["нет правила «combine with a leaf»"]
+
+
+def test_a_changed_policy_changes_the_search():
+    from mana.discovery import policy as P
+    from mana.discovery.worlds import FAMILY
+
+    split = FAMILY["T1"].split(200, 50, seed=1)
+    whole = P.run(P.with_budget(P.CURRENT, 60000), split.train, split.train_outcomes)
+    poorer = P.run(P.with_budget(P.without(P.CURRENT, "combine with a leaf"), 60000),
+                   split.train, split.train_outcomes)
+    assert all(part[0] not in ("add", "sub") for _, part in nodes(poorer.program))
+    assert whole.program != poorer.program
+
+
+def test_the_policy_interpreter_cannot_see_the_worlds():
+    from mana.discovery import policy as P
+
+    for node in ast.walk(ast.parse(inspect.getsource(P))):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            named = [getattr(node, "module", "") or ""] + [a.name for a in node.names]
+            assert not any("worlds" in name for name in named)

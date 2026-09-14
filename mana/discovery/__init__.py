@@ -449,6 +449,69 @@ Step 7b, measured 2026-09-14
     represents a state's promise is the wrong kind of thing, and make
     another.
 
+Stage R1, predicted before the run (2026-09-14; policy.py,
+scripts/run_policy.py)
+----------------------------------------------------------------------
+    Not an improvement. The question: can the search itself be an object
+    MANA reads, copies, compares, edits and runs, without touching the
+    immutable core? A SearchPolicy is data -- eight rewrite rules for how
+    candidates are made, a selection (order by a weighted sum of a state's
+    quantities, keep the first k), resources -- run by a fixed interpreter
+    that also keeps the verdict: the answer is the shortest description
+    seen, whatever was kept.
+
+    Predicted:
+      equivalence  the current search, written as the policy CURRENT, gives
+                   what search.search gives on 70 runs of 70 -- program,
+                   bits, evaluations, rounds, history, where the answer was
+                   first seen, why it stopped, the whole budget curve. The
+                   interpreter slower, by a factor under 3
+      keep 2       about half the programs per round; W0 and W3 as before;
+                   the family solved no more often than with 4
+      reversed     the same neighbours of every node, only in another
+                   order, and the beam sorts the whole round: identical
+                   runs wherever the search stopped by itself, before its
+                   budget; differences only in runs the budget cut, where
+                   the order decides which programs of the last round got
+                   evaluated
+      no combine   no sums or differences can be made: T1..T4 and W4 not
+                   solved on any seed; W0 and W3, whose rule is one
+                   condition, as before
+    If all four hold, the policy is not only a faithful copy of the search
+    but the thing that controls it.
+
+Stage R1, measured 2026-09-14 (seven questions x seeds 0..9, 400k)
+----------------------------------------------------------------------
+    equivalence  70 of 70 identical: program, bits, evaluations, rounds,
+                 history, where the answer was first seen, why it stopped,
+                 and every point of the budget curve. The interpreter 1.1
+                 times slower than search.py
+                 solved of 10     W0  W3  T1  T2  T3  T4  W4
+      as it stands                10  10   8   4   4   4   4
+      keep 2                      10  10   2   3   1   3   3
+      reversed rules              10  10   8   4   4   4   4
+      no combine                  10  10   0   0   0   0   0
+      keep 2       0.39 of the programs per round; the family solved less
+                   often, as a narrower beam does (step 5.0)
+      reversed     the same answer on 70 of 70; wherever the search stopped
+                   by itself (40 runs) the same programs, evaluations and
+                   rounds; where the budget cut it (30), the same answer
+                   still. What moved, and was not predicted: where in a
+                   round the answer was first evaluated (found_at, 4 of 70
+                   unchanged) -- the order decides when inside a round, not
+                   what a round holds
+      no combine   no sum or difference made, the family and W4 never
+                   solved, W0 and W3 as before
+
+    The four predictions held, and one detail went further than predicted
+    (the budget-cut runs kept their answers too). So the search of
+    discovery is an object: written as data, read, copied, compared and
+    edited, run by a fixed interpreter that keeps the verdict, and every
+    edit of it changes the search as the edit says. The wall is where
+    policy.py draws it: selection only "order and keep k", a state only
+    one program, rounds only full expansions, rules only one-node rewrites
+    -- and the loop itself outside the object.
+
 Steps
 -----
     1  language, edit search, description length; worlds W0 and W3
