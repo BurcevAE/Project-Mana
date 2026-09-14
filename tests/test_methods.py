@@ -309,3 +309,40 @@ def test_every_decision_says_what_the_plan_was_and_why():
     applied = [d for d in planner.last_decisions if d.action == "apply"]
     assert applied and all(d.plan.steps and d.method == d.plan.names[0] for d in applied)
     assert [d.method for d in applied] == list(found.tried)
+
+
+# --------------------------------------------------------------------------
+# M1d: laws of cost told apart by experience
+# --------------------------------------------------------------------------
+
+def _runs(pairs, repeat=3):
+    return [(float(n), float(np.log(cost)), False) for n, cost in pairs] * repeat
+
+
+def test_runs_that_bend_are_told_from_a_line_and_the_wall_is_expected():
+    from mana.methods.choice import ShapeBelief
+
+    bent = ShapeBelief.fit(_runs(((2, 100), (3, 150), (4, 200), (6, 20000))), 0.5, 200000)
+    assert bent.law()["bend"] > 0.9 and bent.law()["at"] == 4
+    assert bent.outlook(8, 200000)[0] < 0.1                  # will not finish at n = 8
+    table = ShapeBelief.fit(_runs(((2, 100), (3, 1000), (4, 10000))), 0.5, 200000)
+    assert table.law()["line"] > 0.5
+    assert abs(table.predict(6)[0] - np.log(10 ** 6)) < np.log(2)
+
+
+def test_a_run_cut_off_by_the_budget_is_a_bound_not_a_cost():
+    from mana.methods.choice import ShapeBelief
+
+    rows = _runs(((2, 100), (3, 150), (4, 200))) + [(7.0, float(np.log(200000)), True)]
+    belief = ShapeBelief.fit(rows, 0.5, 200000)
+    assert belief.law()["bend"] > 0.9
+    assert belief.outlook(8, 200000)[0] < 0.3
+
+
+def test_a_box_s_own_run_reweighs_the_laws():
+    from mana.methods.choice import ShapeBelief
+
+    kind = ShapeBelief.fit(_runs(((2, 100), (3, 150), (4, 200))), 0.5, 200000)
+    assert kind.law()["line"] > 0.5
+    seen = kind.observe(6, float(np.log(20000)))
+    assert seen.law()["bend"] > 0.9 and seen.predict(8)[0] > np.log(200000)

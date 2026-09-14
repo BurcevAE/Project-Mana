@@ -391,6 +391,99 @@ that too: plan changes expected against plan changes seen. The next
 question is the one the user posed after M1c: can the kind of a method's
 growth -- a line, a bend, a wall -- be told from experience, so that the
 beliefs weighed are of the right shape.
+
+M1d, predicted before the run (2026-09-14)
+------------------------------------------
+Only the belief changes (choice.ShapeBelief); the Planner is M1c's, the
+hypothesis proper. Its one touch: the chance of finishing, the questions
+expected and the outcomes a probe may have are now asked of the belief,
+because a mixture has its own -- checked to leave every M1c decision as
+it was. The language of laws, with no names in it: one line of
+log(questions) against n, or two joined at one of the sizes seen. Chosen
+by evidence -- fit less an Occam factor per parameter, a bit for the class
+and log2 K for where it bends; runs cut off by the budget weigh the laws
+by how likely each made that. The belief is the laws together.
+
+The main measure, fixed with the user: calibration -- the plan changes a
+probe was expected to bring, against the changes it brought.
+
+    transfer   the trap, trained at n = 2, 3, 4, 6, then n = 8 with what
+               was learnt frozen: explosive's runs bend at 4 (weight over
+               0.9), its cost at 8 is expected in the millions and to run
+               past its budget (P(finish) under 0.1), and the first plan
+               on every n = 8 box is steady -- no probe of explosive, no
+               burn. The one-line Planner, the same training: explosive
+               expected near 10^5, and burns on most n = 8 boxes
+    order      the trap in three orders of sizes -- 2 4 6 8, 8 2 6 4,
+               3 7 4 9, three times each, learning throughout: at the end
+               explosive bends in all three (weight over 0.9) and its
+               expected cost at 8 agrees across orders within a factor of
+               3; the one-line Planner's differs by more than 10
+    calibration  in the trap, expected and seen plan changes within 0.1
+               of each other; in the M1 world the gap of M1c (46% against
+               31%, frozen) narrows but stays -- what remains is boxes of
+               two kinds under one context, blocks and global, a mixture
+               the language of laws does not describe
+    M1 world   criterion 1 no worse than M1c's Planner
+
+M1d, measured 2026-09-14 (scripts/run_shapes.py, 10 streams per part;
+line = M1c's Planner, laws = the same Planner weighing ShapeBelief)
+----------------------------------------------------------------------
+    the trap, transfer: trained at n = 2, 3, 4, 6, four n = 8 boxes frozen
+                    solved   questions   paid explosive's budget
+        M1 Chooser   40/40     320 760    0      (= the oracle)
+        line         40/40   3 832 012   16
+        laws         36/40     473 398    0
+    the trap, three orders of sizes, then one n = 8 box frozen
+        what laws expect of explosive at 8     final box: line / laws paid
+        2 4 6 8     1.6 million, finishes 0.12, bends 0.99      0 / 0
+        8 2 6 4     2 x 10^11,   finishes 0.00, one line       10 / 0
+        3 7 4 9     5 x 10^8,    finishes 0.00, bends 1.00      0 / 0
+    calibration, plan changes expected / seen (Brier)
+                            line                  laws
+        trap, transfer      34% / 27% (0.156)     27% / 15% (0.095)
+        trap, orders        34% / 38% (0.189)     31% / 25% (0.104)
+        M1 world, frozen    46% / 31% (0.116)     50% / 40% (0.102)
+        M1 world, learning  43% / 30% (0.086)     56% / 46% (0.062)
+    repeated probes         trap 32 and 200; M1 389 and 570
+                            laws: trap 0 and 0; M1 293 and 269
+    M1 world, questions     solvable: line 3.29M / 3.16M, laws 3.23M / 3.10M
+    (frozen / learning)     hopeless: line 2.63M / 8.98M, laws 3.80M / 12.0M
+
+Can the form of a cost's growth be learnt from experience? Where the
+experience holds it, yes. From explosive's runs at 2, 3, 4 and 6, one law
+among the candidates -- two lines meeting at 4 -- took all the weight, and
+with it the wall: at n = 8 it expected close to two million questions and
+a chance of finishing near 0.13, before the method was run. Not one n = 8
+box paid explosive's budget under the laws, in the transfer or at the end
+of any order; the line paid it on 16 of 40 and on 10 of 10. And the laws
+stopped buying the same knowledge twice in the trap: no repeated probe,
+against 32 and 200.
+
+What did not come out as predicted, and why:
+    the orders do not agree on explosive's law or its cost at 8 -- they
+        agree on what the decision needs, that it will not finish there.
+        With 8 first, explosive ran once, at 8, into its budget, and never
+        again: steady was cheaper at every size after, so explosive's form
+        was never worth learning, and a single cut-off run says only
+        "above the budget". Above the budget a cost is not identified, so
+        two million and 10^11 are the same answer. The predicted test --
+        medians within a factor of 3 -- asked for what is not in the data
+    four n = 8 boxes given up, all of one stream: steady had run once in
+        training, at n = 2. One size says nothing of its growth, and one
+        success gives it two chances in three to pass its check, so its
+        plan costs a third of an answer even if it is cheap; neither
+        applying it nor probing it pays, and giving up is no dearer. Not
+        the form: the uncertainty of success, which nothing here explores
+    calibration is better by Brier everywhere, but the band where a change
+        is expected one time in four still sees one in ten or fewer, in
+        both worlds -- the beliefs still expect more than the world does
+    the M1 world's hopeless boxes cost more under the laws (3.8M against
+        2.6M frozen, 12.0M against 9.0M learning): they are blocks and
+        global boxes after the same two failures, two kinds of box under
+        one context -- a mixture, which a law of one method's growth does
+        not describe. That is the next gap, and it is not the form of a
+        law but the kinds of box
 """
 from __future__ import annotations
 

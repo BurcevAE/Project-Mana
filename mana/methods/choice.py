@@ -87,7 +87,7 @@ from . import solvers
 from .portfolio import Choice
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.2"
+__version__ = "1.3"
 
 #: What an answer to a box is worth, in questions: as much as one method
 #: may spend on it. Fixed before any run.
@@ -292,6 +292,17 @@ class Belief:
         return Belief(self.mean + gain * (y - float(h @ self.mean)),
                       self.cov - np.outer(gain, h @ self.cov), self.centre,
                       self.sizes | {float(n)}, self.drift)
+
+    def outlook(self, n: float, budget: float) -> Tuple[float, float]:
+        """P(it finishes within the budget) and the questions it is
+        expected to spend, at size n."""
+        mu, sd = self.predict(n)
+        return _PHI((math.log(budget) - mu) / sd), _worth(mu, sd, 1.0, 0.0, budget)[1]
+
+    def outcomes(self, n: float) -> List[Tuple[float, float]]:
+        """What a run at size n may cost: (log questions, probability)."""
+        mu, sd = self.predict(n)
+        return [(mu + sd * node, weight) for node, weight in zip(_NODES, _WEIGHTS)]
 
 
 def _worth(mu: float, sd: float, chance: float, value: float, budget: float
@@ -612,9 +623,7 @@ class Planner(Explorer):
                 if belief is None:
                     cache[key] = (0.5, 1.0)             # never run: optimism
                 else:
-                    mu, sd = belief.predict(n)
-                    fits = _PHI((math.log(self.budget) - mu) / sd)
-                    spend = _worth(mu, sd, 1.0, 0.0, self.budget)[1]
+                    fits, spend = belief.outlook(n, self.budget)
                     cache[key] = (chance_of(method, failed) * fits, spend)
             return cache[key]
 
@@ -632,14 +641,13 @@ class Planner(Explorer):
             for size in range(2, n):
                 if (method, size) in probed:
                     continue
-                mu, sd = belief.predict(size)
-                spend = _worth(mu, sd, 1.0, 0.0, self.budget)[1]
+                spend = belief.outlook(size, self.budget)[1]
                 if spend >= current.cost:
                     continue                             # no outcome could repay it
                 after, saving, groups = 0.0, 0.0, {}
-                for node, weight in zip(_NODES, _WEIGHTS):
+                for y, weight in belief.outcomes(size):
                     step = self._stepper(n, box, own, base, chance_of, drift,
-                                         (method, (size, mu + sd * node)))
+                                         (method, (size, y)))
                     plan = best_plan(left, before, step, self.value)
                     after += weight * plan.cost
                     if self.worth == CHANGE:
@@ -734,3 +742,221 @@ class Planner(Explorer):
                 return Choice(pick, session.total, tuple(tried)), found.model
             before = before | {pick}
         return Choice(None, session.total, tuple(tried)), None
+
+
+# --------------------------------------------------------------------------
+# M1d: laws of cost, told apart by experience
+# --------------------------------------------------------------------------
+#
+# M1c showed the value of information working, weighed on beliefs of the
+# wrong shape: one straight line of log(questions) against n per method,
+# where a method may be cheap and then explode. Here only the belief
+# changes; the Planner is the Planner.
+#
+# The language of laws is small and says nothing of what any law is for:
+#
+#     one line          log(questions) = a + b n
+#     two lines         joined at one of the sizes seen, the second
+#                       sloping differently: a + b n + d max(0, n - c)
+#
+# Which law holds is chosen in the currency used everywhere else: how well
+# the law predicts the runs, less what it costs to state. The Bayesian
+# evidence of each law is exactly that -- the fit, and an Occam factor for
+# every parameter the data had to pay for -- and a law's prior is one bit
+# for its class plus log2 K for which of the K sizes it bends at. A run
+# that ran out of its budget says only that the cost was at least the
+# budget: it weighs the laws by how likely they made that, and is not
+# fitted as if it had cost the budget exactly.
+#
+# The belief is the laws together, each weighted by its evidence: what a
+# run at a size may cost is a mixture, and a probe's outcome reweights the
+# laws as well as fitting them. A box's own runs move its level against its
+# kind's, as the Explorer's did.
+
+#: Prior sd of the change of slope at a bend, in nats per input.
+BEND_PRIOR = 2.5
+#: Nodes per law when a run's outcome is imagined.
+_LAW_NODES, _LAW_WEIGHTS = np.polynomial.hermite_e.hermegauss(5)
+_LAW_WEIGHTS = _LAW_WEIGHTS / _LAW_WEIGHTS.sum()
+#: Laws weighing less than this are left out of imagined outcomes.
+_LAW_FLOOR = 0.01
+
+
+def _above(mean: float, sd: float, cap: float) -> float:
+    """E[y | y >= cap] for y ~ N(mean, sd)."""
+    alpha = (cap - mean) / sd
+    tail = 1.0 - _PHI(alpha)
+    ratio = (NormalDist().pdf(alpha) / tail) if tail > 1e-10 else alpha + 1.0 / alpha
+    return mean + sd * ratio
+
+
+@dataclass
+class _Law:
+    bend: Optional[float]
+    prior: float                 # log prior
+    spread2: float               # variance between boxes
+    xtwx: np.ndarray             # the kind's runs, as sufficient statistics
+    xtwy: np.ndarray
+    ytwy: float
+    lognorm: float               # sum of log(2 pi sigma^2) over those runs
+    count: int
+    censored: Tuple[Tuple[float, bool], ...]    # (size, own) of runs cut off
+    mean: np.ndarray = None
+    cov: np.ndarray = None
+    evidence: float = 0.0
+
+
+class ShapeBelief:
+    """What one method will cost on one box: laws of cost weighed by the
+    evidence of the runs."""
+
+    def __init__(self, laws: List[_Law], sizes: FrozenSet[float], drift: float,
+                 budget: float) -> None:
+        self.laws = laws
+        self.sizes = sizes
+        self.drift = drift
+        self.budget = budget
+        for law in laws:
+            self._solve(law)
+        top = max(law.evidence for law in laws)
+        weights = np.array([math.exp(law.evidence - top) for law in laws])
+        self.weights = weights / weights.sum()
+
+    @staticmethod
+    def _x(n: float, bend: Optional[float], own: bool) -> np.ndarray:
+        row = [1.0, n] + ([max(0.0, n - bend)] if bend is not None else []) + [1.0 if own else 0.0]
+        return np.array(row)
+
+    @classmethod
+    def fit(cls, rows: Sequence[Tuple[float, float, bool]], drift: float,
+            budget: float) -> "ShapeBelief":
+        """rows: (size, log questions, cut off by the budget) of the kind's
+        runs on other boxes."""
+        sizes = sorted({n for n, _, _ in rows})
+        bends = [None] + sizes[1:-1]
+        laws = []
+        for bend in bends:
+            k = 1 if bend is None else len(bends) - 1
+            prior = math.log(0.5) - (0.0 if bend is None else math.log(k))
+            done = [(n, y) for n, y, cut in rows if not cut]
+            cut = tuple((n, False) for n, _, c in rows if c)
+            X = np.array([cls._x(n, bend, False) for n, _ in done]) if done else np.zeros((0, 2 + (bend is not None) + 1))
+            y = np.array([v for _, v in done])
+            spread2 = SPREAD_PRIOR ** 2
+            prior_inv = np.linalg.inv(cls._prior(bend, spread2))
+            for _ in range(2):
+                if not done:
+                    break
+                cov = np.linalg.inv(X.T @ X / spread2 + prior_inv)
+                mean = cov @ (X.T @ y / spread2)
+                rss = float(np.sum((y - X @ mean) ** 2))
+                spread2 = (SPREAD_WEIGHT * SPREAD_PRIOR ** 2 + rss) / (SPREAD_WEIGHT + len(done))
+                prior_inv = np.linalg.inv(cls._prior(bend, spread2))
+            laws.append(_Law(bend, prior, spread2, X.T @ X / spread2, X.T @ y / spread2,
+                             float(y @ y) / spread2,
+                             len(done) * math.log(2 * math.pi * spread2), len(done), cut))
+        return cls(laws, frozenset(sizes), drift, budget)
+
+    @staticmethod
+    def _prior(bend: Optional[float], spread2: float) -> np.ndarray:
+        scales = [10.0 ** 2, SLOPE_PRIOR ** 2] + ([BEND_PRIOR ** 2] if bend is not None else [])
+        return np.diag(scales + [spread2])
+
+    def _solve(self, law: _Law) -> None:
+        """The law's evidence, from the runs that finished and the chance it
+        gave the runs cut off; then its parameters, with each cut-off run
+        standing at what it is expected to have cost, given that it cost at
+        least the budget -- a bound, refitted a few times, not a cost."""
+        prior = self._prior(law.bend, law.spread2)
+        prior_inv = np.linalg.inv(prior)
+        cov = np.linalg.inv(law.xtwx + prior_inv)
+        mean = cov @ law.xtwy
+        fit = law.ytwy - 2 * float(mean @ law.xtwy) + float(mean @ law.xtwx @ mean)
+        evidence = (-0.5 * law.lognorm - 0.5 * fit - 0.5 * float(mean @ prior_inv @ mean)
+                    - 0.5 * np.linalg.slogdet(prior)[1] + 0.5 * np.linalg.slogdet(cov)[1])
+        cap = math.log(self.budget)
+        cut = [(self._x(n, law.bend, own), OBSERVED ** 2 if own else law.spread2)
+               for n, own in law.censored]
+        for x, noise in cut:
+            sd = math.sqrt(float(x @ cov @ x) + noise)
+            evidence += math.log(max(1.0 - _PHI((cap - float(x @ mean)) / sd), 1e-12))
+        for _ in range(4 if cut else 0):
+            xtwx, xtwy = law.xtwx.copy(), law.xtwy.copy()
+            for x, noise in cut:
+                y = _above(float(x @ mean), math.sqrt(float(x @ cov @ x) + noise), cap)
+                xtwx += np.outer(x, x) / noise
+                xtwy += y * x / noise
+            cov = np.linalg.inv(xtwx + prior_inv)
+            mean = cov @ xtwy
+        law.mean, law.cov, law.evidence = mean, cov, evidence + law.prior
+
+    def observe(self, n: float, y: float) -> "ShapeBelief":
+        """This box's own run at size n: its level, and the laws' weights."""
+        laws = []
+        cut = y >= math.log(self.budget) - 1e-9
+        for law in self.laws:
+            if cut:
+                laws.append(_Law(law.bend, law.prior, law.spread2, law.xtwx, law.xtwy, law.ytwy,
+                                 law.lognorm, law.count, law.censored + ((n, True),)))
+                continue
+            x = self._x(n, law.bend, True)
+            w = 1.0 / OBSERVED ** 2
+            laws.append(_Law(law.bend, law.prior, law.spread2, law.xtwx + w * np.outer(x, x),
+                             law.xtwy + w * y * x, law.ytwy + w * y * y,
+                             law.lognorm + math.log(2 * math.pi * OBSERVED ** 2),
+                             law.count + 1, law.censored))
+        return ShapeBelief(laws, self.sizes | {float(n)}, self.drift, self.budget)
+
+    def distance(self, n: float) -> float:
+        return float(min((abs(n - s) for s in self.sizes), default=n))
+
+    def _parts(self, n: float) -> List[Tuple[float, float, float]]:
+        """(weight, mean, sd) of each law's log questions for this box at n."""
+        extra = OBSERVED ** 2 + (self.drift * self.distance(n)) ** 2
+        out = []
+        for weight, law in zip(self.weights, self.laws):
+            x = self._x(n, law.bend, True)
+            out.append((float(weight), float(x @ law.mean), math.sqrt(float(x @ law.cov @ x) + extra)))
+        return out
+
+    def predict(self, n: float) -> Tuple[float, float]:
+        parts = self._parts(n)
+        mu = sum(w * m for w, m, _ in parts)
+        var = sum(w * (s * s + m * m) for w, m, s in parts) - mu * mu
+        return mu, math.sqrt(max(var, 1e-12))
+
+    def outlook(self, n: float, budget: float) -> Tuple[float, float]:
+        fits = spend = 0.0
+        cap = math.log(budget)
+        for w, m, s in self._parts(n):
+            fits += w * _PHI((cap - m) / s)
+            spend += w * _worth(m, s, 1.0, 0.0, budget)[1]
+        return fits, spend
+
+    def outcomes(self, n: float) -> List[Tuple[float, float]]:
+        points = [(m + s * node, w * nw) for w, m, s in self._parts(n) if w >= _LAW_FLOOR
+                  for node, nw in zip(_LAW_NODES, _LAW_WEIGHTS)]
+        total = sum(p for _, p in points)
+        return [(y, p / total) for y, p in points]
+
+    def law(self) -> Dict[str, float]:
+        """For reports only: how much weight bends, and where."""
+        bent = [(w, law.bend) for w, law in zip(self.weights, self.laws) if law.bend is not None]
+        line = float(sum(w for w, law in zip(self.weights, self.laws) if law.bend is None))
+        where = max(bent)[1] if bent else None
+        return {"line": line, "bend": 1.0 - line, "at": where}
+
+
+class ShapePlanner(Planner):
+    """The Planner, weighing laws of cost instead of one line."""
+
+    def belief(self, method: str, before: FrozenSet[str], box: int,
+               own: Sequence[Tuple[int, float]], drift: float) -> Optional[ShapeBelief]:
+        runs = self.journal.runs(method, before, box)
+        if not runs and not own:
+            return None
+        rows = [(float(e.n), math.log(max(e.queries, 1)), not e.finished) for e in runs]
+        belief = ShapeBelief.fit(rows, drift, self.budget)
+        for n, y in own:
+            belief = belief.observe(n, y)
+        return belief
