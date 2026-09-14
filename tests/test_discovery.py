@@ -298,3 +298,30 @@ def test_every_question_measured_has_a_certificate_inside_the_searched_space():
     for world in [W0, W3] + list(FAMILY.values()):
         assert size(world.truth) <= discovery.MAX_SIZE, world.name
         assert world.grade(lambda cols: discovery.predict(world.truth, cols)) == 1.0
+
+
+# --------------------------------------------------------------------------
+# step 5.0: the whole budget curve from one run
+# --------------------------------------------------------------------------
+
+def test_one_profiled_run_gives_what_every_smaller_budget_would_have():
+    """The claim that makes the budget curve affordable, checked against
+    the real thing: a search with budget B returns exactly what the best of
+    the first B programs of a longer run was."""
+    from mana.discovery.worlds import FAMILY
+
+    split = FAMILY["T1"].split(200, 50, seed=0)
+    long = discovery.search(split.train, split.train_outcomes, budget=400000,
+                            profile=True)
+    for budget in (3000, 40000, 120000, 400000):
+        short = discovery.search(split.train, split.train_outcomes, budget=budget)
+        program, found_at, bits = discovery.at_budget(long, budget)
+        assert program == short.program, budget
+        assert found_at == short.found_at and abs(bits - short.bits) < 1e-9
+        assert discovery.termination_at(long, budget) == short.termination, budget
+
+
+def test_without_a_profile_nothing_is_recorded():
+    split = W0.split(150, 50, seed=0)
+    found = discovery.search(split.train, split.train_outcomes, budget=2000)
+    assert found.anytime == []

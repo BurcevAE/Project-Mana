@@ -39,7 +39,7 @@ from .language import (ADD, CMP, EQUAL, IF, LESS, SUB, Evaluator, Primitive,
                        prim, replace, show, size, sub)
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.3"
+__version__ = "1.4"
 
 BEAM = 4
 MAX_SIZE = 15
@@ -84,6 +84,11 @@ class Found:
     seconds: float = 0.0
     #: Training points the program gets wrong.
     train_errors: int = 0
+    #: With `profile`: (programs evaluated, program, bits) each time the
+    #: best of everything evaluated so far changed. Enough to know what the
+    #: same search would have returned at any smaller budget -- see
+    #: `at_budget`.
+    anytime: List[Tuple[int, Program, float]] = field(default_factory=list)
 
     @property
     def status(self) -> str:
@@ -175,7 +180,8 @@ def search(columns: Dict[str, Sequence[int]], outcomes: Sequence[int],
            beam_width: int = BEAM, max_size: int = MAX_SIZE,
            patience: int = PATIENCE, max_rounds: int = MAX_ROUNDS,
            budget: int = BUDGET,
-           library: Optional[Dict[str, Primitive]] = None) -> Found:
+           library: Optional[Dict[str, Primitive]] = None,
+           profile: bool = False) -> Found:
     """The shortest description of the outcomes this search can reach."""
     started = time.time()
     actual = np.asarray(outcomes, dtype=np.int64)
@@ -187,12 +193,24 @@ def search(columns: Dict[str, Sequence[int]], outcomes: Sequence[int],
     leaves, conditions = vocabulary(columns, actual, library)
     seen: Dict[Program, Tuple[float, float, float]] = {}
     first_seen: Dict[Program, int] = {}
+    anytime: List[Tuple[int, Program, float]] = []
+    leader: Dict[str, object] = {"key": None, "program": None}
 
     def score(p: Program) -> Tuple[float, float, float]:
         first_seen.setdefault(p, len(first_seen) + 1)
         program_part = description.program_bits(p, variables, len(library))
         error_part = description.error_bits(evaluator(p), actual, alphabet, known)
-        return (program_part + error_part, program_part, error_part)
+        total = program_part + error_part
+        if profile:
+            # The same order as `rank`, with the text only asked for on a
+            # tie: the best of everything evaluated so far, as it changes.
+            key = (total, size(p))
+            held = leader["key"]
+            if (held is None or key < held
+                    or (key == held and show(p) < show(leader["program"]))):
+                leader["key"], leader["program"] = key, p
+                anytime.append((first_seen[p], p, total))
+        return (total, program_part, error_part)
 
     def rank(p: Program) -> Tuple[float, int, str]:
         # The text last: equal descriptions of equal size are the same rule
@@ -234,7 +252,34 @@ def search(columns: Dict[str, Sequence[int]], outcomes: Sequence[int],
                  history=history, found_at=first_seen.get(best, len(seen)),
                  termination=SEARCH_EXHAUSTED if exhausted else SEARCH_LIMIT,
                  seconds=time.time() - started,
-                 train_errors=int(np.count_nonzero(evaluator(best) != actual)))
+                 train_errors=int(np.count_nonzero(evaluator(best) != actual)),
+                 anytime=anytime)
+
+
+def at_budget(found: Found, budget: int) -> Tuple[Program, int, float]:
+    """What the same search would have returned with a smaller budget.
+
+    Exact, not estimated, for the same data, beam and patience: the search
+    evaluates candidates in the same order whatever its budget -- the budget
+    only cuts the walk short -- and what it returns is the best of what it
+    evaluated. So a run with budget B returns the best of the first B
+    programs of a longer run; and where the longer run stopped at a local
+    end before B, the shorter one stopped at the same end. Needs a run made
+    with `profile`. Returns (program, where it was first seen, bits).
+    """
+    chosen = None
+    for index, program, bits in found.anytime:
+        if index > budget:
+            break
+        chosen = (program, index, bits)
+    if chosen is None:
+        raise ValueError("no program within that budget, or not profiled")
+    return chosen
+
+
+def termination_at(found: Found, budget: int) -> str:
+    """Why the same search would have stopped with this budget."""
+    return found.termination if budget >= found.evaluations else SEARCH_LIMIT
 
 
 def predict(p: Program, columns: Dict[str, Sequence[int]],

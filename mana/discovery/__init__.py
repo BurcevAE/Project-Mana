@@ -130,6 +130,38 @@ questions x 10 seeds; the search measured, not changed)
     14 of 25 and the invention's boundary were measured through a search
     that finds an existing solution six times in ten.
 
+Step 5.0, measured 2026-09-14 -- the zero law (scripts/run_budget_curve.py,
+the same 7 questions x 10 seeds at every budget; each budget read off one
+profiled run, which a test shows is exactly what a separate run returns)
+----------------------------------------------------------------------
+    P(found | a solution exists) against programs evaluated:
+
+        budget     10k  25k  50k  100k  200k  400k  800k  1.2M   2M
+        beam 4     29%  29%  29%   39%   44%   63%   63%   63%  63%
+        beam 16    29%  29%  29%   29%   29%   43%   51%   84%  94%
+
+    (29% is W0 and W3; the family needs 100k and more.)
+
+    The beam of 4 -- the search as it stands -- is flat from 400k: past
+    800k every one of its 26 misses is a local end. More computation buys
+    it nothing; its limit is structural. The beam of 16 buys completeness
+    with computation: worse below the crossing between 800k and 1.2M (43%
+    against 63% at 400k), 94% at 2M, at a median cost of 645 380 programs
+    to the answer against 67 387, and a held-out error of 0.012 where the
+    narrow beam's plateau stays at 0.187. T4 is where both stop: 4/10 and
+    6/10, every remaining miss a local end.
+
+    A correction to step 4: the 18 misses it called budget failures were
+    cut by the budget at 400k, but none would have been found by the same
+    narrow search with more -- by 800k all had stalled. What rescued them
+    was the width of the beam, not the budget.
+
+    The zero law for every later change to the search is the upper envelope
+    of the known configurations at equal programs evaluated:
+        10k 29, 25k 29, 50k 29, 100k 39, 200k 44, 400k 63, 800k 63,
+        1.2M 84, 2M 94 (%).
+    A mechanism earns its place only above it.
+
 Steps
 -----
     1  language, edit search, description length; worlds W0 and W3
