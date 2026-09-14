@@ -86,6 +86,7 @@ VERSIONED_MODULES = (
     "discovery.search", "discovery.worlds", "discovery.baselines",
     "discovery.invent", "discovery.library", "discovery.ceiling",
     "discovery.cells",
+    "methods", "methods.world", "methods.solvers", "methods.portfolio",
     "policy", "acquire", "outcome", "echo_guard", "console", "capabilities",
     "core.identity", "cognition.exchange",
     "apps.documents", "apps.editor", "apps.intent", "apps.ollama_setup",
