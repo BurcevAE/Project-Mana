@@ -989,6 +989,50 @@ N3, P2c, measured 2026-09-14 (declared in commit 4428a2c, before the run)
     the core, on fresh seeds. The run took 1 293 s, 391 of them to rebuild
     A'; wall time per arm was not recorded.
 
+N3, P2d, predicted before the run (2026-09-14; scripts/run_look_anatomy.py)
+----------------------------------------------------------------------
+    A diagnostic: nothing claimed, nothing learnt, the hypothesis left as
+    it stands. The look P2c accepted, and the look without the move, on
+    P2c's dev seeds (T4 20..49, 400k), traced; each round's choice
+    recomputed from the log and checked against what was kept. Four
+    questions, from the user:
+      1  which states the look keeps, and by what they pass through A'
+      2  what sets a kept state apart from a near twin that was dropped
+      3  how much of the gain is "a state -> the good successor the look
+         saw -> T4", and how much "a state -> the search's own way on from
+         another point"
+      4  where in MANA's experience a record "state -> worth of exploring
+         it further" could come from
+
+    Predicted:
+      1  the picks lie deep by score -- the median past the 100th of 256,
+         most outside the first 32 -- conditions on one variable against
+         a leaf, if(v < c, a, b) and its kin; their best successor is
+         made, through A', mostly by the move, and without the move mostly
+         by "combine with a leaf" at the condition's variable
+      2  twins are dropped with nearly the same score of their own (median
+         gap under 10 bits) and a far worse look (median over 50 bits):
+         what separates them is not in the state but in what one step
+         makes of it -- which no score of a state's present can carry, as
+         steps 7 and 7b found
+      3  through A': about half the answers made inside a look, some by
+         looking at states that were not then picked; most of the rest
+         through a pick and on through the successor it was picked for;
+         "another way from the picked point" a minority, "through no pick"
+         at most two. Without the move: inside a look at most three; the
+         seen successor at least half; another way the rest
+      4  read from the code before the run: no such record exists.
+         Experience and derive.Derivation hold the answer's path only;
+         frontier.Step the features of a path state's siblings (worth of
+         keeping, from successes); frontier.Regret the states a dearer run
+         went through (worth of keeping, from regret, with no cost and no
+         look); Found.looked is a count; log_rounds are pools and kept
+         states in a script, nobody's experience; the look's own gain is
+         computed for every state it looks at and thrown away. The one
+         record of the kind is in the frozen methods corpus -- a PROBE
+         entry of the Journal, the cost of an experiment on a method,
+         predicted against actual -- about other objects in another world
+
 Steps
 -----
     1  language, edit search, description length; worlds W0 and W3
