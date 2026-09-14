@@ -512,6 +512,84 @@ Stage R1, measured 2026-09-14 (seven questions x seeds 0..9, 400k)
     one program, rounds only full expansions, rules only one-node rewrites
     -- and the loop itself outside the object.
 
+Stage R2, predicted before the run (2026-09-14; reflect.py,
+scripts/run_reflect.py)
+----------------------------------------------------------------------
+    MANA builds a change of its own search policy, from its own
+    experience, and core.gates decides. No list of changes is given. One
+    principle: the better policy is the one in which the derivations of
+    MANA's own answers (dear runs, T1..T3 seeds 0..9) are written most
+    briefly, with the definitions of what it added. From it come only two
+    kinds of change -- a rule added from repeated structure (step 6's
+    move, now part of the policy), a rule dropped the experience never
+    needed -- and it cannot touch the selection or the resources: the
+    length of the experience does not depend on them. That is R2's limit.
+    Gates: 30 dev pairs (seeds 10..19), hidden seeds 20..29, W0, W3, W4 as
+    counterexamples, T4 as a second, transfer claim; budget 400k, the
+    policy's own, fixed in advance.
+
+    Predicted for A, the search as it stands: the change adds the distance
+    move and drops every rule the family's derivations do not use -- they
+    are written with "add a condition" and "combine with a leaf" alone --
+    so replace, the swaps and "drop or turn a condition" go. The dropped
+    rules make almost no difference to the cost of a step (a condition
+    wrapped is 5 800 programs a node; they are a few dozen), so the new
+    policy is the old one with the move: more answers sooner, as in step 6
+    (at 400k, 23 of 30 against 26 there). Verdict: not accepted -- three
+    or four discordant pairs do not pass McNemar at 30, so significance
+    fails, whatever the direction; the curves gain at 50k-100k; T4 no
+    better, possibly worse without "replace by a leaf"; W0, W3 untouched.
+    For B: the idle "double" dropped, the same move added, and B' the same
+    policy as A' -- both are what the experience needs, so the changes
+    differ where A and B differed (A' dropped "swap <", B' dropped
+    "double") and end in the same place.
+
+Stage R2, measured 2026-09-14
+----------------------------------------------------------------------
+    The change MANA built for A, from 30 derivations of its own dear runs
+    (1 641 -> 539 bits to write them):
+        added    n -> |n - #leaf|, both ways round        (-438, -376 bits)
+        dropped  "add a condition"                         (-275 bits)
+        dropped  "replace by a leaf", "swap add"           (-14, -0.2)
+    Not predicted: with the grown move, the family's derivations no longer
+    need "add a condition" -- the move carries its own condition -- and
+    that rule makes 5 800 programs a node, so dropping it shortened the
+    experience more than anything but the move itself.
+
+    solved, of 30 (T4 of 10)   10k  25k  50k  100k  200k  400k
+        unseen seeds, old         0    0    0     6     8    23
+        unseen seeds, new        28   28   28    28    28    28
+        hidden seeds, old         0    0    0     7     9    17
+        hidden seeds, new        27   27   27    27    27    27
+        W0, W3, W4, old          20   20   20    20    20    24
+        W0, W3, W4, new           7    7    7     7     7     7
+        T4, old / new           0/0  0/0  0/0   0/0   4/0   4/0
+
+    core.gates, budget 400k fixed in advance: REJECTED -- significance
+    (McNemar b = 0, c = 5, p = 0.074 over 30 pairs) and counterexamples:
+    20 of the 30 runs on W0, W3, W4 the old policy solved, the new one did
+    not. The transfer claim also failed on T4 (0.4 -> 0.0).
+
+    B -- A with an idle "double" and without "swap <" -- got the same
+    change and dropped "double" too; B' differs from A' only in "swap <",
+    which A kept because the experience never paid for it and B never had.
+    The change follows the policy it starts from and the experience it is
+    given, not one fixed trick.
+
+    Against the user's four conditions: the change was made by MANA, from
+    no list; from its own experience; better on unseen data -- 28 of 30
+    from 10k programs where the old policy has none, 27 of 30 hidden
+    against 17; and not a matter of budget -- at equal programs the gap is
+    largest where the budget is smallest. And the core refused it, rightly:
+    written as briefly as possible, an experience of one family of
+    questions is a specialist -- everything that family never needed goes,
+    and with it the conditions W0 and W3 are made of. Compression of
+    one's own successes rewards what they needed, as the words of step 3
+    and the move of step 6 did; here, for the first time, it rewrote the
+    search itself, and the gates -- counterexamples, not significance --
+    are what stopped a better-looking search that could no longer answer
+    a question it used to.
+
 Steps
 -----
     1  language, edit search, description length; worlds W0 and W3

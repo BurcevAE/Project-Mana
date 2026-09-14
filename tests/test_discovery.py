@@ -618,3 +618,56 @@ def test_the_policy_interpreter_cannot_see_the_worlds():
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             named = [getattr(node, "module", "") or ""] + [a.name for a in node.names]
             assert not any("worlds" in name for name in named)
+
+
+# --------------------------------------------------------------------------
+# stage R2: MANA changes its own search, from its own experience
+# --------------------------------------------------------------------------
+
+def test_what_a_rule_makes_is_known_without_running_it():
+    from mana.discovery import policy as P
+
+    split = W0.split(200, 50, seed=0)
+    leaves, conditions = discovery.vocabulary(split.train, split.train_outcomes)
+    p = if_(cmp(LESS, get("x"), const(3)), add(get("z"), get("y")), get("y"))
+    made = list(P.successors(P.CURRENT, p, leaves, conditions))
+    assert P.neighbourhood(P.CURRENT, p, leaves, conditions) >= len(set(made))
+    for q in made[:400]:
+        assert any(P.produces(P.CURRENT, rule, p, q, leaves, conditions)
+                   for rule in P.CURRENT.rules)
+    far = if_(cmp(LESS, get("y"), const(7)), get("x"), get("z"))
+    assert not any(P.produces(P.CURRENT, rule, p, far, leaves, conditions)
+                   for rule in P.CURRENT.rules)
+
+
+def test_a_traced_policy_says_how_it_got_there():
+    from mana.discovery import policy as P
+
+    split = W0.split(200, 50, seed=1)
+    plain = discovery.search(split.train, split.train_outcomes, budget=20000, trace=True)
+    ruled = P.run(P.with_budget(P.CURRENT, 20000), split.train, split.train_outcomes,
+                  trace=True)
+    assert ruled.derivation == plain.derivation
+
+
+def test_experience_written_in_a_policy_gets_shorter_with_a_grown_rule_and_without_an_idle_one():
+    from mana.discovery import policy as P
+    from mana.discovery import reflect
+
+    experience = [reflect.Experience(d.programs, d.leaves, d.conditions, d.task)
+                  for d in _derivations()]
+    change = reflect.improve(P.CURRENT, experience)
+    assert change.bits_after < change.bits_before
+    kinds = " ".join(what for what, _ in change.steps)
+    assert "добавлено правило" in kinds and "убрано правило" in kinds
+    names = [rule.name for rule in change.after.rules]
+    assert "add a condition" in names and "combine with a leaf" in names
+
+
+def test_the_reflecting_learner_cannot_see_the_worlds():
+    from mana.discovery import reflect
+
+    for node in ast.walk(ast.parse(inspect.getsource(reflect))):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            named = [getattr(node, "module", "") or ""] + [a.name for a in node.names]
+            assert not any("worlds" in name for name in named)

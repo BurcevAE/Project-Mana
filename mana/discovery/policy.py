@@ -70,7 +70,7 @@ from .search import (BUDGET, MAX_ROUNDS, MAX_SIZE, PATIENCE, SEARCH_EXHAUSTED, S
                      Found, vocabulary)
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 PARAM = "param"
 
@@ -90,6 +90,10 @@ class Rule:
     params: Tuple[str, ...] = ()
     #: The rule applies only while size(program) + margin <= the size limit.
     margin: Optional[int] = None
+    #: A result larger than the size limit is not made. Added in R2 for
+    #: rules grown from experience, whose growth depends on the node they
+    #: rewrite; the rules of R1 do not use it.
+    limit: bool = False
 
 
 @dataclass(frozen=True)
@@ -155,13 +159,18 @@ def successors(policy: SearchPolicy, p: Program, leaves: Sequence[Program],
             for drawn in itertools.product(*[pools[kind] for kind in rule.params]):
                 for template in rule.rhs:
                     new = _fill(template, bound, drawn)
-                    if new != node:
-                        yield replace(p, path, new)
+                    if new == node:
+                        continue
+                    if rule.limit and whole - size(node) + size(new) > policy.max_size:
+                        continue
+                    yield replace(p, path, new)
 
 
-def run(policy: SearchPolicy, columns, outcomes, profile: bool = False) -> Found:
+def run(policy: SearchPolicy, columns, outcomes, profile: bool = False,
+        trace: bool = False) -> Found:
     """Interpret a policy on one data set. The answer is the shortest
-    description of everything evaluated, whatever the policy kept."""
+    description of everything evaluated, whatever the policy kept.
+    `trace` returns the answer's derivation, as search.search does."""
     started = time.time()
     actual = np.asarray(outcomes, dtype=np.int64)
     evaluator = Evaluator(columns)
@@ -207,6 +216,7 @@ def run(policy: SearchPolicy, columns, outcomes, profile: bool = False) -> Found
     history = [(0, seen[best][0], show(best))]
     stalled = 0
     rounds = 0
+    parent: Dict[Program, Program] = {}
     for rounds in range(1, policy.max_rounds + 1):
         fresh: List[Program] = []
         for p in beam:
@@ -217,6 +227,8 @@ def run(policy: SearchPolicy, columns, outcomes, profile: bool = False) -> Found
                     break
                 seen[q] = score(q)
                 fresh.append(q)
+                if trace:
+                    parent[q] = p
         pool = set(fresh) | set(beam) if policy.selection.pool == "made+kept" else set(fresh) or set(beam)
         beam = sorted(pool, key=order)[:k]
         if seen[shortest["program"]][0] < seen[best][0] - 1e-9:
@@ -229,7 +241,16 @@ def run(policy: SearchPolicy, columns, outcomes, profile: bool = False) -> Found
             break
     bits, program_part, error_part = seen[best]
     exhausted = stalled >= policy.patience and len(seen) < policy.budget
+    derivation: List[Program] = []
+    if trace:
+        step = best
+        while step in parent:
+            derivation.append(step)
+            step = parent[step]
+        derivation.append(step)
+        derivation.reverse()
     return Found(program=best, bits=bits, program_bits=program_part, error_bits=error_part,
+                 derivation=derivation,
                  evaluations=len(seen), rounds=rounds, history=history,
                  found_at=first_seen.get(best, len(seen)),
                  termination=SEARCH_EXHAUSTED if exhausted else SEARCH_LIMIT,
@@ -314,3 +335,112 @@ def without(policy: SearchPolicy, name: str) -> SearchPolicy:
 
 def with_budget(policy: SearchPolicy, budget: int) -> SearchPolicy:
     return _replace(policy, budget=int(budget))
+
+
+def with_rule(policy: SearchPolicy, rule: Rule) -> SearchPolicy:
+    return _replace(policy, rules=policy.rules + (rule,))
+
+
+# -- what one rule does, without running it (R2) -----------------------------
+
+def macro_rule(name: str, template: Program, arity: int, self_node: Program) -> Rule:
+    """A move of step 6 -- n becomes a template of n and leaves -- as a
+    rule: SELF is the node matched, the template's holes leaves drawn."""
+    def convert(t: Program) -> Program:
+        if t == self_node:
+            return N
+        if t[0] == HOLE:
+            return param("leaf", t[1])
+        kids = children(t)
+        return rebuild(t, [convert(kid) for kid in kids]) if kids else t
+    return Rule(name, N, (convert(template),), ("leaf",) * arity, None, True)
+
+
+def _filled_size(template: Program, bound: Dict[int, Program]) -> int:
+    if template[0] == HOLE:
+        return size(bound[template[1]])
+    if template[0] == PARAM:
+        return 3 if template[1] == "cond" else 1
+    return 1 + sum(_filled_size(kid, bound) for kid in children(template))
+
+
+def neighbourhood(policy: SearchPolicy, p: Program, leaves: Sequence[Program],
+                  conditions: Sequence[Program]) -> int:
+    """How many programs the policy makes from p: what one step costs."""
+    pools = {"leaf": len(leaves), "cond": len(conditions)}
+    whole = size(p)
+    total = 0
+    for _, node in nodes(p):
+        for rule in policy.rules:
+            if rule.margin is not None and whole + rule.margin > policy.max_size:
+                continue
+            bound = match(rule.lhs, node, {})
+            if bound is None:
+                continue
+            ways = 1
+            for kind in rule.params:
+                ways *= pools[kind]
+            for template in rule.rhs:
+                grown = whole - size(node) + _filled_size(template, bound)
+                if rule.limit and grown > policy.max_size:
+                    continue
+                total += ways
+    return total
+
+
+def _as_pattern(template: Program) -> Program:
+    if template[0] == PARAM:
+        return hole(100 + template[2])
+    kids = children(template)
+    return rebuild(template, [_as_pattern(kid) for kid in kids]) if kids else template
+
+
+def _subtree(p: Program, path: Sequence[int]) -> Program:
+    for i in path:
+        p = children(p)[i]
+    return p
+
+
+def _same_shape(p: Program, q: Program) -> bool:
+    if p[0] != q[0] or not children(p) or len(children(p)) != len(children(q)):
+        return False
+    return p[0] != CMP or p[1] == q[1]
+
+
+def _where_differ(p: Program, q: Program) -> Optional[Tuple[int, ...]]:
+    if p == q:
+        return None
+    path: Tuple[int, ...] = ()
+    while _same_shape(p, q):
+        differing = [i for i, (a, b) in enumerate(zip(children(p), children(q))) if a != b]
+        if len(differing) != 1:
+            break
+        path += (differing[0],)
+        p, q = children(p)[differing[0]], children(q)[differing[0]]
+    return path
+
+
+def produces(policy: SearchPolicy, rule: Rule, p: Program, q: Program,
+             leaves: Sequence[Program], conditions: Sequence[Program]) -> bool:
+    """Does one application of this rule make q from p?"""
+    path = _where_differ(p, q)
+    if path is None:
+        return False
+    if rule.margin is not None and size(p) + rule.margin > policy.max_size:
+        return False
+    if rule.limit and size(q) > policy.max_size:
+        return False
+    pools = {"leaf": set(leaves), "cond": set(conditions)}
+    for cut in range(len(path), -1, -1):
+        where = path[:cut]
+        before, after = _subtree(p, where), _subtree(q, where)
+        bound = match(rule.lhs, before, {})
+        if bound is None:
+            continue
+        for template in rule.rhs:
+            got = match(_as_pattern(template), after, dict(bound))
+            if got is None:
+                continue
+            if all(got.get(100 + j) in pools[kind] for j, kind in enumerate(rule.params)):
+                return True
+    return False
