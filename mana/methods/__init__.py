@@ -97,6 +97,85 @@ least one of them, or it measures nothing. Each is broken somewhere real:
 the discovery searches cannot say in advance what they will cost, a
 check on noisy answers can lie, and a question that changes the world
 cannot be asked again.
+
+M1, predicted before the run (2026-09-14)
+-----------------------------------------
+One condition broken: no method announces what it will cost, and nothing
+declines for free -- a method asks until it is done or its budget is
+spent. The chooser (choice.py) learns from what it could have seen:
+questions asked, finished or not, own check passed or not. Training:
+40 boxes of n = 2..4, learning as it goes; test: 36 boxes of n = 5, 6, 8
+it has never seen, with what it learnt frozen. 10 streams. Against, on
+the same boxes: the cascade in the writer's order (now knowledge handed
+in, not derived), a random order, the oracle.
+
+    training   starts near the random order, at the cascade's cost from
+               about the 10th box: it learns the writer's order
+    test       linear, additive, blocks at n = 5, 6 and global at n = 5:
+               the cascade's methods at the cascade's cost
+               global at n = 6: experiment (predicted to fit) runs to its
+               budget, then exhaust is skipped -- extrapolated to a
+               million questions -- so about half the cascade's cost; the
+               oracle still spends nothing
+               n = 8: the cost of experiment after calculate and decompose
+               failed is learnt from blocks and global boxes together,
+               cheap and dear averaged in logs; extrapolated to n = 8 it
+               likely passes the budget, and the chooser gives up on the
+               blocks the cascade solves -- a predicted loss, the price of
+               a chooser that knows the box only by which methods failed
+
+So the claim at stake is modest: learnt experience replaces the order the
+writer handed in, and adds one thing the cascade lacks -- "this will not
+finish". Telling blocks from global at n = 8 needs more than failures to
+describe the box: a method's cheap first part -- experiment's pair tests
+-- used as a probe. That is M3's matter, a method as parts.
+
+M1, measured 2026-09-14 (scripts/run_choice.py, 10 streams: 400 training
+boxes, 360 test boxes)
+----------------------------------------------------------------------
+    training, n = 2..4: questions over the oracle's, by tens of boxes
+        chooser      1.12   1.23   1.19   1.24
+        cascade      1.00   1.00   1.00   1.00
+        random       1.47   2.12   1.82   1.80
+    test, n = 5, 6, 8, frozen          solved    questions
+        300 solvable     chooser         291     6 038 629
+                         cascade         300     3 039 630   (= oracle)
+                         random          300    21 239 192
+        60 hopeless      chooser           0    13 803 798
+        (global, n >= 6) cascade           0    24 004 440
+                         oracle            0             0
+
+Prediction against result: the writer's order learnt by the 10th box --
+no, the chooser stays at 1.2 times the oracle to the end; the cascade's
+cost on solvable boxes -- no, twice it, and 9 of 300 lost; half the
+cascade on hopeless boxes -- yes (0.58); giving up on blocks at n = 8 --
+in 3 streams of 10.
+
+Why, read from the chooser's own beliefs (streams 0, 1, 2 re-run):
+    one size says nothing of growth, and the chooser took it to mean no
+        growth. Exhaust, after calculate and decompose had failed, had
+        one record: 9 953 questions at n = 4. So it expected 9 953 at
+        n = 5, 6 and 8, cheaper than experiment, and ran it first -- the
+        orders B C A and B C A D. Experiment first on a linear box the
+        same way: one record, 47 questions at n = 3, expected at n = 8
+    greed froze what it knew of the alternatives: 353 of 400 training
+        boxes began with calculate, and the others' records from an empty
+        start stayed at the one to three made on the first boxes, never
+        revisited. Hence the flat training curve
+    boxes of different kinds pooled: experiment after two failures,
+        learnt from blocks and global together, extrapolated to 1.27 and
+        193 million questions at n = 8 -- and the chooser gave up
+    the cascade still equals the oracle on solvable boxes: announcing was
+        broken, reuse was not, and the questions still nest
+
+So learnt experience did not replace the order the writer handed in: it
+paid twice as much where there was an answer, and gained only the one
+thing the cascade lacks, "this will not finish". What the writer's order
+holds -- that a table grows with n, that calculating is cheapest -- is
+exactly what cannot be learnt from experience gathered at one size. A
+chooser that only solves boxes gathers it by accident; it would have to
+try a method at another size to learn how it grows -- choosing
+experiments about its methods, not only answers about boxes.
 """
 from __future__ import annotations
 

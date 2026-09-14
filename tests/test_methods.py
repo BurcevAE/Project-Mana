@@ -96,3 +96,64 @@ def test_methods_cannot_see_the_world():
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 named = [getattr(node, "module", "") or ""] + [a.name for a in node.names]
                 assert not any("world" in name for name in named), module.__name__
+
+
+# --------------------------------------------------------------------------
+# M1: no method says what it will cost; the chooser learns it
+# --------------------------------------------------------------------------
+
+def test_without_announcing_a_method_asks_until_its_budget_is_spent():
+    box = BlackBox(6, GLOBAL, seed=0)
+    found = solvers.attempt("exhaust", box.answer, 6, LEVELS, 0, budget=1000, announce=False)
+    assert found.model is None and found.queries == 1000 and found.declined != ""
+
+
+def test_in_one_session_a_later_method_does_not_pay_for_what_an_earlier_asked():
+    box = BlackBox(5, ADDITIVE, seed=4)
+    alone = solvers.attempt("decompose", box.answer, 5, LEVELS, 4, announce=False)
+    choice, model, tried = portfolio.run_order(box.answer, 5, LEVELS, 4)
+    assert choice.method == "decompose" and [a.method for a in tried] == ["calculate", "decompose"]
+    assert tried[1].queries < alone.queries
+    assert choice.cost == tried[0].queries + tried[1].queries
+    assert box.verdict(model) == 1.0
+
+
+def test_the_cost_of_a_method_is_extrapolated_from_what_it_spent_before():
+    from mana.methods.choice import Experience, Record
+
+    experience = Experience()
+    for n in (2, 3, 4):
+        experience.add(Record(n, frozenset(), "exhaust", True, LEVELS ** n, True))
+    assert abs(np.log10(experience.cost("exhaust", 6, frozenset())) - 6) < 1e-6
+    assert experience.cost("calculate", 6, frozenset()) is None
+
+
+def test_the_chooser_tries_what_it_never_tried_and_skips_what_will_not_finish():
+    from mana.methods.choice import Chooser, Experience, Record
+
+    experience = Experience()
+    chooser = Chooser(experience)
+    assert chooser.next(4, frozenset(), ["exhaust"]) == "exhaust"      # never tried
+    for n in (2, 3, 4):
+        experience.add(Record(n, frozenset(), "exhaust", True, LEVELS ** n, True))
+    assert chooser.next(4, frozenset(), ["exhaust"]) == "exhaust"      # 10 000: worth it
+    assert chooser.next(6, frozenset(), ["exhaust"]) is None           # a million: not
+
+
+def test_the_chooser_learns_from_boxes_and_keeps_to_what_it_may_see():
+    from mana.methods import choice
+
+    chooser = choice.Chooser(choice.Experience(), seed=1)
+    for i, structure in enumerate(STRUCTURES * 3):
+        box = BlackBox(3, structure, seed=100 + i)
+        found, model = chooser.solve(box.answer, 3, LEVELS, 100 + i)
+        assert found.method is not None and box.verdict(model) == 1.0
+    assert len(chooser.experience.records) >= 12
+    source = inspect.getsource(choice)
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            named = [getattr(node, "module", "") or ""] + [a.name for a in node.names]
+            assert not any("world" in name for name in named)
+        if isinstance(node, ast.Attribute):
+            assert node.attr not in ("planned", "verdict", "structure", "declined"), node.attr
