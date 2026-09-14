@@ -1,6 +1,15 @@
 """
 mana.methods — learning which way of knowing a task calls for.
 
+Status, decided 2026-09-14: frozen, an experimental corpus. M0 to M1d
+stand as measured below and are not continued -- M1e (hidden kinds of box)
+is not pursued. What the corpus showed, in one sentence: MANA learns the
+parameters and the structure of methods it was given -- their costs,
+their order, the worth of learning about them, the form of their growth
+-- but the space of methods stays outside it; every new kind of thing it
+learnt here was added by us (docs/АУДИТ_ПОРОЖДЕНИЯ.md). Continuing would
+add one more generator inside a space we wrote.
+
 The experiment (M)
 ------------------
 Discovery searched for one method and one currency that would solve

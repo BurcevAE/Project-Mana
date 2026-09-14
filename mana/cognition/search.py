@@ -1,6 +1,16 @@
 """
 mana.cognition.search — finding programs nobody wrote.
 
+Status, decided 2026-09-14 (docs/АУДИТ_ПОРОЖДЕНИЯ.md): experimental and
+unused. Nothing imports this module, so `compose_operators` -- the one
+path by which the genome's operator space could grow from its own
+elements -- has never run in live MANA, and nothing here is part of what
+MANA actually does. It is neither connected nor removed on purpose:
+wiring it in now would be building around an architecture chosen before
+the experiment that should decide whether composition of this kind is
+needed at all (the breakthrough experiment in `discovery`). If that
+experiment says it is not, this module goes.
+
 The audit found the mechanism for expanding the operator space built,
 tested, and called from nowhere. `genome.compose_operators` turns a
 proven chain into an operator that can take part in further composition
