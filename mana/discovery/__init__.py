@@ -1103,6 +1103,96 @@ N3, P2d, second pass, predicted before the run (2026-09-14)
                       without the move, as P2 counted -- two statistics of
                       two different answers
 
+N3, P2d, second pass, measured 2026-09-14 (declared in commit dafa174)
+----------------------------------------------------------------------
+    The generator rebuilt R2's change exactly. With round 0 logged as
+    chosen, the recomputed choice agreed with the kept one in 125 of 128
+    rounds (A') and 121 of 122 (no move); every departure is a last round
+    where the budget ran out in the middle of a look (3 and 1).
+
+    Round 0 taken again: the picks after round 0 (294 and 276) rank a
+    median 26th and 18th by score, three in four within the 140th and
+    91st, 45% and 42% outside the first 32; over the whole shortlist a
+    look gains a median 20 and 22 bits. Twins and the answers returned:
+    as in the first pass.
+
+    The first exact program of each solved run (T4 20..49, 400k):
+                                                  A'        no move
+      never in any pool: evaluated only by a look 26 of 27  28 of 28
+      the state the look saw it from   picked     23        25
+                                       not picked  3         3
+      the way the rounds reached that state (or the answer, where the
+      rounds made it) passes through earlier picks
+                                                  20 of 27  28 of 28
+    Two ways, as printed: y -> if(2 < x, y, z) [picked] =>
+    if(2 < |x - y|, y, z), one look through the move from a state of
+    round 1 -- the only kind with no earlier pick, 7 of A''s 27; and,
+    without the move, y -> if(y < 2, y, z) [picked] ->
+    if(if(x < 2, y, y < 2), y, z) [picked] ->
+    if(if(x < 2, y, y < x - 2), y, z) [picked] =>
+    if(if(x < y - 2, y, y < x - 2), y, z).
+
+    Predicted rightly: the departures; the first answer made by a look;
+    its state reached through earlier picks in two runs of three or more
+    (74%, and all).
+
+    Not confirmed: on P2's seeds at 800k the first exact answer counted as
+    made by a look in 5 of 9 through A', 0 of 9 without the move -- and
+    the count cannot see what was predicted. "Never in any pool" is a
+    lower bound of "found by a look". Without the move the look's rules
+    are the search's own, so an answer a look finds is made again by the
+    rounds as soon as the state it was seen from is expanded, and enters
+    a pool; at 400k the runs ended first, at 800k they went on. The same
+    holds for P2's column "made by a look": 1 of 9 without the move was a
+    lower bound, and the reading drawn from it -- that the search's own
+    rounds finished T4's rule -- is not supported. Through A' the answers
+    come by the move, which the search's rules lack, so they stay the
+    look's: 5 of 9 by both counts.
+
+    The user's four questions, answered as far as measured:
+      1  The look picks states by one step of their future: near the top
+         by score but not at it -- after round 0 almost half outside the
+         first 32 -- conditions whose best successor puts a variable
+         against a leaf ("combine with a leaf", 84% of picks through A',
+         98% without). A pick's look gains seven times the shortlist's
+         median.
+      2  A pick and its dropped twin differ ten times more one step on
+         than by their own score; a quarter of the pairs are within 10
+         bits of each other by their present and more than 50 apart one
+         step on. The present points the same way in 84-87% of pairs,
+         weakly. What decides is not in the state.
+      3  Neither "a state -> the good successor it was seen to have ->
+         T4" alone nor "a state -> the search's own way on from another
+         point" alone. At the end, always one generation of successors:
+         the exact answer is first evaluated by a look (26 of 27, 28 of
+         28). On the way, the looks' picks carry it across rounds (20 of
+         27, 28 of 28) and the search's own edits move on from them. One
+         generation alone suffices only through the move, from a state of
+         round 1 (7 of 27). Whether each step of a way is the successor
+         its pick was chosen for was not counted; of the steps printed,
+         some are and some are not.
+      4  From the code, as predicted: MANA keeps no record "state -> worth
+         of exploring it further". What a look finds for each state --
+         what one narrow step makes of it, at what cost -- is computed and
+         thrown away. What MANA keeps is the answer's path, the siblings
+         of its states, and the states a dearer run went through: records
+         of what was worth keeping, not of what was worth looking at. The
+         one record of that kind is the Journal's PROBE entry in the frozen
+         methods corpus -- an experiment on a method, its cost predicted
+         against actual -- about methods, not states.
+
+    So the mechanism the core accepted is an allocation of the search's
+    evaluations: each round 256 states are each given one narrow step,
+    and what that step returns decides both which states are kept and,
+    in the end, where the answer is found. R2 learnt which policy to run,
+    from records of what its runs did; this needs to know which states
+    are worth the evaluations -- in the user's words, a policy for
+    spending the budget of exploration -- and the records it would be
+    learnt from do not exist in MANA's experience. That is the
+    architectural result of P2d: N3 here does not wait for a better
+    search over programs or policies but for a kind of experience MANA
+    does not have -- the worth of exploring a state.
+
 Steps
 -----
     1  language, edit search, description length; worlds W0 and W3

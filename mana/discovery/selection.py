@@ -70,6 +70,13 @@ P2c, declared before the run and measured 2026-09-14
 through A' as a better search for T4 at 400k (dev 0.37 -> 0.90, hidden
 0.27 -> 0.83, no counterexample in 60) and REJECTED the look without the
 move on 9 counterexamples in the family.
+
+P2d, a diagnostic (scripts/run_look_anatomy.py): in every solved run of
+P2c's dev seeds the exact answer was first evaluated by a look, from a
+state earlier picks of the look had carried the way to; a pick and its
+dropped twin differ ten times more one step on than by their own score.
+What a look finds is computed here and thrown away: nothing in MANA's
+experience records it.
 """
 from __future__ import annotations
 
