@@ -954,6 +954,41 @@ N3, P2c, declared before the run (2026-09-14; scripts/run_look_claim.py)
     decided T4, costs the family answers the search had. Neither is N3:
     the look is written by hand, and MANA did not choose it.
 
+N3, P2c, measured 2026-09-14 (declared in commit 4428a2c, before the run)
+----------------------------------------------------------------------
+    The generator rebuilt R2's change exactly, from R2's experience.
+
+    core.gates, 400k:
+      P2c-look   ACCEPTED -- dev 0.37 -> 0.90, McNemar b = 0, c = 16,
+                 p = 0.00018; hidden 0.27 -> 0.83; no counterexample in 60
+      P2c-width  REJECTED on counterexamples, 9 of 60 -- W4 3, T2 5, T3 1,
+                 none on W0, W3; dev 0.37 -> 0.93 (b = 0, c = 17), hidden
+                 0.27 -> 0.87
+
+    solved         50k            100k           200k           400k
+                   dev hid  W  T  dev hid  W  T  dev hid  W  T  dev hid  W  T
+      search        0   0  20  0   0   0  20  6  11   8  20  9  11   8  23 15
+      look          3   5  30 30   7   7  30 30   7   7  30 30  27  25  30 30
+      width         0   0  20  0   0   0  20  0   0   0  20 10  28  26  20 10
+    (dev, hid: T4 of 30; W: W0, W3, W4 of 30; T: T1..T3 of 30)
+
+    Every prediction held. On T4, both looks nearly triple the search, on
+    seeds no run had touched; the width alone does it, and the move adds
+    speed (the look through A' has 7 of 30 by 100k, without the move
+    none) and the family (all 60 by 50k). The look without the move pays
+    for T4 with answers of the family the search had by 400k -- the core
+    refused it on exactly those.
+
+    What is accepted, said plainly: a better search for T4 by the core's
+    gates -- a look one step ahead at the first 256 states, through the
+    rules MANA grew in R2. The rules are MANA's, grown from its own
+    experience with T4 in none of it; the look is written by hand. So
+    this is not N3: the selection that made the difference was not
+    constructed by MANA. It is what N3 was missing before it could start
+    -- a construct in the meta-language, shown to be worth finding, by
+    the core, on fresh seeds. The run took 1 293 s, 391 of them to rebuild
+    A'; wall time per arm was not recorded.
+
 Steps
 -----
     1  language, edit search, description length; worlds W0 and W3

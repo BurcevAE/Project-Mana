@@ -64,6 +64,12 @@ without "add a condition". A look of the first 256 then solved T4 on 9 of
 10 by 400k against R1's 4, and so did the look through A' with its grown
 move taken out; through R2b', the same move with the width kept, 0. The
 width of the look decided, not the move.
+
+P2c, declared before the run and measured 2026-09-14
+(scripts/run_look_claim.py): on fresh seeds core.gates ACCEPTED the look
+through A' as a better search for T4 at 400k (dev 0.37 -> 0.90, hidden
+0.27 -> 0.83, no counterexample in 60) and REJECTED the look without the
+move on 9 counterexamples in the family.
 """
 from __future__ import annotations
 
