@@ -748,6 +748,74 @@ N3, probe P1, measured 2026-09-14
     future. The finding of P1 is where the gap is: not in deciding about
     sets, but in not being able to look at what a state becomes.
 
+N3, probe P1b, predicted before the run (2026-09-14; scripts/run_p1b.py)
+----------------------------------------------------------------------
+    P1 again, with the operation it left out restored: a state's
+    successors under the policy's rules. Its price fixed before the run:
+    every successor a selection looks at is evaluated like any program,
+    in the search's own budget, and can be the answer. The diagnostic,
+    written by hand: keep the best by score; then, three times, of the
+    first M by score (M = 32, 256), the state whose best successor is
+    best. Not a decision about a set -- a score of one state that reads
+    its future.
+
+    Predicted: no reversals -- it is a ranking of states, if one R1's
+    language cannot write. On T4 no better than R1's 4 of 10: the state
+    that leads to the rule ranks 234th to 987th by score in round 1, so
+    it is outside the first 32 on every seed and inside the first 256 on
+    two (seeds 2 and 8); and a look costs the state's neighbourhood,
+    about 6 000 programs, 5 800 of them wrappings in a condition -- 256
+    looks are more than the whole budget of 800k in round 1, so M = 256
+    stops after one round, and from that state the rule is three plain
+    edits away, not one. The others: below R1 at equal budget, the looking
+    spending what R1 spends on its next rounds. If so, P1b says the
+    future is expressible and, at its honest price, unaffordable for the
+    states that matter: they are hundreds deep, and seeing one step ahead
+    of each costs the whole neighbourhood. What would make it cheap is a
+    narrower neighbourhood -- R2 found MANA dropping "add a condition"
+    when its experience allowed -- or knowing where to look, which is what
+    the pin of step 6's control was.
+
+N3, probe P1b, measured 2026-09-14
+----------------------------------------------------------------------
+    A first run measured a flaw of the interpreter, not the idea:
+    successors a selection looked at were evaluated, and when a kept state
+    made them again the next round skipped them as seen -- they never
+    entered any pool. Fixed (policy.run: what was looked at is offered
+    when a kept state makes it, evaluated once, counted once), a test
+    added, and run again. The figures are from the second run.
+
+    of what kind: no reversals for either look (0 of 3 rounds each), R1
+        none -- a score of one state, if one reading its future
+    solved at 800k                  T4 (of 10)   the other six (of 60)
+        R1                               4              40
+        look, first 32                   0              29
+        look, first 256                  0              20
+    budget spent looking: 98% and 100%; rounds run, median: 2 and 1 (R1 6)
+    the state step 6's control kept, in round 1 of T4: in the pool, never
+        kept -- 232nd to 986th by score, outside the first 32 on every
+        seed, inside the first 256 on two (232nd, 238th), where 256 looks
+        of about 6 000 programs each had spent the whole budget before
+        they reached it
+
+    Every prediction held, and T4 went further than "no better than 4":
+    it fell to 0. The future is expressible -- successors in the language
+    make a score no present quantity can write -- and at its honest price
+    it is unaffordable for the states that matter: the one that leads to
+    T4's rule is hundreds deep, and a look one step ahead of each state
+    costs its whole neighbourhood, 5 800 of 6 000 of it wrappings in a
+    condition.
+
+    P1 and P1b together, the existence probes N3 was to start from: in a
+    language made only of the interpreter's operations, both new kinds of
+    construct can be written -- a decision about the set, a score of the
+    future -- and none of the natural ones written by hand beats R1. So
+    there is no existence proof of a useful construct in this language at
+    this cost, and by the rule fixed with the user an N3 search over it
+    would search a space in which nothing useful was shown to lie. What
+    the probes point at instead is the price of a look: the width of the
+    neighbourhood, set by the rules, not by any selection.
+
 Steps
 -----
     1  language, edit search, description length; worlds W0 and W3

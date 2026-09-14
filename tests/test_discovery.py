@@ -732,3 +732,49 @@ def test_the_selection_language_cannot_see_the_worlds():
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             named = [getattr(node, "module", "") or ""] + [a.name for a in node.names]
             assert not any("worlds" in name for name in named)
+
+
+def test_looking_ahead_is_paid_for_in_the_search_budget():
+    from mana.discovery import policy as P
+    from mana.discovery import selection
+
+    split = W0.split(200, 50, seed=0)
+    found = P.run(P.with_budget(P.with_selection(P.CURRENT, selection.look(8)), 20000),
+                  split.train, split.train_outcomes)
+    assert found.looked > 0 and found.evaluations <= 20000
+
+
+def test_a_score_that_reads_the_future_is_still_a_ranking_of_states():
+    from mana.discovery import selection
+
+    class Ahead(_Toy):
+        children = {"a": ["x"], "b": ["y"], "c": ["z"], "d": [], "e": ["w"], "f": ["v"]}
+        later = {"x": 9, "y": 1, "z": 2, "w": 8, "v": 7}
+
+        def score(self, p):
+            return self.table[p][0] if p in self.table else self.later[p]
+
+        def successors(self, p):
+            return self.children[p]
+
+    toy = Ahead({"a": (1, [1, 1, 0, 0]), "b": (2, [1, 1, 0, 0]), "c": (5, [0, 0, 1, 0]),
+                 "d": (6, [0, 0, 0, 1]), "e": (3, [1, 0, 0, 0]), "f": (4, [0, 0, 1, 1])})
+    pool = list(toy.table)
+    kept = selection.choose(selection.look(6), pool, toy)
+    assert kept == ["a", "b", "c", "f"]            # best, then by best successor
+    assert not selection.reversals(selection.look(6), pool, toy)
+
+
+def test_what_a_selection_looked_at_is_offered_when_a_kept_state_makes_it():
+    """Found by P1b's first run: successors looked at were evaluated, and
+    then never in any pool -- a kept state made them again and they were
+    skipped as seen. The next round's pool must hold them."""
+    from mana.discovery import policy as P
+    from mana.discovery import selection
+
+    split = W0.split(200, 50, seed=0)
+    rounds = []
+    P.run(P.with_budget(P.with_selection(P.CURRENT, selection.look(8)), 40000),
+          split.train, split.train_outcomes, log_rounds=rounds)
+    pool, kept = rounds[1]
+    assert len(pool) > len(rounds[0][1])           # more than the kept leaves

@@ -97,6 +97,9 @@ class Found:
     #: Seconds a selection program of the policy interpreter spent choosing
     #: (P1): the work of the frontier itself, apart from evaluating programs.
     selection_seconds: float = 0.0
+    #: Programs a selection evaluated while looking ahead (P1b), inside
+    #: `evaluations`, not beside it.
+    looked: int = 0
 
     @property
     def status(self) -> str:

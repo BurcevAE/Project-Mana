@@ -70,7 +70,7 @@ from .search import (BUDGET, MAX_ROUNDS, MAX_SIZE, PATIENCE, SEARCH_EXHAUSTED, S
                      Found, vocabulary)
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.2"
+__version__ = "1.3"
 
 PARAM = "param"
 
@@ -213,8 +213,30 @@ def run(policy: SearchPolicy, columns, outcomes, profile: bool = False,
         return (value[p], size(p), show(p))
 
     k = policy.selection.keep
-    context = _Context(evaluator, actual, lambda p: value[p])
-    timing = {"selection": 0.0}
+    looked: Dict[Program, List[Program]] = {}
+    #: Programs first evaluated by a selection looking ahead, not yet in any
+    #: pool: made, like the round's own, when a kept state makes them again.
+    pending: set = set()
+    timing = {"selection": 0.0, "looked": 0}
+
+    def expand(state: Program) -> List[Program]:
+        # A selection looking ahead evaluates what it looks at, in the
+        # search's own budget: nothing it sees is free.
+        if state in looked:
+            return looked[state]
+        children: List[Program] = []
+        for q in successors(policy, state, leaves, conditions):
+            if q not in seen:
+                if len(seen) >= policy.budget:
+                    break
+                seen[q] = score(q)
+                timing["looked"] += 1
+                pending.add(q)
+            children.append(q)
+        looked[state] = children
+        return children
+
+    context = _Context(evaluator, actual, lambda p: value[p], expand)
 
     def select(pool) -> List[Program]:
         if policy.selection.program is None:
@@ -241,6 +263,13 @@ def run(policy: SearchPolicy, columns, outcomes, profile: bool = False,
         for p in beam:
             for q in successors(policy, p, leaves, conditions):
                 if q in seen:
+                    # Looked at already, and made now by a kept state: it
+                    # enters the pool, evaluated once, counted once.
+                    if q in pending:
+                        pending.discard(q)
+                        fresh.append(q)
+                        if trace:
+                            parent.setdefault(q, p)
                     continue
                 if len(seen) >= policy.budget:
                     break
@@ -278,19 +307,26 @@ def run(policy: SearchPolicy, columns, outcomes, profile: bool = False,
                  termination=SEARCH_EXHAUSTED if exhausted else SEARCH_LIMIT,
                  seconds=time.time() - started,
                  train_errors=int(np.count_nonzero(evaluator(best) != actual)),
-                 anytime=anytime, selection_seconds=selection_seconds)
+                 anytime=anytime, selection_seconds=selection_seconds,
+                 looked=timing["looked"])
 
 
 class _Context:
     """What a selection program may read of a state -- what the
     interpreter computes anyway."""
 
-    def __init__(self, evaluator: Evaluator, actual: np.ndarray, score) -> None:
+    def __init__(self, evaluator: Evaluator, actual: np.ndarray, score, expand=None) -> None:
         self.evaluator = evaluator
         self.actual = actual
         self.score = score
         self.points = len(actual)
         self._right: Dict[Program, np.ndarray] = {}
+        self._expand = expand
+
+    def successors(self, p: Program) -> List[Program]:
+        if self._expand is None:
+            raise ValueError("this context cannot look ahead")
+        return self._expand(p)
 
     def fresh_round(self) -> None:
         self._right = {}
@@ -326,7 +362,15 @@ def selection_context(policy: SearchPolicy, columns, outcomes) -> _Context:
                 + description.error_bits(predicted, actual, alphabet, known) * w[1]
                 + size(p) * w[2] + wrong * w[3])
 
-    return _Context(evaluator, actual, score)
+    leaves, conditions = vocabulary(columns, actual)
+    made: Dict[Program, List[Program]] = {}
+
+    def expand(p: Program) -> List[Program]:
+        if p not in made:
+            made[p] = list(dict.fromkeys(successors(policy, p, leaves, conditions)))
+        return made[p]
+
+    return _Context(evaluator, actual, score, expand)
 
 
 def with_selection(policy: SearchPolicy, program: tuple) -> SearchPolicy:

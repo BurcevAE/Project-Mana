@@ -23,6 +23,12 @@ The language -- every operation is one the interpreter already performs:
     vectors       pointwise and, or, not, not-equal, and a count: the same
                   pointwise operations the DSL evaluator is made of
                   (cmp, if); and the or of where a collection is right
+    successors    a state's successors under the policy's rules -- what the
+                  interpreter makes of it every round, and the one
+                  operation that reaches a state's future. Left out of P1 by
+                  mistake, restored in P1b. Every successor a selection
+                  looks at is evaluated like any program, counted in the
+                  same budget, and can be the answer
 
 R1's selection is the program `take 4 (order by score (pool))`, and it
 reproduces the search exactly. The two programs of another kind below are
@@ -43,6 +49,14 @@ that leads to T4's rule is set apart by where it leads, not by what it
 gets right; this language reads only the present of a state. One of the
 interpreter's operations was left out of it -- making a state's
 successors -- and it is the only one that reaches a state's future.
+
+P1b, measured 2026-09-14 (scripts/run_p1b.py), with successors restored
+and every look paid for in the search's budget: a look one step ahead of
+the first 32 or 256 states is a score of one state (no reversals), and
+it spent 98-100% of the budget looking -- T4 0 of 10, the other six 29
+and 20 of 60, against R1's 4 and 40. The state that leads to T4's rule
+was in the pool and never kept: hundreds deep by score, and a look costs
+a whole neighbourhood of about 6 000 programs.
 """
 from __future__ import annotations
 
@@ -51,7 +65,7 @@ from typing import Dict, List, Optional
 import numpy as np
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 S, KEPT, T = ("var", "s"), ("var", "kept"), ("var", "t")
 POOL = ("pool",)
@@ -91,6 +105,20 @@ DIVERSE = ("iterate", 3, _BEST,
                                                           ("answers", T)))))),
                                     ("score", S)),
                         ("without", POOL, KEPT))))))
+
+
+def look(shortlist: int) -> tuple:
+    """Hand-written, a diagnostic (P1b). Keep the best by score; then,
+    three times, of the first `shortlist` by score, the state whose best
+    successor is best. A score of one state that reads its future -- not a
+    decision about the set."""
+    return ("iterate", 3, _BEST,
+            ("lambda", "kept",
+             ("append", KEPT,
+              ("first", ("sort", key(("min_over", ("successors", S),
+                                      ("lambda", "t", ("score", T))),
+                                     ("score", S)),
+                         ("without", ("take", shortlist, ("sort", by_score(), POOL)), KEPT))))))
 
 
 def size_of(program) -> int:
@@ -202,7 +230,9 @@ class _Run:
                 local = dict(env)
                 local[param] = t
                 values.append(self.ev(body, local))
-            return min(values) if values else 0
+            return min(values) if values else float("inf")
+        if kind == "successors":
+            return ctx.successors(self.ev(e[1], env, memo, bound))
         if kind == "const":
             return e[1]
         raise ValueError(f"unknown operation {kind!r}")
