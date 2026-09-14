@@ -658,6 +658,36 @@ Stage R2c, declared before the run (2026-09-14; scripts/run_speed_claim.py)
     one way; no counterexample (W0, W3, W4 at 100k: 28 against 20 in R2b);
     the transfer claim not shown -- T4 at 100k is at 0 or 1 of 10 for both.
 
+Stage R2c, measured 2026-09-14 (declared in commit c1f85f6, before the run)
+----------------------------------------------------------------------
+    The generator rebuilt R2b's change exactly, from R2b's experience.
+
+    solved at 100k               old   new
+        dev pairs, T1..T3 s30-39    6    13   (of 30)
+        hidden, T1..T3 s40-49       5    15   (of 30)
+        W0, W3, W4 s20-29          20    23   (of 30)
+        T4 s10-19                   0     0   (of 10)
+
+    core.gates: R2c-speed ACCEPTED -- McNemar b = 0, c = 7, p = 0.023;
+    hidden 0.17 -> 0.50; no counterexample in 30. R2c-speed-transfer
+    REJECTED on transfer (T4 0.0 -> 0.0).
+
+    Predicted rightly: accepted, and transfer not shown. Smaller than
+    R2b's curves promised on their seeds (22 against 6 there, 13 against
+    6 here): the gain measured on the seeds it was first seen on was
+    partly those seeds, which is why the claim had to be made again on
+    new ones.
+
+    The first change of its own search MANA has made that the immutable
+    core accepted: built from its own experience by a principle nobody
+    turned into a list of changes, declared before it was measured,
+    judged on seeds no run had touched, with nothing it used to answer
+    lost. What it is, said plainly: a faster search for questions like
+    the ones it learnt from -- the move it grew made a rule, and two rules
+    that experience never used were dropped -- inside the language of
+    policies R1 wrote. It does not carry to T4, and it does not change
+    that language.
+
 Steps
 -----
     1  language, edit search, description length; worlds W0 and W3
