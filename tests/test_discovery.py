@@ -812,3 +812,21 @@ def test_a_look_makes_successors_with_the_rules_it_is_given_and_pays_for_them():
     assert len(ctx.successors(p)) < len(set(P.successors(P.CURRENT, p, leaves, conditions)))
     found = P.run(policy, split.train, split.train_outcomes)
     assert found.looked > 0 and found.evaluations <= 20000
+
+
+def test_round_0_is_logged_as_the_pool_it_was_chosen_from_when_the_selection_looks_ahead():
+    """Found by P2d: the log of round 0 took in every successor a looking
+    selection evaluated while it chose, so its choice could not be
+    recomputed from the log."""
+    from mana.discovery import policy as P
+    from mana.discovery import selection
+
+    split = W0.split(200, 50, seed=0)
+    leaves, _ = discovery.vocabulary(split.train, split.train_outcomes)
+    policy = P.with_budget(P.with_ahead(P.with_selection(P.CURRENT, selection.look(8)),
+                                        P.without(P.CURRENT, "add a condition").rules), 20000)
+    rounds = []
+    P.run(policy, split.train, split.train_outcomes, log_rounds=rounds)
+    assert set(rounds[0][0]) == set(leaves)
+    ctx = P.selection_context(policy, split.train, split.train_outcomes)
+    assert selection.choose(selection.look(8), rounds[0][0], ctx) == list(rounds[0][1])

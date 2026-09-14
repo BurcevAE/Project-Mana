@@ -1033,6 +1033,76 @@ N3, P2d, predicted before the run (2026-09-14; scripts/run_look_anatomy.py)
          entry of the Journal, the cost of an experiment on a method,
          predicted against actual -- about other objects in another world
 
+N3, P2d, first pass, measured 2026-09-14
+----------------------------------------------------------------------
+    Solved 27 and 28 of 30, as in P2c. Each round's choice, recomputed from
+    the log, agreed with what the run kept in 95 of 128 rounds (A') and 91
+    of 122 (no move). A check of the second pass's code, on W0, named most
+    of it before that pass ran: policy.run logged round 0's pool after the
+    selection had chosen from it -- with every successor a look had
+    evaluated meanwhile. Fixed (round 0 logs the leaves it chose from; the
+    search is unchanged), a test added. Every round-0 figure below was
+    taken against that pool -- the ranks and twins of the 90 leaves picked
+    in round 0, and the shortlists where the state a look's answer came
+    from was sought -- and the second pass takes them again.
+
+      1  The picks lie near the top, not deep: rank by score, median 14
+         and 10 of 256; a third outside the first 32 (131 of 384, 115 of
+         366). 90 of them are leaves, in round 0; after it, conditions --
+         if(v < w, a, b) and conditions inside conditions. A pick's own
+         score is a median 63 bits worse than the round's best; its look
+         gains a median 147 and 139 bits, against 18 and 20 over the whole
+         shortlist. Its best successor is made by "combine with a leaf" --
+         324 of 384 through A' (the move 50), 360 of 366 without it.
+         Predicted wrongly: the depth, and the move.
+      2  Twins -- the same shape, one leaf other, dropped: 2 494 and 2 411
+         pairs. Own score, twin minus pick: median +9.8 and +10.8 bits;
+         the look: median +101 and +94. A quarter of the pairs (690, 599)
+         are within 10 bits by their own score and more than 50 apart by
+         the look; in 16% and 13% the twin is better by its own score. So
+         the state's present points the same way as the look, weakly --
+         the look separates ten times more. The sharpest: if(2 < x, y, z),
+         87th, picked, sees if(2 < |x - y|, y, z), T4's rule; its twin
+         if(y < x, y, z), 4th and 60 bits better by its own score, is
+         dropped, its look 242 bits worse. Held in the median for A' (9.8
+         bits), not quite without the move (10.8).
+      3  Through A': of 27 answers 26 made inside a look -- 19 looking at a
+         state then picked, 7 at one not picked -- and 1 through a pick on
+         another way; none through the successor a pick was seen to have.
+         Without the move: 28 of 28 inside a look, 17 and 11. Predicted
+         wrongly: half, and at most three.
+    And a correction to P2's reading. P2 counted "made by a look" on the
+    answer a run returned at 800k -- 1 of 9 without the move -- and read
+    from it that the search's own rounds finished T4's rule. Here, at the
+    400k where the claim was made, the answers are made by the look. What
+    this pass does not tell apart is question 3 itself: how the state a
+    look finished from was reached -- through earlier picks, or by the
+    search's own ranking.
+
+N3, P2d, second pass, predicted before the run (2026-09-14)
+----------------------------------------------------------------------
+    The same diagnostic, the same seeds, and for each solved run the first
+    program to grade exact, not the one returned; the state a look made it
+    from, and how the rounds reached that state -- back through the logged
+    pools, each program to a state kept the round before that makes it by
+    the search's own rules; and where the recomputed choice departs from
+    the kept one. Also P2's seeds, T4 0..9 at 800k, both looks.
+
+    Predicted:
+      the departures  with round 0 logged as chosen, only the last round,
+                      where the budget ran out in the middle of a look --
+                      at most one a run
+      first answer    made only by a look in at least 25 of 27 and 26 of
+                      28 solved runs
+      its state       reached by the rounds through at least one earlier
+                      pick of the look in two runs of three or more: the
+                      look both keeps the way and finishes it; through
+                      best-by-score states alone in the rest
+      P2's seeds      the first exact answer made inside a look; the one
+                      returned at 800k made by the rounds in most runs
+                      without the move, as P2 counted -- two statistics of
+                      two different answers
+
 Steps
 -----
     1  language, edit search, description length; worlds W0 and W3

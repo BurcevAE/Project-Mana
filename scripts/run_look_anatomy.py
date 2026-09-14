@@ -7,6 +7,7 @@ through the rules of A') and the look without the move, on T4 seeds
 choice is then recomputed from the log -- the same program, the same
 rules -- and checked against what the run kept.
 
+First pass:
 1  which states the look keeps: the three it picks each round from the
    first 256 -- their rank by score, their shape, how much better their
    best successor is, and which rule makes it
@@ -18,6 +19,14 @@ rules -- and checked against what the run kept.
    another way; or through no pick at all
 (4, what MANA's experience holds, is read from the code; see the package
 docstring.)
+
+Second pass, added after the first: for each solved run the first program
+to grade exact, not only the one returned; whether it was made by the
+search's rounds (it stands in some logged pool) or only by a look; the
+state a look made it from; and how the rounds reached that state -- back
+through the logged pools, each program to a state kept the round before
+that makes it by the search's own rules. Where a recomputed choice departs
+from the kept one. And P2's seeds, T4 0..9 at 800k.
 
     python -X utf8 scripts/run_look_anatomy.py [workers]
 """
@@ -42,10 +51,12 @@ from mana.discovery import policy as P  # noqa: E402
 from mana.discovery import reflect  # noqa: E402
 from mana.discovery import search as discovery  # noqa: E402
 from mana.discovery import selection  # noqa: E402
-from mana.discovery.language import CONST, GET, children, show, size  # noqa: E402
+from mana.discovery.language import CONST, GET, children, show  # noqa: E402
 
 SEEDS = range(20, 50)
 BUDGET = 400000
+#: P2's seeds and budget, to set this pass beside P2's counts.
+P2_SEEDS, P2_BUDGET = range(10), 800000
 M = 256
 INSIDE, SEEN, OTHER, NONE, UNSOLVED = ("внутри взгляда", "через увиденного наследника",
                                        "из выбранной точки другим путём", "мимо выбранных",
@@ -69,13 +80,18 @@ def twins(p, q) -> bool:
 
 
 def job(args):
-    arm, rules, seed = args
+    arm, rules, seed, budget = args
     world = R2.ALL["T4"]
     split = world.split(200, 300, seed)
-    policy = P2.arm_policy((selection.look(M), rules), BUDGET)
+    policy = P2.arm_policy((selection.look(M), rules), budget)
     rounds = []
-    found = P.run(policy, split.train, split.train_outcomes, trace=True, log_rounds=rounds)
-    solved = world.grade(lambda cols: discovery.predict(found.program, cols)) == 1.0
+    found = P.run(policy, split.train, split.train_outcomes, profile=True, trace=True,
+                  log_rounds=rounds)
+
+    def exact(p):
+        return world.grade(lambda cols: discovery.predict(p, cols)) == 1.0
+
+    solved = exact(found.program)
     ctx = P.selection_context(policy, split.train, split.train_outcomes)
     ahead = P._ahead(policy)
     leaves, conditions = discovery.vocabulary(split.train, split.train_outcomes)
@@ -91,9 +107,15 @@ def job(args):
         b = min(made, key=order)
         return b, score(b)
 
-    agree, picks, pairs, gains, roles, looked = 0, [], [], [], {}, []
+    agree, departed, picks, pairs, gains, roles, looked = 0, [], [], [], [], {}, []
+    made_round = {}
     for r, (pool, beam) in enumerate(rounds):
-        agree += selection.choose(policy.selection.program, pool, ctx) == list(beam)
+        for p in pool:
+            made_round.setdefault(p, r)
+        if selection.choose(policy.selection.program, pool, ctx) == list(beam):
+            agree += 1
+        else:
+            departed.append(r)
         short = sorted(pool, key=order)[:M]
         rank = {p: i + 1 for i, p in enumerate(short)}
         look = {p: best_of(p) for p in short}
@@ -118,6 +140,10 @@ def job(args):
                               "rank": (rank.get(p, 0), rank[q]), "pick": show(p), "twin": show(q),
                               "seen": show(b) if b else "", "twin seen": show(bq) if bq else "",
                               "solved": solved})
+
+    def picked(p):
+        return any(role == "look" for _, role, _ in roles.get(p, []))
+
     derivation = found.derivation
     after, maker_picked = None, None
     if not solved:
@@ -127,12 +153,10 @@ def job(args):
         for r, short in enumerate(looked):
             makers = [p for p in short if found.program in ctx.successors(p)]
             if makers:
-                maker_picked = any(any(role == "look" for _, role, _ in roles.get(p, []))
-                                   for p in makers)
+                maker_picked = any(picked(p) for p in makers)
                 break
     else:
-        on = [(i, s) for i, s in enumerate(derivation)
-              if any(role == "look" for _, role, _ in roles.get(s, []))]
+        on = [(i, s) for i, s in enumerate(derivation) if picked(s)]
         if not on:
             kind = NONE
         else:
@@ -141,11 +165,60 @@ def job(args):
             following = derivation[i + 1] if i + 1 < len(derivation) else None
             kind = SEEN if following == seen else OTHER
             after = len(derivation) - 1 - i
-    path = " -> ".join(show(p) + ("[взгляд]" if any(role == "look" for _, role, _ in roles.get(p, []))
-                                  else "[лучшее]" if p in roles else "")
+    path = " -> ".join(show(p) + ("[взгляд]" if picked(p) else "[лучшее]" if p in roles else "")
                        for p in derivation)
+
+    # -- second pass ---------------------------------------------------------
+    made_by = {}
+
+    def chain_of(s):
+        """How the rounds reached s: back through the logged pools, each
+        program to a state kept the round before that makes it by the
+        search's own rules."""
+        out = [s]
+        while made_round.get(s, 0) > 0:
+            parent = None
+            for k in rounds[made_round[s] - 1][1]:
+                if k not in made_by:
+                    made_by[k] = set(P.successors(P.CURRENT, k, leaves, conditions))
+                if s in made_by[k]:
+                    parent = k
+                    break
+            if parent is None:
+                out.append(None)
+                break
+            out.append(parent)
+            s = parent
+        return list(reversed(out))
+
+    first = next((p for _, p, _ in found.anytime if exact(p)), None)
+    second = None
+    if first is not None:
+        by_look = first not in made_round and first not in leaves
+        maker = None
+        if by_look:
+            for r, short in enumerate(looked):
+                makers = [p for p in short if first in ctx.successors(p)]
+                if makers:
+                    maker = next((p for p in makers if picked(p)), makers[0])
+                    break
+            chain = chain_of(maker) if maker is not None else [None]
+        else:
+            chain = chain_of(first)[:-1]
+        through = [p for p in chain if p is not None and picked(p)]
+        if by_look and maker is not None and picked(maker):
+            through = [p for p in through if p != maker]
+        second = {"by look": by_look, "maker": maker is not None,
+                  "maker picked": bool(maker is not None and picked(maker)),
+                  "broken": None in chain, "through picks": len(through),
+                  "chain": " -> ".join("?" if p is None else show(p)
+                                       + ("[взгляд]" if picked(p) else "[лучшее]" if p in roles else "")
+                                       for p in chain)
+                  + (f" => {show(first)}" if by_look else f" -> {show(first)}"),
+                  "returned by look": found.program not in made_round and found.program not in leaves}
+    cut = found.evaluations >= budget
     return (arm, seed, solved, agree, len(rounds), picks, pairs, gains, kind, after,
-            maker_picked, path)
+            maker_picked, path, departed, cut, second, budget)
 
 
 def q(values, share):
@@ -167,20 +240,31 @@ def main() -> None:
         narrow = change.after.rules
         arms = {"взгляд A'": narrow,
                 "без хода": tuple(r for r in narrow if not r.name.startswith("grown"))}
-        runs = list(pool.map(job, [(a, rules, s) for a, rules in arms.items() for s in SEEDS]))
+        jobs = [(a, rules, s, BUDGET) for a, rules in arms.items() for s in SEEDS]
+        jobs += [(a, rules, s, P2_BUDGET) for a, rules in arms.items() for s in P2_SEEDS]
+        runs = list(pool.map(job, jobs))
     print(f"всего {time.time() - started:.0f}с")
     for arm in arms:
-        mine = [r for r in runs if r[0] == arm]
+        mine = [r for r in runs if r[0] == arm and r[15] == BUDGET]
         picks = [p for r in mine for p in r[5]]
+        later_picks = [p for p in picks if p["round"] > 0]
         pairs = [p for r in mine for p in r[6]]
         gains = [g for r in mine for g in r[7]]
         print(f"\n===== {arm}: решено {sum(r[2] for r in mine)}/{len(mine)}; выбор, пересчитанный "
               f"по логу, совпал в {sum(r[3] for r in mine)} раундах из {sum(r[4] for r in mine)}")
+        at_end = [(r[1], d) for r in mine for d in r[12] if r[13] and d == r[4] - 1]
+        elsewhere = [(r[1], d, r[4] - 1, r[13]) for r in mine for d in r[12]
+                     if not (r[13] and d == r[4] - 1)]
+        print(f"     расхождения: в последнем раунде, срезанном бюджетом, {len(at_end)}; "
+              f"иначе {len(elsewhere)} (сид, раунд, последний, срезан): {elsewhere}")
         print("  1. кого берёт взгляд")
         print(f"     выбранных {len(picks)}; место по оценке: мин {q([p['rank'] for p in picks], 0)}, "
               f"25% {q([p['rank'] for p in picks], .25)}, мед {q([p['rank'] for p in picks], .5)}, "
               f"75% {q([p['rank'] for p in picks], .75)}, макс {q([p['rank'] for p in picks], 1)}; "
               f"вне первых 32: {sum(p['rank'] > 32 for p in picks)}")
+        print(f"     после раунда 0 ({len(later_picks)}): место мед "
+              f"{q([p['rank'] for p in later_picks], .5)}, 75% {q([p['rank'] for p in later_picks], .75)}; "
+              f"вне первых 32: {sum(p['rank'] > 32 for p in later_picks)}")
         print(f"     хуже лучшего состояния раунда, бит (мед): {q([p['above'] for p in picks], .5):.1f}")
         print(f"     выигрыш взгляда, бит (своя оценка − оценка лучшего наследника): выбранные мед "
               f"{q([p['gain'] for p in picks], .5):.1f}; весь список 256 мед {q(gains, .5):.1f}, "
@@ -205,7 +289,7 @@ def main() -> None:
                 print(f"       выбран  {p['pick']} (место {p['rank'][0]}) -> видит {p['seen']}")
                 print(f"       близнец {p['twin']} (место {p['rank'][1]}, своя {p['own']:+.1f}, "
                       f"взгляд {p['look']:+.1f}) -> видит {p['twin seen']}")
-        print("  3. как получен ответ")
+        print("  3. как получен возвращённый ответ")
         kinds = Counter(r[8] for r in mine)
         print(f"     {kinds.most_common()}")
         inside = [r for r in mine if r[8] == INSIDE]
@@ -219,6 +303,27 @@ def main() -> None:
         for kind in (SEEN, OTHER, NONE):
             for r in [r for r in mine if r[8] == kind][:2]:
                 print(f"       {kind}, сид {r[1]}: {r[11]}")
+        print("  3'. первый точный ответ прогона (второй проход)")
+        firsts = [r[14] for r in mine if r[14] is not None]
+        look_made = [s for s in firsts if s["by look"]]
+        print(f"     первых точных {len(firsts)}: сделан только взглядом {len(look_made)}, "
+              f"раундами {len(firsts) - len(look_made)}")
+        print(f"     сделан взглядом: точка взгляда выбрана {sum(s['maker picked'] for s in look_made)}, "
+              f"не выбрана {sum(s['maker'] and not s['maker picked'] for s in look_made)}, "
+              f"точка не найдена {sum(not s['maker'] for s in look_made)}")
+        print(f"     путь раундов к точке (к ответу, если его сделали раунды) проходит через ранее "
+              f"выбранные взглядом: {sum(s['through picks'] > 0 for s in firsts)} из {len(firsts)}; "
+              f"путь не восстановлен: {sum(s['broken'] for s in firsts)}")
+        for s in [s for s in look_made if s["through picks"] > 0][:2] + \
+                 [s for s in look_made if s["through picks"] == 0][:2]:
+            print(f"       {s['chain']}")
+    print("\n===== сверка с P2: T4 сиды 0..9, 800k")
+    for arm in arms:
+        mine = [r for r in runs if r[0] == arm and r[15] == P2_BUDGET]
+        firsts = [r[14] for r in mine if r[14] is not None]
+        print(f"  {arm}: решено {sum(r[2] for r in mine)}; первый точный сделан взглядом "
+              f"{sum(s['by look'] for s in firsts)} из {len(firsts)}; возвращённый при 800k сделан "
+              f"взглядом {sum(s['returned by look'] for s in firsts)} из {len(firsts)}")
 
 
 if __name__ == "__main__":

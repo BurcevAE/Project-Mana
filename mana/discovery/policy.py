@@ -70,7 +70,7 @@ from .search import (BUDGET, MAX_ROUNDS, MAX_SIZE, PATIENCE, SEARCH_EXHAUSTED, S
                      Found, vocabulary)
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.4"
+__version__ = "1.5"
 
 PARAM = "param"
 
@@ -255,9 +255,12 @@ def run(policy: SearchPolicy, columns, outcomes, profile: bool = False,
 
     for leaf in leaves:
         seen[leaf] = score(leaf)
-    beam = select(list(seen))
+    # Round 0's pool is the leaves. What a selection looking ahead evaluates
+    # while it chooses is not in it (P2d found the log taking it in).
+    start = list(seen)
+    beam = select(start)
     if log_rounds is not None:
-        log_rounds.append((list(seen), list(beam)))
+        log_rounds.append((start, list(beam)))
     best = shortest["program"]
     history = [(0, seen[best][0], show(best))]
     stalled = 0
