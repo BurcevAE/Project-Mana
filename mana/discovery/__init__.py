@@ -642,6 +642,22 @@ Stage R2b, measured 2026-09-14
     looked at; choosing 100k now, after seeing the curves, is the thing
     the gates exist to refuse.
 
+Stage R2c, declared before the run (2026-09-14; scripts/run_speed_claim.py)
+----------------------------------------------------------------------
+    The claim, fixed here before anything is run: the policy MANA built in
+    R2b solves more questions of its family within 100 000 programs than
+    the policy it replaced. Evidence on seeds no run has touched: 30 dev
+    pairs, T1..T3 seeds 30..39; hidden, T1..T3 seeds 40..49;
+    counterexamples, W0, W3, W4 seeds 20..29; transfer, a separate claim,
+    T4 seeds 10..19. Verdict: core.gates.judge, as it stands. The policy
+    is not written by hand: the same generator rebuilds it from the same
+    experience, and the run stops if the change differs from R2b's.
+
+    Predicted: ACCEPTED -- at 100k R2b's curves stood at 22 of 30 against
+    6 and 17 against 7, so discordant pairs well over McNemar's floor, all
+    one way; no counterexample (W0, W3, W4 at 100k: 28 against 20 in R2b);
+    the transfer claim not shown -- T4 at 100k is at 0 or 1 of 10 for both.
+
 Steps
 -----
     1  language, edit search, description length; worlds W0 and W3
