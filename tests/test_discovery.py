@@ -325,3 +325,78 @@ def test_without_a_profile_nothing_is_recorded():
     split = W0.split(150, 50, seed=0)
     found = discovery.search(split.train, split.train_outcomes, budget=2000)
     assert found.anytime == []
+
+
+# --------------------------------------------------------------------------
+# cells: a world one region at a time (experiments A and B)
+# --------------------------------------------------------------------------
+
+def test_where_one_model_explains_everything_no_boundary_is_drawn():
+    from mana.discovery import cells
+
+    split = W0.split(200, 50, seed=0)
+    grown = cells.adaptive(split.train, split.train_outcomes)
+    assert not grown.tree.split
+    assert W0.grade(lambda cols: discovery.predict(grown.program, cols)) == 1.0
+
+
+def test_noise_earns_no_boundary():
+    from mana.discovery import cells
+
+    split = W3.split(200, 50, seed=0)
+    grown = cells.adaptive(split.train, split.train_outcomes)
+    assert not grown.tree.split, show(grown.program)
+
+
+def test_a_rule_that_is_simple_piece_by_piece_is_found_in_pieces():
+    """|x - y| is x - y on one side of x = y and y - x on the other."""
+    from mana.discovery import cells
+    from mana.discovery.worlds import FAMILY
+
+    world = FAMILY["T1"]
+    split = world.split(200, 50, seed=0)
+    grown = cells.adaptive(split.train, split.train_outcomes)
+    assert grown.tree.split and len(grown.tree.leaves()) >= 2
+    assert world.grade(lambda cols: discovery.predict(grown.program, cols)) == 1.0
+
+
+def test_a_split_is_kept_only_where_it_shortens_the_description():
+    from mana.discovery import cells
+    from mana.discovery.worlds import FAMILY
+
+    split = FAMILY["T1"].split(200, 50, seed=0)
+    grown = cells.adaptive(split.train, split.train_outcomes)
+
+    def check(cell):
+        if cell.split:
+            # The cell's own model is kept beside its split: what it cost.
+            assert cell.bits(3) < 1.0 + cell.found.bits
+            check(cell.yes)
+            check(cell.no)
+
+    check(grown.tree)
+    assert grown.evaluations > 0 and grown.searches >= 1
+
+
+def test_a_grid_is_laid_down_before_looking():
+    from mana.discovery import cells
+
+    split = W0.split(200, 50, seed=0)
+    grown = cells.grid(split.train, split.train_outcomes, bins=2, local_budget=3000)
+    assert len(grown.tree.leaves()) == 8                    # 2 x 2 x 2
+    stitched = grown.tree.program()
+    whole = discovery.predict(stitched, split.train)
+    for cell in grown.tree.leaves():
+        assert cell.found is not None
+    assert len(whole) == len(split.train_outcomes)
+
+
+def test_cells_cannot_see_the_worlds():
+    from mana.discovery import cells
+
+    tree = ast.parse(inspect.getsource(cells))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            named = ([getattr(node, "module", "") or ""]
+                     + [alias.name for alias in node.names])
+            assert not any("worlds" in name for name in named)

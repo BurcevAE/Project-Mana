@@ -162,6 +162,28 @@ profiled run, which a test shows is exactly what a separate run returns)
         1.2M 84, 2M 94 (%).
     A mechanism earns its place only above it.
 
+Cells, measured 2026-09-14 (scripts/run_cells.py; cells.py has the table)
+----------------------------------------------------------------------
+    The world understood one region at a time: a model per cell, a cell
+    split where its model breaks and only when the split shortens the
+    description, the global hypothesis the tree stitched with if. The
+    search inside every cell is the search as it stands.
+
+    Adaptive cells (B) with a local budget of 100k reach 70% -- past the
+    narrow beam's plateau of 63% -- and where the first cut is right they
+    find the world's own pieces unasked: if(z < y, (x + y) - z,
+    (x + z) - y) on half of T2's seeds. But under the zero law they are
+    above the envelope at one budget only (69 against 63 at 800k) and
+    below the wide beam from 1.2M on. A grid laid down in advance (A) is
+    worse than no cells: 29%, 0%, 0% for 8, 27 and 100 cells.
+
+    Why: a cell makes the rule simpler, not the search for it cheaper. On
+    the points of T2's own cell the five-node (y + x) - z was first seen at
+    the 378 798th program -- an exact-match error gives x + y no credit
+    over x, and 5 814 of a leaf's 5 889 neighbours are conditions. The
+    limit is inside every cell, in the edits and the currency, not in the
+    size of the region.
+
 Steps
 -----
     1  language, edit search, description length; worlds W0 and W3
