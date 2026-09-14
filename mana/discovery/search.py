@@ -94,6 +94,9 @@ class Found:
     derivation: List[Program] = field(default_factory=list)
     #: Steps of that derivation made by a macro-edit.
     macro_steps: int = 0
+    #: Seconds a selection program of the policy interpreter spent choosing
+    #: (P1): the work of the frontier itself, apart from evaluating programs.
+    selection_seconds: float = 0.0
 
     @property
     def status(self) -> str:

@@ -70,7 +70,7 @@ from .search import (BUDGET, MAX_ROUNDS, MAX_SIZE, PATIENCE, SEARCH_EXHAUSTED, S
                      Found, vocabulary)
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.1"
+__version__ = "1.2"
 
 PARAM = "param"
 
@@ -103,6 +103,10 @@ class Selection:
     pool: str = "made+kept"
     #: The order's score on (program bits, error bits, size, wrong points).
     weights: Tuple[float, float, float, float] = (1.0, 1.0, 0.0, 0.0)
+    #: A selection program in the language of selection.py (P1). When
+    #: given, it replaces "order by score, keep the first k"; the score
+    #: above is what its `score` reads.
+    program: Optional[tuple] = None
 
 
 @dataclass(frozen=True)
@@ -167,7 +171,7 @@ def successors(policy: SearchPolicy, p: Program, leaves: Sequence[Program],
 
 
 def run(policy: SearchPolicy, columns, outcomes, profile: bool = False,
-        trace: bool = False) -> Found:
+        trace: bool = False, log_rounds: Optional[list] = None) -> Found:
     """Interpret a policy on one data set. The answer is the shortest
     description of everything evaluated, whatever the policy kept.
     `trace` returns the answer's derivation, as search.search does."""
@@ -208,10 +212,25 @@ def run(policy: SearchPolicy, columns, outcomes, profile: bool = False,
     def order(p: Program) -> Tuple[float, int, str]:
         return (value[p], size(p), show(p))
 
+    k = policy.selection.keep
+    context = _Context(evaluator, actual, lambda p: value[p])
+    timing = {"selection": 0.0}
+
+    def select(pool) -> List[Program]:
+        if policy.selection.program is None:
+            return sorted(pool, key=order)[:k]
+        began = time.time()
+        from . import selection as _selection
+        context.fresh_round()
+        chosen = _selection.choose(policy.selection.program, list(pool), context)
+        timing["selection"] += time.time() - began
+        return chosen
+
     for leaf in leaves:
         seen[leaf] = score(leaf)
-    k = policy.selection.keep
-    beam = sorted(seen, key=order)[:k]
+    beam = select(list(seen))
+    if log_rounds is not None:
+        log_rounds.append((list(seen), list(beam)))
     best = shortest["program"]
     history = [(0, seen[best][0], show(best))]
     stalled = 0
@@ -230,7 +249,9 @@ def run(policy: SearchPolicy, columns, outcomes, profile: bool = False,
                 if trace:
                     parent[q] = p
         pool = set(fresh) | set(beam) if policy.selection.pool == "made+kept" else set(fresh) or set(beam)
-        beam = sorted(pool, key=order)[:k]
+        beam = select(pool)
+        if log_rounds is not None:
+            log_rounds.append((list(pool), list(beam)))
         if seen[shortest["program"]][0] < seen[best][0] - 1e-9:
             best = shortest["program"]
             stalled = 0
@@ -242,6 +263,7 @@ def run(policy: SearchPolicy, columns, outcomes, profile: bool = False,
     bits, program_part, error_part = seen[best]
     exhausted = stalled >= policy.patience and len(seen) < policy.budget
     derivation: List[Program] = []
+    selection_seconds = timing["selection"]
     if trace:
         step = best
         while step in parent:
@@ -256,7 +278,59 @@ def run(policy: SearchPolicy, columns, outcomes, profile: bool = False,
                  termination=SEARCH_EXHAUSTED if exhausted else SEARCH_LIMIT,
                  seconds=time.time() - started,
                  train_errors=int(np.count_nonzero(evaluator(best) != actual)),
-                 anytime=anytime)
+                 anytime=anytime, selection_seconds=selection_seconds)
+
+
+class _Context:
+    """What a selection program may read of a state -- what the
+    interpreter computes anyway."""
+
+    def __init__(self, evaluator: Evaluator, actual: np.ndarray, score) -> None:
+        self.evaluator = evaluator
+        self.actual = actual
+        self.score = score
+        self.points = len(actual)
+        self._right: Dict[Program, np.ndarray] = {}
+
+    def fresh_round(self) -> None:
+        self._right = {}
+
+    def right(self, p: Program) -> np.ndarray:
+        hit = self._right.get(p)
+        if hit is None:
+            hit = self._right[p] = self.evaluator(p) == self.actual
+        return hit
+
+    def answers(self, p: Program) -> np.ndarray:
+        return self.evaluator(p)
+
+    @staticmethod
+    def tie(p: Program) -> Tuple[int, str]:
+        return (size(p), show(p))
+
+
+def selection_context(policy: SearchPolicy, columns, outcomes) -> _Context:
+    """A context like the one `run` hands a selection program, for
+    choosing again from pools a run logged."""
+    actual = np.asarray(outcomes, dtype=np.int64)
+    evaluator = Evaluator(columns)
+    variables = len(columns)
+    alphabet = description.alphabet_of(actual)
+    known = description.membership(actual)
+    w = policy.selection.weights
+
+    def score(p: Program) -> float:
+        predicted = evaluator(p)
+        wrong = int(np.count_nonzero(predicted != actual)) if w[3] else 0
+        return (description.program_bits(p, variables) * w[0]
+                + description.error_bits(predicted, actual, alphabet, known) * w[1]
+                + size(p) * w[2] + wrong * w[3])
+
+    return _Context(evaluator, actual, score)
+
+
+def with_selection(policy: SearchPolicy, program: tuple) -> SearchPolicy:
+    return _replace(policy, selection=_replace(policy.selection, program=program))
 
 
 # -- what MANA can do with a policy -----------------------------------------

@@ -688,6 +688,66 @@ Stage R2c, measured 2026-09-14 (declared in commit c1f85f6, before the run)
     policies R1 wrote. It does not carry to T4, and it does not change
     that language.
 
+N3, probe P1, predicted before the run (2026-09-14; selection.py,
+scripts/run_p1.py)
+----------------------------------------------------------------------
+    Before any search for a new construct of the policy language: can a
+    language made only of the interpreter's own operations -- collections
+    ordered, cut, repeated; a state's score, answers, and where it is
+    right; pointwise and, or, not -- say a selection of another kind than
+    R1's "order by a state's own score, keep k", and does one written by
+    hand do better? A diagnostic: the two hand-written programs --
+    coverage (keep the best, then the state right where the kept ones are
+    wrong) and diversity (keep the best, then the state whose answers
+    differ most from the kept) -- enter no N3 experiment.
+
+    Predicted: R1 written in the language is the search, bit for bit;
+    coverage and diversity are of another kind -- removing one kept state
+    changes which others are kept, in most rounds tested -- and R1 never.
+    On T4 no confident prediction, and a guess against: after the best,
+    coverage takes the leaf that is right wherever the best is wrong -- on
+    T4, y and z between them are right everywhere -- and from then on it
+    ranks by score, like R1; diversity keeps states whose answers differ,
+    garbage among them. So neither above R1's 4 of 10, diversity worse on
+    the others. If so, P1 says the language can decide about a set, but the
+    two natural decisions do not recover what the kept state recovered,
+    and what sets that state apart is still unnamed.
+
+N3, probe P1, measured 2026-09-14
+----------------------------------------------------------------------
+    of what kind (T4, rounds 1-3, one kept state removed and chosen again)
+        R1 0 rounds of 9 with a reversal; coverage 3 of 9; diversity 6 of 9
+    solved at 800k                  T4 (of 10)   the other six (of 60)
+        R1, in the language             4              40
+        coverage                        4              27
+        diversity                       0              24
+    time the selection itself took: R1 20%, coverage 60%, diversity 68%
+
+    The language can say a selection of another kind -- a decision about
+    the set that no score of a state on its own reproduces -- and R1
+    written in it is the search. But neither decision of that kind written
+    by hand does better: coverage ties R1 on T4 and loses a third of the
+    others, diversity loses T4 and more, and both spend most of the run
+    choosing. Predicted rightly on T4 and on diversity; coverage lost more
+    of the others than predicted.
+
+    What the state kept by hand in step 6's control has, read from round
+    1 of T4: coverage takes the best, then the leaf z -- right wherever
+    the best is wrong, 200 points of 200 covered after two picks -- and
+    from there it orders by score. if(x < 3, z, y) is right on 12 or 13 of
+    the points the best gets wrong, where z is right on all of them, and on
+    fewer points than y in all. It is set apart neither by what it gets
+    right nor by what it adds to the set: its worth is where it leads --
+    one move from the 66-bit rule. A selection that reads only the present
+    of the states it chooses among cannot see that.
+
+    And an omission in the probe itself, owned: the rule for the language
+    was "every operation the interpreter performs", and one of them was
+    left out -- making a state's successors, which the interpreter does
+    every round, and the only operation that relates a state to its
+    future. The finding of P1 is where the gap is: not in deciding about
+    sets, but in not being able to look at what a state becomes.
+
 Steps
 -----
     1  language, edit search, description length; worlds W0 and W3

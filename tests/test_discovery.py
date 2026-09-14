@@ -671,3 +671,64 @@ def test_the_reflecting_learner_cannot_see_the_worlds():
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             named = [getattr(node, "module", "") or ""] + [a.name for a in node.names]
             assert not any("worlds" in name for name in named)
+
+
+# --------------------------------------------------------------------------
+# N3, probe P1: a language for which states the beam keeps
+# --------------------------------------------------------------------------
+
+def test_r1_selection_written_in_the_selection_language_is_the_search():
+    from mana.discovery import policy as P
+    from mana.discovery import selection
+
+    split = W0.split(200, 50, seed=0)
+    plain = P.run(P.with_budget(P.CURRENT, 30000), split.train, split.train_outcomes,
+                  profile=True)
+    written = P.run(P.with_budget(P.with_selection(P.CURRENT, selection.R1), 30000),
+                    split.train, split.train_outcomes, profile=True)
+    assert (plain.program, plain.evaluations, plain.rounds, plain.history, plain.anytime) == \
+        (written.program, written.evaluations, written.rounds, written.history, written.anytime)
+
+
+class _Toy:
+    """Four points; states named by where they are right."""
+    points = 4
+
+    def __init__(self, table):
+        self.table = table
+
+    def score(self, p):
+        return self.table[p][0]
+
+    def right(self, p):
+        return np.array(self.table[p][1], dtype=bool)
+
+    def answers(self, p):
+        return np.array(self.table[p][1], dtype=int)
+
+    @staticmethod
+    def tie(p):
+        return (0, p)
+
+
+def test_a_selection_about_the_set_is_not_a_ranking_of_states():
+    from mana.discovery import selection
+
+    toy = _Toy({"a": (1, [1, 1, 0, 0]), "b": (2, [1, 1, 0, 0]), "c": (5, [0, 0, 1, 0]),
+                "d": (6, [0, 0, 0, 1]), "e": (3, [1, 0, 0, 0]), "f": (4, [0, 0, 1, 1])})
+    pool = list(toy.table)
+    assert selection.choose(selection.R1, pool, toy) == ["a", "b", "e", "f"]
+    assert not selection.reversals(selection.R1, pool, toy)
+    covered = selection.choose(selection.COVER, pool, toy)
+    assert covered[0] == "a" and "f" in covered
+    assert selection.reversals(selection.COVER, pool, toy)
+    assert selection.size_of(selection.R1) < selection.size_of(selection.COVER)
+
+
+def test_the_selection_language_cannot_see_the_worlds():
+    from mana.discovery import selection
+
+    for node in ast.walk(ast.parse(inspect.getsource(selection))):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            named = [getattr(node, "module", "") or ""] + [a.name for a in node.names]
+            assert not any("worlds" in name for name in named)
