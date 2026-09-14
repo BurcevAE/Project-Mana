@@ -70,7 +70,7 @@ from .search import (BUDGET, MAX_ROUNDS, MAX_SIZE, PATIENCE, SEARCH_EXHAUSTED, S
                      Found, vocabulary)
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.3"
+__version__ = "1.4"
 
 PARAM = "param"
 
@@ -107,6 +107,10 @@ class Selection:
     #: given, it replaces "order by score, keep the first k"; the score
     #: above is what its `score` reads.
     program: Optional[tuple] = None
+    #: The rules a selection program's `successors` makes a state's
+    #: successors with (P2); None: the policy's own. Whatever rules, what
+    #: it looks at is evaluated in the policy's budget.
+    ahead: Optional[Tuple[Rule, ...]] = None
 
 
 @dataclass(frozen=True)
@@ -218,6 +222,7 @@ def run(policy: SearchPolicy, columns, outcomes, profile: bool = False,
     #: pool: made, like the round's own, when a kept state makes them again.
     pending: set = set()
     timing = {"selection": 0.0, "looked": 0}
+    ahead = _ahead(policy)
 
     def expand(state: Program) -> List[Program]:
         # A selection looking ahead evaluates what it looks at, in the
@@ -225,7 +230,7 @@ def run(policy: SearchPolicy, columns, outcomes, profile: bool = False,
         if state in looked:
             return looked[state]
         children: List[Program] = []
-        for q in successors(policy, state, leaves, conditions):
+        for q in successors(ahead, state, leaves, conditions):
             if q not in seen:
                 if len(seen) >= policy.budget:
                     break
@@ -364,17 +369,30 @@ def selection_context(policy: SearchPolicy, columns, outcomes) -> _Context:
 
     leaves, conditions = vocabulary(columns, actual)
     made: Dict[Program, List[Program]] = {}
+    ahead = _ahead(policy)
 
     def expand(p: Program) -> List[Program]:
         if p not in made:
-            made[p] = list(dict.fromkeys(successors(policy, p, leaves, conditions)))
+            made[p] = list(dict.fromkeys(successors(ahead, p, leaves, conditions)))
         return made[p]
 
     return _Context(evaluator, actual, score, expand)
 
 
+def _ahead(policy: SearchPolicy) -> SearchPolicy:
+    """The policy a selection looks ahead with: its own, or its rules
+    replaced by the selection's `ahead` -- the same resources either way."""
+    rules = policy.selection.ahead
+    return policy if rules is None else _replace(policy, rules=tuple(rules))
+
+
 def with_selection(policy: SearchPolicy, program: tuple) -> SearchPolicy:
     return _replace(policy, selection=_replace(policy.selection, program=program))
+
+
+def with_ahead(policy: SearchPolicy, rules: Optional[Sequence[Rule]]) -> SearchPolicy:
+    return _replace(policy, selection=_replace(
+        policy.selection, ahead=None if rules is None else tuple(rules)))
 
 
 # -- what MANA can do with a policy -----------------------------------------

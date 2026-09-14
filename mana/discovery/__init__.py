@@ -816,6 +816,57 @@ N3, probe P1b, measured 2026-09-14
     the probes point at instead is the price of a look: the width of the
     neighbourhood, set by the rules, not by any selection.
 
+N3, probe P2, predicted before the run (2026-09-14; scripts/run_p2.py)
+----------------------------------------------------------------------
+    One change to P1b: the rules the look makes successors with. The
+    search keeps its own; the look uses a policy MANA grew -- A' of R2,
+    rebuilt by the generator from T1..T3 (the move added, "add a
+    condition" dropped), the specialist core.gates refused as a search.
+    What the look sees is still evaluated in the budget and can be the
+    answer. Controls: the look through R2b' (the same move, "add a
+    condition" kept -- as wide as the search's own), and through A'
+    without its grown rules, written by hand (narrow, no move). T4 is in
+    no experience. This asks step 6's question from the other side: the
+    move was "only as good as the states the search can stand in to use
+    it" -- can a look use it from states the beam does not hold?
+
+    Measured before the run, on R1's first round of T4 (a diagnostic,
+    with the rules as R2 and R2b logged them): a look at a typical state
+    of the first 256 costs 15 761 programs through the search's rules,
+    15 787 through R2b', 343 through A', 239 through A' without the move.
+    States one step of A' from an exact answer -- if(x < 3, z, y) and one
+    like it -- lie inside the first 256 on seeds 0, 2, 6, 8 (225th to
+    248th), inside the first 32 on none; on 2, 6, 8 the look's three picks
+    begin with them. On seed 0 the look keeps other leaves than R1 in
+    round 0, so its first round is another. R1 solves seeds 0, 2, 3, 8
+    (step 6's control), none of them by the 66-bit rule.
+
+    Predicted:
+      of what kind  no reversals in any arm: a look is a score of a state
+      look 256, A'  T4 solved on seeds 2, 6 and 8 in round 1, each answer
+                    the 66-bit rule and made only by a look, first within
+                    100k programs, not within 50k; seed 6 is one R1 does
+                    not solve. Seeds 0 and 3 open -- the beam is not R1's.
+                    In all, 3 to 5 of 10. Most of the budget spent looking
+                    (60-90%), several rounds
+      look 32, A'   no state of T4 within reach in round 1: no better than
+                    R1's 4
+      A', no move   T4 no better than R1: from those states the rule is
+                    three plain edits away, and a look sees one
+      R2b'          as P1b's look: the whole budget spent in round 1
+                    before the look reaches rank 225; T4 0
+      the other six the family's answers made by a look through the move
+                    (T1 from a leaf in round 0), far sooner than R1 --
+                    step 6's gain, the move's, not a selection's; W0, W3 as
+                    ever. The control without the move no better than R1
+    If so: a look through a narrow neighbourhood MANA grew reaches states
+    the beam drops, and uses a move there the search could not; width and
+    the move both necessary, the one without the other nothing. That is an
+    existence proof of a selection in the language that does better on T4
+    -- but narrow: it rests on the states that happen to lie in the first
+    256, three or four seeds of ten, and on a hand-written look. If T4
+    does not move, the price of a look was not the only wall.
+
 Steps
 -----
     1  language, edit search, description length; worlds W0 and W3

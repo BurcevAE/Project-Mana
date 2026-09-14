@@ -778,3 +778,37 @@ def test_what_a_selection_looked_at_is_offered_when_a_kept_state_makes_it():
           split.train, split.train_outcomes, log_rounds=rounds)
     pool, kept = rounds[1]
     assert len(pool) > len(rounds[0][1])           # more than the kept leaves
+
+
+# --------------------------------------------------------------------------
+# N3, probe P2: a look through a neighbourhood of other rules
+# --------------------------------------------------------------------------
+
+def test_a_look_through_the_policys_own_rules_is_the_look_of_p1b():
+    from mana.discovery import policy as P
+    from mana.discovery import selection
+
+    split = W0.split(200, 50, seed=0)
+    base = P.with_budget(P.with_selection(P.CURRENT, selection.look(8)), 20000)
+    own = P.run(base, split.train, split.train_outcomes, profile=True)
+    same = P.run(P.with_ahead(base, P.CURRENT.rules), split.train, split.train_outcomes,
+                 profile=True)
+    assert (own.program, own.evaluations, own.looked, own.rounds, own.anytime) == \
+        (same.program, same.evaluations, same.looked, same.rounds, same.anytime)
+
+
+def test_a_look_makes_successors_with_the_rules_it_is_given_and_pays_for_them():
+    from mana.discovery import policy as P
+    from mana.discovery import selection
+
+    split = W0.split(200, 50, seed=0)
+    leaves, conditions = discovery.vocabulary(split.train, split.train_outcomes)
+    narrow = P.without(P.CURRENT, "add a condition")
+    policy = P.with_budget(P.with_ahead(P.with_selection(P.CURRENT, selection.look(8)),
+                                        narrow.rules), 20000)
+    ctx = P.selection_context(policy, split.train, split.train_outcomes)
+    p = if_(cmp(LESS, get("x"), const(3)), get("z"), get("y"))
+    assert ctx.successors(p) == list(dict.fromkeys(P.successors(narrow, p, leaves, conditions)))
+    assert len(ctx.successors(p)) < len(set(P.successors(P.CURRENT, p, leaves, conditions)))
+    found = P.run(policy, split.train, split.train_outcomes)
+    assert found.looked > 0 and found.evaluations <= 20000
