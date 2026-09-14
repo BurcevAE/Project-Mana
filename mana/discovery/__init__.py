@@ -590,6 +590,58 @@ Stage R2, measured 2026-09-14
     are what stopped a better-looking search that could no longer answer
     a question it used to.
 
+Stage R2b, predicted before the run (2026-09-14; scripts/run_reflect.py R2b)
+----------------------------------------------------------------------
+    The user's control: the same generator, the same gates, one change --
+    the experience widened to every training family, T1, T2, T3, W0, W3
+    (seeds 0..9). Counterexamples sought on W0, W3, W4 seeds 10..19, which
+    now are unseen; W4 stays out of the experience.
+
+    Predicted: W0's and W3's derivations are one step -- a leaf wrapped in
+    a condition -- so "add a condition" can no longer be dropped without
+    leaving part of the experience unwritable. The distance move is still
+    added, "replace by a leaf" and "swap add" still dropped. The new
+    policy is the old one with the move: as in step 6, answers four times
+    sooner on the family, a few more by 400k. Counterexamples: none, or
+    near none. Verdict: REJECTED on significance alone -- at 400k a
+    handful of discordant pairs, below McNemar's floor at 30 -- unless the
+    move does more than in step 6. T4 no better. If so, R2's specialist
+    came from the narrow experience, not from the principle: what is
+    dropped is what the experience does not need, and a wider experience
+    needs more.
+
+Stage R2b, measured 2026-09-14
+----------------------------------------------------------------------
+    From 50 derivations (T1..T3, W0, W3; 1 966 -> 1 152 bits) MANA added
+    the same distance move and dropped only "replace by a leaf" and "swap
+    add" -- "add a condition" stayed, as W0's and W3's experience needs it.
+
+    solved                     10k  25k  50k  100k  200k  400k
+        T1..T3 unseen, old       0    0    0     6     8    23   (of 30)
+        T1..T3 unseen, new       9    9   13    22    26    26
+        T1..T3 hidden, old       0    0    0     7     9    17
+        T1..T3 hidden, new      10   10   15    17    18    18
+        W0, W3, W4 unseen, old  20   20   20    20    20    28
+        W0, W3, W4 unseen, new  20   20   23    28    29    29
+        T4, old / new          0/0  0/0  0/0   0/1   4/2   4/2   (of 10)
+
+    core.gates at 400k: REJECTED on significance alone (McNemar b = 0,
+    c = 3, p = 0.25); no counterexample in 30 unseen runs of W0, W3, W4;
+    the transfer claim failed on T4 (0.4 -> 0.2).
+
+    The prediction held: R2's specialist came from the narrow experience,
+    not from the principle. With every training family in it, the same
+    generator made a change that breaks nothing it was shown or was
+    tested on -- W4, T2 renamed, even gains -- and the one family outside
+    it, T4, lost two answers. What it bought is speed: at 100k programs 22
+    of 30 against 6, 17 hidden against 7; at the budget declared in
+    advance, 400k, the old policy has nearly caught up (26 against 23, 18
+    against 17), too few to call. The gates judged the claim that was
+    made -- more answers at 400k -- and that claim is not proven. A claim
+    of speed would have to be declared before a run on seeds nobody has
+    looked at; choosing 100k now, after seeing the curves, is the thing
+    the gates exist to refuse.
+
 Steps
 -----
     1  language, edit search, description length; worlds W0 and W3

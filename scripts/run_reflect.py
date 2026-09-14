@@ -19,7 +19,14 @@ Stage 3  the verdict, from core.gates, budget 400k fixed in advance:
              transfer        T4 seeds 0..9, a second claim that asserts it
          and the recall curves up to 400k, at equal programs evaluated.
 
-    python scripts/run_reflect.py [workers]
+R2b (the user's control, after R2): the same generator and the same gates,
+the experience widened to every training family -- T1, T2, T3, W0, W3,
+seeds 0..9 -- to tell whether R2's specialist came from a narrow
+experience or from the principle itself. W0, W3 now teach, so their
+counterexample runs move to unseen seeds 10..19; W4 stays out of the
+experience.
+
+    python scripts/run_reflect.py [workers] [R2 | R2b]
 """
 from __future__ import annotations
 
@@ -40,6 +47,10 @@ from mana.discovery.worlds import FAMILY, WORLDS  # noqa: E402
 
 ALL = {**WORLDS, **FAMILY}
 TRAIN = ("T1", "T2", "T3")
+#: What each variant learns from, and where its counterexamples are sought.
+VARIANTS = {"R2": {"experience": TRAIN, "counter_seeds": range(10), "starts": ("A", "B")},
+            "R2b": {"experience": TRAIN + ("W0", "W3"), "counter_seeds": range(10, 20),
+                    "starts": ("A",)}}
 BUDGET = 400000
 BUDGETS = (10000, 25000, 50000, 100000, 200000, 400000)
 IDLE = P.Rule("double", P.N, (add(P.N, P.N),))
@@ -81,16 +92,19 @@ def run_job(job):
 
 def main() -> None:
     workers = int(sys.argv[1]) if len(sys.argv) > 1 else 6
+    variant = VARIANTS[sys.argv[2] if len(sys.argv) > 2 else "R2"]
+    starts = variant["starts"]
     started = time.time()
     changes = {}
     with ProcessPoolExecutor(max_workers=workers) as pool:
-        rows = list(pool.map(experience_job, [(s, n, seed) for s in STARTS for n in TRAIN
+        rows = list(pool.map(experience_job, [(s, n, seed) for s in starts
+                                              for n in variant["experience"]
                                               for seed in range(10)]))
-        for start in STARTS:
+        for start in starts:
             mine = [r for r in rows if r[0] == start]
             experience = [r[5] for r in mine if r[4]]
-            print(f"\n=== политика {start}: дешёвый прогон решил {sum(r[3] for r in mine)}/30, "
-                  f"дорогой {sum(r[4] for r in mine)}/30; опыт — {len(experience)} выводов; "
+            print(f"\n=== политика {start}: дешёвый прогон решил {sum(r[3] for r in mine)}/{len(mine)}, "
+                  f"дорогой {sum(r[4] for r in mine)}/{len(mine)}; опыт — {len(experience)} выводов; "
                   f"{time.time() - started:.0f}с")
             change = reflect.improve(STARTS[start], experience)
             changes[start] = change
@@ -102,7 +116,7 @@ def main() -> None:
         jobs = []
         sets = {"dev": [(n, s) for n in TRAIN for s in range(10, 20)],
                 "hidden": [(n, s) for n in TRAIN for s in range(20, 30)],
-                "counter": [(n, s) for n in ("W0", "W3", "W4") for s in range(10)],
+                "counter": [(n, s) for n in ("W0", "W3", "W4") for s in variant["counter_seeds"]],
                 "transfer": [("T4", s) for s in range(10)]}
         for start, change in changes.items():
             for arm, policy in (("old", change.before), ("new", change.after)):
@@ -111,7 +125,7 @@ def main() -> None:
         runs = list(pool.map(run_job, jobs))
     print(f"\nвсего {time.time() - started:.0f}с")
     at = BUDGETS.index(BUDGET)
-    for start in STARTS:
+    for start in starts:
         got = {(arm, n, s): solved for st, arm, n, s, solved in runs if st == start}
 
         def acc(arm, items, i=at):
@@ -157,8 +171,9 @@ def main() -> None:
                          f"{sum(got[(arm, n, s)][i] for n, s in sets['transfer']):>4d}"
                          f"{sum(got[(arm, n, s)][i] for n, s in sets['counter']):>5d}")
             print(line)
-    a, b = changes["A"].after, changes["B"].after
-    print("\n=== A' против B':", P.difference(a, b) or "одинаковы")
+    if "B" in changes:
+        a, b = changes["A"].after, changes["B"].after
+        print("\n=== A' против B':", P.difference(a, b) or "одинаковы")
 
 
 if __name__ == "__main__":
