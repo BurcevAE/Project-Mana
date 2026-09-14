@@ -920,6 +920,40 @@ N3, probe P2, measured 2026-09-14 (declared in commit 4925392, before the run)
     Not measured: which states the narrow look keeps, and why they lead
     to the rule; wall time per arm (the run took 2 856 s in all).
 
+N3, P2c, declared before the run (2026-09-14; scripts/run_look_claim.py)
+----------------------------------------------------------------------
+    The claims, fixed here before anything is run. Each against the
+    search as it stands, within 400 000 programs, every look counted in
+    them:
+      P2c-look   a look at the first 256 states by score, one step ahead
+                 through the rules of A', solves T4 more often
+      P2c-width  the same look through A' with its grown move taken out
+                 by hand solves T4 more often
+    Evidence on seeds no run has touched: 30 dev pairs, T4 seeds 20..49;
+    hidden, T4 seeds 50..79; counterexamples -- a question the search
+    solved and the look did not -- on W0, W3, W4 seeds 30..39 and T1, T2,
+    T3 seeds 50..59. Verdict: core.gates.judge, as it stands. A' is not
+    written by hand: the generator rebuilds it from R2's experience
+    (T1..T3, seeds 0..9), and the run stops if the change differs from
+    R2's. The budget, 400k, was read off P2's curves -- which is why the
+    seeds are new.
+
+    Predicted, from P2 at 400k (search 4 of 10 on T4, both looks 9; on
+    the other six, search 40 of 60, the look through A' 60, the look
+    without the move 30):
+      P2c-look   ACCEPTED -- dev about 0.4 -> 0.9, discordant pairs at
+                 least 12 one way and at most 2 the other, p < 0.001;
+                 hidden the same; no counterexample, the family's answers
+                 coming through the move
+      P2c-width  dev and hidden as P2c-look, and REJECTED on
+                 counterexamples: about ten questions of the family (T1..T3,
+                 W4) the search solves by 400k and the narrow look without
+                 the move does not yet -- none on W0, W3
+    If so: the look through the rules MANA grew is a better search for T4
+    by the core's own gates, and the width alone, though it is what
+    decided T4, costs the family answers the search had. Neither is N3:
+    the look is written by hand, and MANA did not choose it.
+
 Steps
 -----
     1  language, edit search, description length; worlds W0 and W3
