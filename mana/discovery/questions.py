@@ -285,13 +285,23 @@ class _Scope:
 # -- the interpreter -------------------------------------------------------------
 
 class _Interpreter:
-    def __init__(self, policy, ledger, plans, flat_share, profile, trace, env) -> None:
+    def __init__(self, policy, ledger, plans, flat_share, profile, trace, env,
+                 schedule=None) -> None:
         self.policy, self.ledger, self.plans = policy, ledger, tuple(plans)
         self.flat_share, self.profile, self.trace = float(flat_share), profile, trace
         self.env = dict(env or {})
+        self.schedule = None if schedule is None else tuple(tuple(s) for s in schedule)
         self.nodes: List[Node] = []
         self.records: List[ResearchRecord] = []
-        self.log = any(_uses(plan, "held") for plan in self.plans)
+        every = self.plans + tuple(p for s in (self.schedule or ()) for p in s)
+        self.log = any(_uses(plan, "held") for plan in every)
+
+    def _plans(self, depth: int) -> Tuple[Plan, ...]:
+        """The plans a node at this depth may pose: the same at every depth, or
+        those the schedule gives for it -- none past its end."""
+        if self.schedule is None:
+            return self.plans
+        return self.schedule[depth - 1] if depth <= len(self.schedule) else ()
 
     def _afford(self, evaluations: int) -> bool:
         return self.ledger.left() >= evaluations
@@ -326,16 +336,17 @@ class _Interpreter:
         node.found, node.program = found, found.program
         evaluator = Evaluator(columns)
         own = found.program
-        if not self.plans or np.array_equal(evaluator(own), target) or depth >= MAX_DEPTH:
+        here = self._plans(depth)
+        if not here or np.array_equal(evaluator(own), target) or depth >= MAX_DEPTH:
             return node
-        share = (budget - found.evaluations) // len(self.plans)
+        share = (budget - found.evaluations) // len(here)
         if share <= len(leaves) or not self._afford(1):
             return node
         best = (_key(own, columns, target, evaluator), own, FLAT, ())
         self._charge(node, BUILD, 1)
         scope = _Scope(self, node, columns, target, evaluator, leaves, conditions, own,
                        _held(rounds))
-        for plan in self.plans:
+        for plan in here:
             made = self._pose(plan, node, scope, share, depth)
             if made is None:
                 continue
@@ -408,11 +419,15 @@ class _Interpreter:
 
 def solve(problem: Problem, policy: P.SearchPolicy, budget: int, plans: Sequence[Plan] = (),
           flat_share: float = 1.0, profile: bool = False, trace: bool = False,
-          env: Optional[Dict[str, object]] = None) -> Reasoning:
+          env: Optional[Dict[str, object]] = None,
+          schedule: Optional[Sequence[Sequence[Plan]]] = None) -> Reasoning:
     """The answer to a question within one budget, research questions posed by
-    the plans given, in the order given. `env` binds names plans may read."""
+    the plans given, in the order given. `env` binds names plans may read.
+    `schedule`, when given, is the plans by depth -- the first for the root,
+    the next for the questions it derives, none past its end -- instead of
+    the same plans at every depth."""
     ledger = Ledger(int(budget))
-    interpreter = _Interpreter(policy, ledger, plans, flat_share, profile, trace, env)
+    interpreter = _Interpreter(policy, ledger, plans, flat_share, profile, trace, env, schedule)
     root = interpreter.solve(problem, int(budget), 1)
     if root is None:
         raise ValueError("the budget is smaller than the root's leaves")

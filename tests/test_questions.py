@@ -132,3 +132,38 @@ def test_a_research_question_can_be_posed_on_what_research_found():
     assert all(type(n) is problems.Node for n in solved.nodes)
     assert any(r.parent in {n.index for n in on_x} for r in solved.records)
     assert solved.used_depth() >= 3 and deeper
+
+
+# -- plans by depth (D2-prep-2) --------------------------------------------------
+
+def _depths(solution):
+    depth = {}
+    for n in solution.nodes:
+        depth[n.index] = 1 if n.problem.parent is None else depth[n.problem.parent] + 1
+    return depth
+
+
+def test_the_same_plans_at_every_depth_by_schedule_is_the_default_path():
+    cols, target = _sum_of_two()
+    default = questions.solve(problems.Problem.whole(cols, target), P.CURRENT, 60000,
+                              plans=plans.D1B, flat_share=0.5)
+    scheduled = questions.solve(problems.Problem.whole(cols, target), P.CURRENT, 60000,
+                                flat_share=0.5, schedule=[plans.D1B] * problems.MAX_DEPTH)
+    assert scheduled.program == default.program
+    assert scheduled.ledger.spent == default.ledger.spent
+    assert _tree(scheduled) == _tree(default)
+
+
+def test_a_schedule_gives_each_depth_its_own_plans_and_none_past_its_end():
+    first, second = plans.D1B[0], plans.D1B[2]
+    cols, target = _sum_of_two()
+    solved = questions.solve(problems.Problem.whole(cols, target), P.CURRENT, 80000,
+                             flat_share=0.5, schedule=[(first,), (second,)])
+    depth = _depths(solved)
+    names = {1: {e.name for e in first.entries}, 2: {e.name for e in second.entries}}
+    for n in solved.nodes[1:]:
+        assert n.problem.operator in names[depth[n.problem.parent]]
+    assert all(not n.children for n in solved.nodes if depth[n.index] >= 3)
+    for r in solved.records:
+        assert r.plan == (first.name if depth[r.parent] == 1 else second.name)
+    assert any(depth[n.index] == 3 for n in solved.nodes)
