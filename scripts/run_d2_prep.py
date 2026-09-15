@@ -19,7 +19,14 @@ grade a route -- by the instrument, never by MANA.
              half the flat search's cost)
     reduced  size after X at most half the root's size
 
-    python -X utf8 scripts/run_d2_prep.py [workers]
+D2-prep-1b (declared in commit 85df320): the same, with X taken from what
+the search evaluated and did not hold -- `pool` as the second argument.
+Per round the pool is sorted by the search's own order, every program ever
+held in a beam left out; 4 near X at ranks 1, 9, 17, 25 of the rest, 4 far
+X at random from the rest, seeded by the instance; at most 60, rounds
+taken evenly. "Place in the beam" is then the place in the round's order.
+
+    python -X utf8 scripts/run_d2_prep.py [workers] [beam | pool]
 """
 from __future__ import annotations
 
@@ -42,6 +49,8 @@ from mana.discovery import search as discovery  # noqa: E402
 from mana.discovery.language import Evaluator, add, if_, show, size, sub  # noqa: E402
 
 BUDGET, SUB, PROBE, MAX_X = 400000, 100000, 2000, 30
+#: D2-prep-1b: X from the pools.
+POOL_MAX, NEAR_RANKS, FAR = 60, (0, 8, 16, 24), 4
 RUNGS = [("R", 3), ("R", 4), ("R", 5), ("M", 3), ("M", 4)]
 SEEDS = range(40, 50)
 RESIDUAL, RESIDUAL_MINUS, CASES = "остаток", "остаток-", "промахи и случаи"
@@ -89,7 +98,7 @@ def _target_features(cols, target):
             "биты таблицы цели": description.table_bits(n, variables, values, alphabet)}
 
 
-def trace_job(inst):
+def trace_job(inst, source="beam"):
     world, cols, target, policy = _setup(inst)
     rounds = []
     found = _flat(policy, cols, target, BUDGET, log=rounds)
@@ -100,25 +109,56 @@ def trace_job(inst):
         total += len(set(pool) - before) if r else len(pool)
         cumulative.append(min(total, found.evaluations))
         before = set(beam)
+
+    def record(x, r, place, stratum):
+        out = ev(x)
+        pb = description.program_bits(x, len(cols))
+        eb = description.error_bits(out, target, alphabet, known)
+        return {"program": x, "have": cumulative[r], "stratum": stratum,
+                "features": {"биты X": pb + eb, "биты программы X": pb, "биты ошибок X": eb,
+                             "неверных точек X": int(np.count_nonzero(out != target)),
+                             "размер X": size(x), "раунд": r, "место в луче": place}}
+
     held, seen = [], set()
     for r, (_, beam) in enumerate(rounds):
         for place, x in enumerate(beam):
             if x in seen:
                 continue
             seen.add(x)
-            out = ev(x)
-            pb = description.program_bits(x, len(cols))
-            eb = description.error_bits(out, target, alphabet, known)
-            held.append({"program": x, "have": cumulative[r],
-                         "features": {"биты X": pb + eb, "биты программы X": pb,
-                                      "биты ошибок X": eb,
-                                      "неверных точек X": int(np.count_nonzero(out != target)),
-                                      "размер X": size(x), "раунд": r, "место в луче": place}})
-    if len(held) > MAX_X:
-        keep = sorted(set(np.linspace(0, len(held) - 1, MAX_X).round().astype(int)))
-        held = [held[i] for i in keep]
+            held.append(record(x, r, place, "луч"))
+    if source == "beam":
+        if len(held) > MAX_X:
+            keep = sorted(set(np.linspace(0, len(held) - 1, MAX_X).round().astype(int)))
+            held = [held[i] for i in keep]
+        chosen = held
+    else:
+        beams = seen
+        per_round = len(NEAR_RANKS) + FAR
+        use = list(range(len(rounds)))
+        if len(use) * per_round > POOL_MAX:
+            use = sorted(set(np.linspace(0, len(use) - 1, POOL_MAX // per_round)
+                             .round().astype(int)))
+        chosen = []
+        for r in use:
+            pool = rounds[r][0]
+            keys = {}
+            for p in pool:
+                out = ev(p)
+                keys[p] = (description.program_bits(p, len(cols))
+                           + description.error_bits(out, target, alphabet, known),
+                           size(p), show(p))
+            order = sorted(pool, key=keys.__getitem__)
+            place = {p: i for i, p in enumerate(order)}
+            rest = [p for p in order if p not in beams]
+            near = [rest[i] for i in NEAR_RANKS if i < len(rest)]
+            others = [p for p in rest if p not in set(near)]
+            rng = np.random.default_rng([sum(map(ord, inst[0])), inst[1], inst[2], r, 61])
+            far = [others[i] for i in rng.choice(len(others), size=min(FAR, len(others)),
+                                                 replace=False)] if others else []
+            chosen += [record(x, r, place[x], "ближние") for x in near]
+            chosen += [record(x, r, place[x], "дальние") for x in far]
     return inst, {"solved": _right(world, found.program), "evaluations": found.evaluations,
-                  "bits": found.bits, "held": held}
+                  "bits": found.bits, "held": chosen}
 
 
 def branch_job(args):
@@ -176,10 +216,11 @@ def auc(pos, neg, larger_first):
 
 def main() -> None:
     workers = int(sys.argv[1]) if len(sys.argv) > 1 else 6
+    source = sys.argv[2] if len(sys.argv) > 2 else "beam"
     started = time.time()
     instances = [(f, k, s) for f, k in RUNGS for s in SEEDS]
     with ProcessPoolExecutor(max_workers=workers) as pool:
-        traces = dict(pool.map(trace_job, instances))
+        traces = dict(pool.map(trace_job, instances, [source] * len(instances)))
         jobs = [(inst, i, x["program"], b, x["have"]) for inst in instances
                 for i, x in enumerate(traces[inst]["held"]) for b in BRANCHES]
         rows = list(pool.map(branch_job, jobs))
@@ -205,6 +246,12 @@ def main() -> None:
               f"{sum(1 for i in mine if any(r['reduced'] for r in per[i])):>5d}")
     good = [r for r in rows if r["support"]]
     print(f"\n  опоры по ветвям: {Counter(r['branch'] for r in good).most_common()}")
+    for stratum in sorted({x["stratum"] for t in traces.values() for x in t["held"]}):
+        mine = [r for r in rows if traces[r["inst"]]["held"][r["index"]]["stratum"] == stratum]
+        with_one = sorted({r["inst"] for r in mine if r["support"]})
+        reduced = {r["inst"] for r in mine if r["reduced"]}
+        print(f"  слой {stratum}: пар {len(mine)}, опор {sum(r['support'] for r in mine)}, "
+              f"экземпляров с опорой {len(with_one)} {with_one}, с сокращением {len(reduced)}")
     for r in good[:8]:
         print(f"    {r['inst']}: {r['branch']}, цена пути {r['route']}, подзадача {r['subproblem']}; "
               f"X = {show(traces[r['inst']]['held'][r['index']]['program'])} -> {r['candidate']}")
