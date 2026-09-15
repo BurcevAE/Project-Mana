@@ -26,7 +26,18 @@ held in a beam left out; 4 near X at ranks 1, 9, 17, 25 of the rest, 4 far
 X at random from the rest, seeded by the instance; at most 60, rounds
 taken evenly. "Place in the beam" is then the place in the round's order.
 
-    python -X utf8 scripts/run_d2_prep.py [workers] [beam | pool]
+D2-prep-1c (declared in docs/ГЛУБИНА_D2.md before this was written): X from
+one exploratory step of P2's class per round -- `look` as the second
+argument. The first 256 states of the round's pool, in the search's own
+order, are expanded through A' (rebuilt from R2's experience; the run stops
+if the change is not R2's); the result of looking at a state is its best
+successor. X: those results the flat search never evaluated -- 4 near, at
+places 1, 9, 17, 25 by description, 4 far at random; at most 60. The cost
+of having X: the flat search to the end of the round plus that round's
+step. An instance has a reproducible support when its supports come from
+looks at two different states at least.
+
+    python -X utf8 scripts/run_d2_prep.py [workers] [beam | pool | look]
 """
 from __future__ import annotations
 
@@ -42,6 +53,7 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "scripts"))
 
 from mana.discovery import description, ladder  # noqa: E402
 from mana.discovery import policy as P  # noqa: E402
@@ -51,6 +63,10 @@ from mana.discovery.language import Evaluator, add, if_, show, size, sub  # noqa
 BUDGET, SUB, PROBE, MAX_X = 400000, 100000, 2000, 30
 #: D2-prep-1b: X from the pools.
 POOL_MAX, NEAR_RANKS, FAR = 60, (0, 8, 16, 24), 4
+#: D2-prep-1c: the exploratory step looks at the first 256 states of a round.
+SHORTLIST = 256
+#: Instances where the trace (beam or pool) already had a support.
+TRACE_SUPPORTS = {("R", 3, 44), ("M", 3, 40), ("M", 3, 47), ("M", 4, 48)}
 RUNGS = [("R", 3), ("R", 4), ("R", 5), ("M", 3), ("M", 4)]
 SEEDS = range(40, 50)
 RESIDUAL, RESIDUAL_MINUS, CASES = "остаток", "остаток-", "промахи и случаи"
@@ -98,7 +114,7 @@ def _target_features(cols, target):
             "биты таблицы цели": description.table_bits(n, variables, values, alphabet)}
 
 
-def trace_job(inst, source="beam"):
+def trace_job(inst, source="beam", rules=None):
     world, cols, target, policy = _setup(inst)
     rounds = []
     found = _flat(policy, cols, target, BUDGET, log=rounds)
@@ -131,6 +147,49 @@ def trace_job(inst, source="beam"):
             keep = sorted(set(np.linspace(0, len(held) - 1, MAX_X).round().astype(int)))
             held = [held[i] for i in keep]
         chosen = held
+    elif source == "look":
+        evaluated = set()
+        for pool, _ in rounds:
+            evaluated.update(pool)
+        memo = {}
+
+        def key(p):
+            if p not in memo:
+                out = ev(p)
+                memo[p] = (description.program_bits(p, len(cols))
+                           + description.error_bits(out, target, alphabet, known), size(p), show(p))
+            return memo[p]
+
+        ahead = replace(policy, rules=tuple(rules))
+        leaves, conditions = discovery.vocabulary(cols, target)
+        per_round = len(NEAR_RANKS) + FAR
+        use = list(range(len(rounds)))
+        if len(use) * per_round > POOL_MAX:
+            use = sorted(set(np.linspace(0, len(use) - 1, POOL_MAX // per_round)
+                             .round().astype(int)))
+        chosen = []
+        for r in use:
+            shortlist = sorted(rounds[r][0], key=key)[:SHORTLIST]
+            looked, results = set(), {}
+            for state in shortlist:
+                made = list(dict.fromkeys(P.successors(ahead, state, leaves, conditions)))
+                looked.update(made)
+                if made:
+                    results.setdefault(min(made, key=key), state)
+            cost = len(looked)
+            fresh = sorted((x for x in results if x not in evaluated), key=key)
+            near = [fresh[i] for i in NEAR_RANKS if i < len(fresh)]
+            others = [x for x in fresh if x not in set(near)]
+            rng = np.random.default_rng([sum(map(ord, inst[0])), inst[1], inst[2], r, 67])
+            far = [others[i] for i in rng.choice(len(others), size=min(FAR, len(others)),
+                                                 replace=False)] if others else []
+            place = {x: i for i, x in enumerate(fresh)}
+            for stratum, xs in (("ближние", near), ("дальние", far)):
+                for x in xs:
+                    row = record(x, r, place[x], stratum)
+                    row["have"] = cumulative[r] + cost
+                    row["parent"] = show(results[x])
+                    chosen.append(row)
     else:
         beams = seen
         per_round = len(NEAR_RANKS) + FAR
@@ -220,7 +279,22 @@ def main() -> None:
     started = time.time()
     instances = [(f, k, s) for f, k in RUNGS for s in SEEDS]
     with ProcessPoolExecutor(max_workers=workers) as pool:
-        traces = dict(pool.map(trace_job, instances, [source] * len(instances)))
+        rules = None
+        if source == "look":
+            import run_p2 as P2
+            import run_reflect as R2
+            from mana.discovery import reflect
+            rows = list(pool.map(R2.experience_job, [("A", n, s) for n in R2.TRAIN
+                                                     for s in range(10)]))
+            change = reflect.improve(P.CURRENT, [r[5] for r in rows if r[4]])
+            steps = [what.split(":")[0] for what, _ in change.steps]
+            print(f"стадия 0: A' пересобрана, изменение {steps}; {time.time() - started:.0f}с")
+            if steps != P2.R2_CHANGE:
+                print("изменение не совпало с R2 — прогон остановлен")
+                return
+            rules = change.after.rules
+        traces = dict(pool.map(trace_job, instances, [source] * len(instances),
+                               [rules] * len(instances)))
         jobs = [(inst, i, x["program"], b, x["have"]) for inst in instances
                 for i, x in enumerate(traces[inst]["held"]) for b in BRANCHES]
         rows = list(pool.map(branch_job, jobs))
@@ -255,6 +329,21 @@ def main() -> None:
     for r in good[:8]:
         print(f"    {r['inst']}: {r['branch']}, цена пути {r['route']}, подзадача {r['subproblem']}; "
               f"X = {show(traces[r['inst']]['held'][r['index']]['program'])} -> {r['candidate']}")
+    if source == "look":
+        parents = {i: {traces[i]["held"][r["index"]]["parent"] for r in good if r["inst"] == i}
+                   for i in instances}
+        repro = sorted(i for i in instances if len(parents[i]) >= 2)
+        print(f"\n  воспроизводимая опора (взгляды хотя бы на два разных состояния): "
+              f"{len(repro)} экземпляров {repro}")
+        deep = [i for i in instances if i[0] == "R" and i[1] in (4, 5)]
+        deep_repro = [i for i in deep if i in repro]
+        deep_reduced = [i for i in deep if any(r["reduced"] for r in rows if r["inst"] == i)]
+        new = [i for i in repro if i not in TRACE_SUPPORTS]
+        channel = len(deep_repro) >= 2 or len(deep_reduced) >= 5 or len(new) >= 6
+        print(f"  R4, R5: воспроизводимых опор {len(deep_repro)} из {len(deep)}, с сокращением "
+              f"{len(deep_reduced)} из {len(deep)}; новых (не из трассы) с воспроизводимой опорой "
+              f"{len(new)} {new}")
+        print(f"  канал по объявленному правилу: {'ЕСТЬ' if channel else 'нет'}")
 
     print("\n=== D2-prep-2: распознаваемость (только если опоры есть)")
     if not good:
