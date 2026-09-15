@@ -70,7 +70,7 @@ from .search import (BUDGET, MAX_ROUNDS, MAX_SIZE, PATIENCE, SEARCH_EXHAUSTED, S
                      Found, vocabulary)
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.5"
+__version__ = "1.6"
 
 PARAM = "param"
 
@@ -189,6 +189,7 @@ def run(policy: SearchPolicy, columns, outcomes, profile: bool = False,
     w = policy.selection.weights
     seen: Dict[Program, Tuple[float, float, float]] = {}
     value: Dict[Program, float] = {}
+    mistakes: Dict[Program, int] = {}
     first_seen: Dict[Program, int] = {}
     anytime: List[Tuple[int, Program, float]] = []
     leader: Dict[str, object] = {"key": None, "program": None}
@@ -203,9 +204,12 @@ def run(policy: SearchPolicy, columns, outcomes, profile: bool = False,
         program_part = description.program_bits(p, variables)
         error_part = description.error_bits(evaluator(p), actual, alphabet, known)
         total = program_part + error_part
-        wrong = int(np.count_nonzero(evaluator(p) != actual)) if w[3] else 0
+        wrong = mistakes[p] = int(np.count_nonzero(evaluator(p) != actual))
         value[p] = program_part * w[0] + error_part * w[1] + size(p) * w[2] + wrong * w[3]
-        key = (total, size(p))
+        # At equal bits and size, the one wrong on fewer points, then the text
+        # (found before D0's calibration: on two values "always wrong" is as
+        # short as "always right").
+        key = (total, size(p), wrong)
         if better(shortest, key, p):
             shortest["key"], shortest["program"] = key, p
         if profile and better(leader, key, p):
@@ -297,6 +301,10 @@ def run(policy: SearchPolicy, columns, outcomes, profile: bool = False,
             stalled += 1
         if stalled >= policy.patience or len(seen) >= policy.budget:
             break
+    held = shortest["program"]
+    if (seen[held][0] == seen[best][0] and size(held) == size(best)
+            and mistakes[held] < mistakes[best]):
+        best = held          # as short, as large, right on more points
     bits, program_part, error_part = seen[best]
     exhausted = stalled >= policy.patience and len(seen) < policy.budget
     derivation: List[Program] = []

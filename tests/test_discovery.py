@@ -830,3 +830,41 @@ def test_round_0_is_logged_as_the_pool_it_was_chosen_from_when_the_selection_loo
     assert set(rounds[0][0]) == set(leaves)
     ctx = P.selection_context(policy, split.train, split.train_outcomes)
     assert selection.choose(selection.look(8), rounds[0][0], ctx) == list(rounds[0][1])
+
+
+# --------------------------------------------------------------------------
+# The verdict at a tie (found before D0's calibration)
+# --------------------------------------------------------------------------
+
+def _two_valued():
+    split = W0.split(200, 50, seed=0)
+    target = (split.train["x"] > 6).astype(np.int64)
+    return split.train, target
+
+
+def test_on_a_two_valued_target_the_verdict_is_the_program_not_its_complement():
+    """Found before D0's calibration: on two values, "always wrong" is as
+    short a description as "always right", and the tie went by the text --
+    if((6 < x), 0, 1) before if((6 < x), 1, 0). At equal bits and size, the
+    one wrong on fewer points is the answer."""
+    from mana.discovery import policy as P
+
+    columns, target = _two_valued()
+    plain = discovery.search(columns, target, budget=30000)
+    ruled = P.run(P.with_budget(P.CURRENT, 30000), columns, target)
+    for found in (plain, ruled):
+        assert found.train_errors == 0
+
+
+def test_equally_right_programs_still_break_a_tie_by_their_text():
+    """Only the count of wrong points was added to the tie: two programs
+    that say the same thing -- if(6 < x, 1, 0) and if(x < 7, 0, 1) -- are
+    told apart by their text, as before, and neither is preferred as a
+    special case."""
+    from mana.discovery import policy as P
+    from mana.discovery.language import show
+
+    columns, target = _two_valued()
+    plain = discovery.search(columns, target, budget=30000)
+    ruled = P.run(P.with_budget(P.CURRENT, 30000), columns, target)
+    assert show(plain.program) == show(ruled.program) == "if((6 < x), 1, 0)"

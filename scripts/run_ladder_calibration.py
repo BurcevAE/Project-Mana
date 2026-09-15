@@ -86,7 +86,14 @@ class Oracle:
         self.spent += found.evaluations
         wrong = int(np.count_nonzero(Evaluator(cols)(found.program) != target[rows]))
         if wrong:
-            self.failure = f"плоский поиск не решил кусок: {wrong} из {int(rows.sum())} точек"
+            values = len(set(target[rows].tolist()))
+            # On two values a program wrong on most points can be a short
+            # description (a wrong guess inside the alphabet names the right
+            # one for free): reported apart from a piece merely not found.
+            kind = (" — двузначная цель, ответ против цели"
+                    if values == 2 and 2 * wrong > int(rows.sum()) else "")
+            self.failure = (f"плоский поиск не решил кусок: {wrong} из {int(rows.sum())} "
+                            f"точек{kind}")
             return None
         return found.program
 

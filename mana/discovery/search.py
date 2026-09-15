@@ -39,7 +39,7 @@ from .language import (ADD, CMP, EQUAL, HOLE, IF, LESS, SUB, Evaluator, Primitiv
                        nodes, prim, rebuild, replace, show, size, sub)
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.8"
+__version__ = "1.9"
 
 BEAM = 4
 MAX_SIZE = 15
@@ -276,25 +276,29 @@ def search(columns: Dict[str, Sequence[int]], outcomes: Sequence[int],
     leader: Dict[str, object] = {"key": None, "program": None}
     promise: Dict[Program, float] = {}
     shortest: Dict[str, object] = {"key": None, "program": None}
+    mistakes: Dict[Program, int] = {}
 
     def score(p: Program) -> Tuple[float, float, float]:
         first_seen.setdefault(p, len(first_seen) + 1)
         program_part = description.program_bits(p, variables, len(library))
         error_part = description.error_bits(evaluator(p), actual, alphabet, known)
         total = program_part + error_part
+        wrong = mistakes[p] = int(np.count_nonzero(evaluator(p) != actual))
+        # The answer: the shortest description seen. At equal bits and size,
+        # the one wrong on fewer points -- on two values "always wrong" is as
+        # short as "always right" (found before D0's calibration) -- then the
+        # text.
+        key = (total, size(p), wrong)
+        held = shortest["key"]
+        if (held is None or key < held
+                or (key == held and show(p) < show(shortest["program"]))):
+            shortest["key"], shortest["program"] = key, p
         if frontier is not None:
-            wrong = int(np.count_nonzero(evaluator(p) != actual))
             promise[p] = float(frontier(program_part, error_part, size(p), wrong))
-            # The answer is judged as ever: the shortest description seen.
-            key = (total, size(p))
-            held = shortest["key"]
-            if (held is None or key < held
-                    or (key == held and show(p) < show(shortest["program"]))):
-                shortest["key"], shortest["program"] = key, p
         if profile:
-            # The same order as `rank`, with the text only asked for on a
-            # tie: the best of everything evaluated so far, as it changes.
-            key = (total, size(p))
+            # The answer's order, with the text only asked for on a tie: the
+            # best of everything evaluated so far, as it changes.
+            key = (total, size(p), wrong)
             held = leader["key"]
             if (held is None or key < held
                     or (key == held and show(p) < show(leader["program"]))):
@@ -317,7 +321,9 @@ def search(columns: Dict[str, Sequence[int]], outcomes: Sequence[int],
         return top + [p for p in pinned if p not in top]
 
     def leading(beam: List[Program]) -> Program:
-        return shortest["program"] if frontier is not None else beam[0]
+        # The beam's first is the shortest seen, ties by the text; the answer
+        # breaks a tie by the wrong points first.
+        return shortest["program"]
 
     for leaf in leaves:
         seen[leaf] = score(leaf)
@@ -358,6 +364,10 @@ def search(columns: Dict[str, Sequence[int]], outcomes: Sequence[int],
             stalled += 1
         if stalled >= patience or len(seen) >= budget:
             break
+    held = shortest["program"]
+    if (seen[held][0] == seen[best][0] and size(held) == size(best)
+            and mistakes[held] < mistakes[best]):
+        best = held          # as short, as large, right on more points
     bits, program_part, error_part = seen[best]
     exhausted = stalled >= patience and len(seen) < budget
     derivation: List[Program] = []
