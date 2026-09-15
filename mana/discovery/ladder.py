@@ -18,6 +18,12 @@ Noise -- the control C2 -- is a parameter, declared and left out of the
 first calibration. F, a derived quantity used more than once, is built
 in a later step.
 
+The first calibration (docs/ГЛУБИНА_D0.md, 4.6) found no gap in S: the
+flat search's own edit "add a condition" is a greedy decomposition by
+cases, and it solved S3 on 10 seeds of 10. By the owner's decision S is a
+control since -- a decomposition native to the flat search, where D1 must
+not gain -- and the ladder is R and M.
+
 Only what the flat search can reach. A truth is made of leaves, +, -, and
 if, with a comparison only as the condition of an if -- what the search's
 edits make. A truth the search could not even write would make it fail by
@@ -41,11 +47,16 @@ from .language import (ADD, CMP, CONST, GET, IF, LESS, SUB, Program, add, cmp, c
 from .worlds import World
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 VARIABLES = ("w", "x", "y", "z")
 LOW, HIGH = 0, 9
+#: Every family the generator builds.
 FAMILIES = ("R", "S", "M")
+#: The instrument: the families measured for depth.
+LADDER = ("R", "M")
+#: Controls with rungs: a decomposition native to the flat search.
+NATIVE = ("S",)
 CONTROLS = ("C1",)
 RUNGS = (1, 2, 3, 4, 5)
 #: Every branch of a condition holds on at least this share of the world.

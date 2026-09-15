@@ -70,6 +70,12 @@ def test_the_out_of_catalogue_control_is_a_comparison_of_sums():
         ladder.truth("C1", 2, 0)
 
 
+def test_the_ladder_is_r_and_m_and_nested_cases_are_a_control():
+    assert ladder.LADDER == ("R", "M") and ladder.NATIVE == ("S",)
+    assert set(ladder.LADDER) | set(ladder.NATIVE) == set(ladder.FAMILIES)
+    assert not set(ladder.LADDER) & set(ladder.NATIVE)
+
+
 def test_noise_is_a_declared_parameter_of_every_world():
     clean, noisy = ladder.world("S", 2, 0), ladder.world("S", 2, 0, noise=ladder.NOISE)
     assert clean.noise == 0.0 and noisy.noise == ladder.NOISE and clean.truth == noisy.truth

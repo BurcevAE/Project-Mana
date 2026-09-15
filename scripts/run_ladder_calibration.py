@@ -78,13 +78,18 @@ class Oracle:
         self.spent = 0
         self.failure = ""
 
-    def flat(self, rows: np.ndarray, target: np.ndarray):
+    def flat(self, rows: np.ndarray, target: np.ndarray, condition: bool = False):
         """A piece for the flat search. Not exact on its own points: the
-        piece failed, and the tree with it."""
+        piece failed, and the tree with it. A condition is judged by what
+        if() reads of it, whether it is 0 -- not by its value (second
+        calibration: the first judged a condition by value)."""
         cols = {v: c[rows] for v, c in self.columns.items()}
         found = P.run(replace(P.CURRENT, budget=self.share), cols, target[rows])
         self.spent += found.evaluations
-        wrong = int(np.count_nonzero(Evaluator(cols)(found.program) != target[rows]))
+        out = Evaluator(cols)(found.program)
+        if condition:
+            out = (out != 0).astype(np.int64)
+        wrong = int(np.count_nonzero(out != target[rows]))
         if wrong:
             values = len(set(target[rows].tolist()))
             # On two values a program wrong on most points can be a short
@@ -107,8 +112,9 @@ class Oracle:
             ours = self.evaluator(leaf)
             misses = rows & (target != ours)
             if not misses.any():
-                self.failure = "у ветви нет промахов"
-                return None
+                # The leaf is right on every point of this problem: the level is
+                # solved by it (the first calibration gave up here).
+                return leaf
             rest = self.solve(truth[3], misses, target)
             if rest is None:
                 return None
@@ -118,7 +124,7 @@ class Oracle:
                 self.failure = f"ни одна ветвь не права в {int(neither.sum())} точках"
                 return None
             told = rows & (ours != theirs)
-            condition = self.flat(told, (target == ours).astype(np.int64))
+            condition = self.flat(told, (target == ours).astype(np.int64), condition=True)
             return None if condition is None else if_(condition, leaf, rest)
         return self.flat(rows, target)
 
@@ -160,6 +166,8 @@ def main() -> None:
           "                оракул (из 10)   вычислений оракула (мед)")
     print("                                    " + "".join(f"{b // 1000:>6d}k" for b in BUDGETS))
     for family in ladder.FAMILIES:
+        role = "лестница" if family in ladder.LADDER else "контроль: разложение, родное для плоского поиска"
+        print(f"  --- {family}: {role}")
         for rung in ladder.RUNGS:
             truth = ladder.truth(family, rung, 0)
             flat = [r for r in flats if r[:2] == (family, rung)]
