@@ -26,14 +26,20 @@ the truth is read only to grade, by the instrument.
     channel    reproducible on 2 of 20 R4/R5 instances, or on 6 of 50 ladder
                instances without a one-level support
 
-    python -X utf8 scripts/run_d2_prep2.py [workers]
+Resumable (added after a power failure lost a run two hours in): every run's
+result is appended to a JSON-lines file as it arrives, and a restart skips
+what the file already holds. The jobs, their budgets and the definitions
+are unchanged; A' is rebuilt and checked on every start, as declared.
+
+    python -u -X utf8 scripts/run_d2_prep2.py [workers] [results.jsonl]
 """
 from __future__ import annotations
 
+import json
 import sys
 import time
 from collections import Counter
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import replace
 from pathlib import Path
 
@@ -85,7 +91,7 @@ def flat_job(args):
     inst, budget = args
     world, split, policy = _setup(inst)
     found = P.run(P.with_budget(policy, budget), split.train, split.train_outcomes)
-    return inst, budget, _right(world, found.program)
+    return {"inst": list(inst), "budget": budget, "right": _right(world, found.program)}
 
 
 def tree_job(args):
@@ -104,9 +110,46 @@ def tree_job(args):
         for c in root.used)
     observation = next((r.observation for r in solved.records
                         if r.parent == 0 and r.plan == cat[first].name), "")
-    return {"inst": inst, "budget": budget, "first": first, "second": second,
-            "right": right, "at_root": at_root, "deeper": deeper, "observation": observation,
+    return {"inst": list(inst), "budget": budget, "first": first, "second": second,
+            "right": right, "at_root": at_root, "deeper": bool(deeper), "observation": observation,
             "spent": dict(solved.ledger.spent), "nodes": len(solved.nodes)}
+
+
+def _key(kind, inst, budget, first=None, second=None) -> str:
+    return json.dumps([kind, list(inst), budget, first, second])
+
+
+def load(path):
+    """What an earlier, interrupted run already computed."""
+    done = {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line:
+                    row = json.loads(line)
+                    done[row["key"]] = row
+    except FileNotFoundError:
+        pass
+    return done
+
+
+def stream(pool, fn, jobs, keys, done, path, label):
+    """Run what is not done yet; append each result as it arrives."""
+    todo = [(k, j) for k, j in zip(keys, jobs) if k not in done]
+    print(f"  {label}: сделано раньше {len(jobs) - len(todo)}, осталось {len(todo)}", flush=True)
+    started = time.time()
+    futures = {pool.submit(fn, job): k for k, job in todo}
+    with open(path, "a", encoding="utf-8") as fh:
+        for n, future in enumerate(as_completed(futures), 1):
+            k = futures[future]
+            row = future.result()
+            row["key"] = k
+            done[k] = row
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+            fh.flush()
+            if n % 50 == 0 or n == len(todo):
+                print(f"    {label}: {n}/{len(todo)}, {time.time() - started:.0f}с", flush=True)
 
 
 def rebuild_a_prime(pool):
@@ -151,20 +194,32 @@ def report(title, instances, budget, flat, runs, cat):
 
 def main() -> None:
     workers = int(sys.argv[1]) if len(sys.argv) > 1 else 6
+    path = sys.argv[2] if len(sys.argv) > 2 else str(ROOT / "d2_prep2_results.jsonl")
     started = time.time()
     cat = catalogue()
+    done = load(path)
+    print(f"результаты: {path}; уже записано {len(done)}", flush=True)
     with ProcessPoolExecutor(max_workers=workers) as pool:
         rules, same, steps = rebuild_a_prime(pool)
-        print(f"стадия 0: A' пересобрана, изменение {steps}; {time.time() - started:.0f}с")
+        print(f"стадия 0: A' пересобрана, изменение {steps}; {time.time() - started:.0f}с",
+              flush=True)
         if not same:
             print("изменение не совпало с R2 — прогон остановлен")
             return
         arms = [(i, BUDGET) for i in MAIN] + [(i, BIG) for i in BIGSET]
-        flat = {(i, b): right for i, b, right in pool.map(flat_job, arms)}
+        stream(pool, flat_job, arms, [_key("flat", i, b) for i, b in arms], done, path,
+               "плоский поиск")
         jobs = [(i, b, p, None, rules) for i, b in arms for p in range(len(cat))]
         jobs += [(i, b, p, q, rules) for i, b in arms for p in range(len(cat))
                  for q in range(len(cat))]
-        runs = list(pool.map(tree_job, jobs, chunksize=4))
+        keys = [_key("tree", i, b, p, q) for i, b, p, q, _ in jobs]
+        stream(pool, tree_job, jobs, keys, done, path, "деревья")
+    flat = {(i, b): done[_key("flat", i, b)]["right"] for i, b in arms}
+    runs = []
+    for k in keys:
+        row = dict(done[k])
+        row["inst"] = tuple(row["inst"])
+        runs.append(row)
     print(f"всего {time.time() - started:.0f}с; деревьев {len(runs)}")
     deep, new, repro = report("основное плечо, 400k", MAIN, BUDGET, flat, runs, cat)
     channel = deep >= 2 or new >= 6
