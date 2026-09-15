@@ -37,7 +37,15 @@ of having X: the flat search to the end of the round plus that round's
 step. An instance has a reproducible support when its supports come from
 looks at two different states at least.
 
-    python -X utf8 scripts/run_d2_prep.py [workers] [beam | pool | look]
+Corrected after D2-prep-1c (docs/ГЛУБИНА_D2.md): a support must not be
+degenerate -- neither X nor the subproblem's answer on its own is exact on
+the whole problem (D0, 3: an assembly must not collapse into one of its
+arguments) -- and on an instance the flat search solves, a route must cost
+at most half of what the flat search spent to its first exact program, not
+half of all it spent. An optional third argument limits the run to named
+instances, e.g. M3/40,M4/48.
+
+    python -X utf8 scripts/run_d2_prep.py [workers] [beam | pool | look] [instances]
 """
 from __future__ import annotations
 
@@ -117,7 +125,8 @@ def _target_features(cols, target):
 def trace_job(inst, source="beam", rules=None):
     world, cols, target, policy = _setup(inst)
     rounds = []
-    found = _flat(policy, cols, target, BUDGET, log=rounds)
+    found = _flat(policy, cols, target, BUDGET, profile=True, log=rounds)
+    first_exact, _ = _first_exact(found, cols, target)
     ev = Evaluator(cols)
     alphabet, known = description.alphabet_of(target), description.membership(target)
     cumulative, before, total = [], set(), 0
@@ -217,7 +226,7 @@ def trace_job(inst, source="beam", rules=None):
             chosen += [record(x, r, place[x], "ближние") for x in near]
             chosen += [record(x, r, place[x], "дальние") for x in far]
     return inst, {"solved": _right(world, found.program), "evaluations": found.evaluations,
-                  "bits": found.bits, "held": chosen}
+                  "first_exact": first_exact, "bits": found.bits, "held": chosen}
 
 
 def branch_job(args):
@@ -226,6 +235,7 @@ def branch_job(args):
     ev = Evaluator(cols)
     xv = ev(x)
     row = {"inst": inst, "index": index, "branch": branch, "asked": True}
+    answer = rest = None
     if branch in (RESIDUAL, RESIDUAL_MINUS):
         asked = target - xv if branch == RESIDUAL else xv - target
         found = _flat(policy, cols, asked, SUB, profile=True)
@@ -259,6 +269,11 @@ def branch_job(args):
                     cost, candidate = cost_m + cost_c, if_(condition, x, rest)
     exact = candidate is not None and np.array_equal(ev(candidate), target)
     row["solves"] = bool(exact and _right(world, candidate))
+    # Degenerate: X, or the subproblem's answer, is on its own exact on the
+    # whole problem -- the assembly collapses into one of its arguments.
+    part = answer if branch in (RESIDUAL, RESIDUAL_MINUS) else rest
+    row["degenerate"] = bool(np.array_equal(xv, target) or (
+        part is not None and np.array_equal(ev(part), target)))
     row["route"] = have + cost + 2 if cost is not None else math.inf
     row["subproblem"] = cost
     row["candidate"] = show(candidate) if candidate is not None else ""
@@ -278,6 +293,9 @@ def main() -> None:
     source = sys.argv[2] if len(sys.argv) > 2 else "beam"
     started = time.time()
     instances = [(f, k, s) for f, k in RUNGS for s in SEEDS]
+    if len(sys.argv) > 3:
+        named = {(a[0], int(a[1]), int(b)) for a, b in (x.split("/") for x in sys.argv[3].split(","))}
+        instances = [i for i in instances if i in named]
     with ProcessPoolExecutor(max_workers=workers) as pool:
         rules = None
         if source == "look":
@@ -303,21 +321,34 @@ def main() -> None:
         t = traces[r["inst"]]
         r["features"] = {**t["held"][r["index"]]["features"],
                          **{k: r[k] for k in FREE if k in r}}
-        limit = BUDGET if not t["solved"] else t["evaluations"] / 2
-        r["support"] = r["asked"] and r["solves"] and r["route"] <= limit
+        limit = BUDGET if not t["solved"] else (t["first_exact"] or t["evaluations"]) / 2
+        r["support"] = (r["asked"] and r["solves"] and not r.get("degenerate", False)
+                        and r["route"] <= limit)
         r["reduced"] = r["asked"] and r.get("after", math.inf) <= t["bits"] / 2
 
     print("\n=== D2-prep-1: опоры и сокращения (экземпляров из 10)")
     print("  ступень  плоский решил  X на экз.(мед)  с опорой  опор (мед | макс)  с сокращением")
     for f, k in RUNGS:
         mine = [i for i in instances if i[:2] == (f, k)]
+        if not mine:
+            continue
         per = {i: [r for r in rows if r["inst"] == i] for i in mine}
         supports = {i: sum(r["support"] for r in per[i]) for i in mine}
         counts = sorted(supports.values())
+        held = sorted(len(traces[i]["held"]) for i in mine)
         print(f"  {f}{k}      {sum(traces[i]['solved'] for i in mine):>6d}        "
-              f"{sorted(len(traces[i]['held']) for i in mine)[5]:>6d}         "
-              f"{sum(1 for v in counts if v):>5d}      {counts[5]:>3d} | {counts[-1]:>3d}        "
+              f"{held[len(held) // 2]:>6d}         "
+              f"{sum(1 for v in counts if v):>5d}      {counts[len(counts) // 2]:>3d} | "
+              f"{counts[-1]:>3d}        "
               f"{sum(1 for i in mine if any(r['reduced'] for r in per[i])):>5d}")
+    degenerate = [r for r in rows if r["asked"] and r["solves"] and r.get("degenerate")]
+    print(f"  решают корень, но вырождены (не опоры): {len(degenerate)} пар, экземпляры "
+          f"{sorted({r['inst'] for r in degenerate})}")
+    for i in instances:
+        t = traces[i]
+        if t["solved"]:
+            print(f"  {i}: плоский решает, первая точная при {t['first_exact']} — порог пути "
+                  f"{(t['first_exact'] or t['evaluations']) / 2:.0f}")
     good = [r for r in rows if r["support"]]
     print(f"\n  опоры по ветвям: {Counter(r['branch'] for r in good).most_common()}")
     for stratum in sorted({x["stratum"] for t in traces.values() for x in t["held"]}):
