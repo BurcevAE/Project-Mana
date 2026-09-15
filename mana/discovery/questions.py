@@ -27,6 +27,11 @@ exact, or at depth 5, or no plan: done; what is left divided equally among the
 plans; the node's answer the shortest description of its own answer and the
 candidates, the remaining plans skipped once it is exact.
 
+`candidates(s)` is the programs of the node's vocabulary up to size s, a list
+built only as far as it is read (D3-prep-0, docs/ГЛУБИНА_D3.md, 9): `take`
+reads the first k, `argmin` and `argmax` read a list once, keeping the first
+best -- on any other list the same choice at the same cost as before.
+
 What is charged, one evaluation each: the node's own answer observed on its
 data, when the node first asks; every derived question built; every program
 an experiment evaluates on the node's data for the first time (all under
@@ -38,6 +43,7 @@ Nothing here reads a world.
 """
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass, field
 from dataclasses import replace as _replace
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -46,13 +52,13 @@ import numpy as np
 
 from . import description
 from . import policy as P
-from .language import GET, Evaluator, children, rebuild, show
+from .language import GET, Evaluator, add, children, if_, rebuild, show, size, sub
 from .problems import (ARTICLES, ASSEMBLE, BUILD, FLAT, MAX_DEPTH, SEARCH, VERIFY, Ledger, Node,
                        Problem, Solution, _key)
 from .search import vocabulary
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
 
 #: A hole of a rebuild template: ("?", name) or ("?", name, item).
 HOLE = "?"
@@ -157,6 +163,56 @@ def _held(rounds) -> List[tuple]:
     return list(out)
 
 
+class _Candidates:
+    """The programs of a vocabulary up to a size, a list built as it is read:
+
+        P ::= leaf | condition | add(P, P) | sub(P, P) | if(condition, P, P)
+
+    by size; within a size the leaves, the conditions, add, sub, if; the
+    parts of a composite by the size of its left part, then in their own
+    order. Syntactic: programs with equal values are all there."""
+
+    def __init__(self, leaves, conditions, most) -> None:
+        self.leaves, self.conditions, self.most = tuple(leaves), tuple(conditions), int(most)
+
+    def __repr__(self) -> str:
+        return f"candidates({self.most})"
+
+    def __iter__(self):
+        made: Dict[int, List[tuple]] = {}
+        for n in range(1, self.most + 1):
+            level: List[tuple] = []
+            for p in self._of_size(n, made):
+                if n < self.most:
+                    level.append(p)
+                yield p
+            made[n] = level
+
+    def __getitem__(self, index):
+        for i, p in enumerate(self):
+            if i == index:
+                return p
+        raise IndexError(index)
+
+    def _of_size(self, n, made):
+        for p in self.leaves + self.conditions:
+            if size(p) == n:
+                yield p
+        for make in (add, sub):
+            for left in range(1, n - 1):
+                for a in made.get(left, ()):
+                    for b in made.get(n - 1 - left, ()):
+                        yield make(a, b)
+        for left in range(1, n):
+            for k in self.conditions:
+                right = n - 1 - size(k) - left
+                if right < 1:
+                    continue
+                for a in made.get(left, ()):
+                    for b in made.get(right, ()):
+                        yield if_(k, a, b)
+
+
 # -- what an expression may read at one node, and what it costs ---------------
 
 class _Scope:
@@ -192,7 +248,10 @@ class _Scope:
             "search": self._search,
             "probe": self._probe,
             "successors": self._successors,
-            "take": lambda e, env, c: list(self.value(e[2], env, c))[:int(self.value(e[1], env, c))],
+            "candidates": lambda e, env, c: _Candidates(self.leaves, self.conditions,
+                                                        self.value(e[1], env, c)),
+            "take": lambda e, env, c: list(itertools.islice(self.value(e[2], env, c),
+                                                            int(self.value(e[1], env, c)))),
             "flatmap": self._flatmap,
             "argmin": self._pick(min),
             "argmax": self._pick(max),
@@ -267,13 +326,17 @@ class _Scope:
         return list(out)
 
     def _pick(self, which):
+        better = (lambda a, b: a < b) if which is min else (lambda a, b: a > b)
+
         def pick(e, env, c):
-            items = list(self.value(e[1], env, c))
-            if not items:
+            best = None
+            for x in self.value(e[1], env, c):
+                score = self._apply(e[2], x, env, c)
+                if best is None or better(score, best[0]):
+                    best = (score, x)
+            if best is None:
                 raise _Short()
-            scores = [self._apply(e[2], x, env, c) for x in items]
-            order = (lambda i: (scores[i], i)) if which is min else (lambda i: (scores[i], -i))
-            return items[which(range(len(items)), key=order)]
+            return best[1]
         return pick
 
     def _question(self, e, env, c):

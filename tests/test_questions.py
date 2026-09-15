@@ -5,12 +5,13 @@ flat search; a research question can be posed on its own result."""
 import ast
 import inspect
 import re
+from collections import Counter
 
 import numpy as np
 
 from mana.discovery import plans, problems, questions
 from mana.discovery import policy as P
-from mana.discovery.language import show
+from mana.discovery.language import EQUAL, LESS, cmp, const, get, show, size
 from mana.discovery.worlds import W0
 
 FIELDS = ("program", "bits", "program_bits", "error_bits", "evaluations", "rounds",
@@ -167,3 +168,95 @@ def test_a_schedule_gives_each_depth_its_own_plans_and_none_past_its_end():
     for r in solved.records:
         assert r.plan == (first.name if depth[r.parent] == 1 else second.name)
     assert any(depth[n.index] == 3 for n in solved.nodes)
+
+
+# -- candidates(s) (D3-prep-0) -------------------------------------------------
+
+LEAVES = (get("x"), get("y"), const(0))
+CONDITIONS = (cmp(LESS, get("x"), const(0)), cmp(EQUAL, get("x"), get("y")))
+
+
+def _of_the_vocabulary(p):
+    if p in LEAVES or p in CONDITIONS:
+        return True
+    if p[0] in ("add", "sub"):
+        return _of_the_vocabulary(p[1]) and _of_the_vocabulary(p[2])
+    return p[0] == "if" and p[1] in CONDITIONS and _of_the_vocabulary(p[2]) \
+        and _of_the_vocabulary(p[3])
+
+
+def _counted(most):
+    """How many programs the grammar has of each size, counted, not listed."""
+    count = {}
+    for n in range(1, most + 1):
+        total = sum(1 for p in LEAVES + CONDITIONS if size(p) == n)
+        total += 2 * sum(count.get(i, 0) * count.get(n - 1 - i, 0) for i in range(1, n - 1))
+        total += sum(count.get(i, 0) * count.get(n - 1 - size(k) - i, 0)
+                     for k in CONDITIONS for i in range(1, n - 1 - size(k)))
+        count[n] = total
+    return {n: t for n, t in count.items() if t}
+
+
+def _swap(e, old, new):
+    if e == old:
+        return new
+    return tuple(_swap(x, old, new) for x in e) if type(e) is tuple else e
+
+
+def test_candidates_are_the_programs_of_the_vocabulary_by_size():
+    listed = list(questions._Candidates(LEAVES, CONDITIONS, 8))
+    sizes = [size(p) for p in listed]
+    assert len(set(listed)) == len(listed)
+    assert sizes == sorted(sizes) and max(sizes) == 8
+    assert dict(Counter(sizes)) == _counted(8)
+    assert all(_of_the_vocabulary(p) for p in listed)
+    assert tuple(listed[:5]) == LEAVES + CONDITIONS
+    lazy = questions._Candidates(LEAVES, CONDITIONS, 8)
+    assert [lazy[i] for i in (0, 7, len(listed) - 1)] == [listed[0], listed[7], listed[-1]]
+
+
+def test_candidates_of_size_one_are_the_leaves_in_their_order():
+    """C with candidates(1) in place of the leaves is C, field for field."""
+    swapped = questions.Plan(
+        plans.C_MASK.name,
+        _swap(plans.C_MASK.experiment, ("leaves",), ("candidates", ("const", 1))),
+        tuple(questions.Entry(x.name, _swap(x.question, ("leaves",), ("candidates", ("const", 1))),
+                              x.budget) for x in plans.C_MASK.entries),
+        plans.C_MASK.rebuild)
+    assert swapped.experiment != plans.C_MASK.experiment
+    cols, target = _sum_of_two()
+    runs = [questions.solve(problems.Problem.whole(cols, target), P.CURRENT, 60000,
+                            plans=(plan,), flat_share=0.5) for plan in (plans.C_MASK, swapped)]
+    record = lambda r: (r.parent, r.plan, r.observation, r.derived, r.cost,  # noqa: E731
+                        r.candidate, r.kept, r.stopped)
+    assert runs[0].records and runs[0].program == runs[1].program
+    assert runs[0].ledger.spent == runs[1].ledger.spent
+    assert _tree(runs[0]) == _tree(runs[1])
+    assert [record(r) for r in runs[0].records] == [record(r) for r in runs[1].records]
+
+
+def test_candidates_are_built_only_as_far_as_they_are_read():
+    first = questions.Plan(
+        "первые пять",
+        ("argmax", ("take", ("const", 5), ("candidates", ("const", 9))),
+         ("lambda", "x", ("count", ("eq", ("eval", ("var", "x")), ("target",))))),
+        (), ("?", "X"))
+    cols, target = _sum_of_two()
+    solved = questions.solve(problems.Problem.whole(cols, target), P.CURRENT, 60000,
+                             plans=(first,), flat_share=0.5)
+    posed = [r for r in solved.records if r.plan == first.name]
+    assert len(posed) == 1 and not posed[0].stopped
+    assert posed[0].cost == {a: (5 if a == problems.BUILD else 0) for a in problems.ARTICLES}
+
+
+def test_argmin_and_argmax_keep_the_first_best():
+    cols, target = _sum_of_two()
+    scope = questions._Scope(None, None, cols, target, None, [], [], None, [])
+    items = ("list", ("const", 3), ("const", 1), ("const", 1), ("const", 5), ("const", 5))
+    score = ("lambda", "v", ("minus", ("var", "v"), ("const", 0)))
+    ones = ("lambda", "v", ("const", 0))
+    assert scope.value(("argmin", items, score), {}, False) == 1
+    assert scope.value(("argmax", items, score), {}, False) == 5
+    tagged = ("list", ("list", ("const", "a"), ("const", 0)), ("list", ("const", "b"), ("const", 0)))
+    assert scope.value(("argmin", tagged, ones), {}, False)[0] == "a"
+    assert scope.value(("argmax", tagged, ones), {}, False)[0] == "a"
