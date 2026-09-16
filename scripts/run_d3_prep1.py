@@ -286,6 +286,7 @@ def screen(pool, path, done, most, started):
     with open(path, "a", encoding="utf-8") as fh:
         for n in range(1, most + 1):
             whole = X.total(n)
+            began = time.time()
             print(f"  размер {n}: выражений {whole}", flush=True)
             for row in pool.imap(screen_batch, _batches(n, done), chunksize=1):
                 _write(fh, done, row)
@@ -302,8 +303,13 @@ def screen(pool, path, done, most, started):
                 if stopped:
                     break
             done_here = not stopped
+            here = time.time() - began
+            # The rate is only the size's own when the size was exhausted: an
+            # expression of size 10 is longer than one of size 5, and the
+            # whole protocol's arithmetic hangs on whether the rate holds.
+            rate = f", {whole / here:.0f} выражений в секунду" if done_here and here else ""
             print(f"  размер {n}: {'исчерпан' if done_here else stopped}; "
-                  f"прошло {len(survivors)}", flush=True)
+                  f"прошло {len(survivors)}; {here:.0f}с{rate}", flush=True)
             if stopped:
                 break
     return survivors, counts, stopped
