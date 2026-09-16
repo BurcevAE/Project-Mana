@@ -118,6 +118,20 @@ def test_the_restrictions_of_the_declaration_hold():
             assert not _arithmetic_over_constants(e)
 
 
+def test_the_root_operations_take_turns_from_the_beginning():
+    """A size too large to exhaust is covered by its beginning, so the
+    beginning must not be all of one shape (docs/ГЛУБИНА_D3.md, 10.2)."""
+    for size in (5, 6, 7):
+        listed = list(X.generate(size))
+        roots = [name for name, gives, _ in X.OPS
+                 if gives == "P" and any(e[0] == name for e in listed)]
+        if size == 1:
+            continue
+        assert [e[0] for e in listed[:len(roots)]] == roots
+        assert len(set(e[0] for e in listed[:2 * len(roots)])) == len(roots)
+        assert len(set(listed)) == len(listed) == X.total(size)
+
+
 def test_the_order_is_one_order_and_does_not_change():
     once, again = list(X.generate(5)), list(X.generate(5))
     assert once == again

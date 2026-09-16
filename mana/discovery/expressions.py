@@ -185,9 +185,49 @@ def total(size: int, form: str = "P", lam: bool = False) -> int:
 # -- enumeration: the one fixed order ------------------------------------------
 
 def generate(size: int, form: str = "P") -> Iterator[tuple]:
-    """Every expression of this form and size, in the declared order."""
-    for expression, _ in _of(form, size, False, True):
-        yield expression
+    """Every expression of this form and size, in the declared order: the
+    root operations take turns, one expression each, and a stream that runs
+    out drops away.
+
+    Why turns and not one operation after another: a size too large to
+    exhaust is covered by its beginning, and a beginning of one shape is not
+    the size. Measured: the first 12 000 expressions of size 9 screened at
+    283 a second against 83 for the whole of size 8 -- the cheap `item`
+    forms stand at the head of a strict order and the costly ones far behind
+    it (docs/ГЛУБИНА_D3.md, 10.2). Turns make the beginning hold every root
+    form in the proportion the space has them. Inside a root the order is
+    unchanged: by the size of the left part, then by the parts."""
+    streams = _roots(form, size)
+    while streams:
+        alive = []
+        for stream in streams:
+            made = next(stream, None)
+            if made is not None:
+                yield made[0]
+                alive.append(stream)
+        streams = alive
+
+
+def _roots(form: str, size: int) -> List[Iterator[Tuple[tuple, bool]]]:
+    """One stream per root operation, in the order of OPS."""
+    out: List[Iterator[Tuple[tuple, bool]]] = []
+    if size == 1:
+        out.append(iter([(atom, False) for atom in _atoms(form, False)]))
+    for name, gives, asks in OPS:
+        if gives != form:
+            continue
+        if name == "candidates":
+            if size == 2:
+                out.append(iter([(("candidates", ("const", k)), True)
+                                 for k in CANDIDATE_SIZES]))
+            continue
+        out.append(_one_root(name, asks, size))
+    return out
+
+
+def _one_root(name: str, asks: Sequence[str], size: int) -> Iterator[Tuple[tuple, bool]]:
+    for parts in _cuts(asks, size - 1):
+        yield from _made(name, asks, parts, False, True)
 
 
 def _of(form: str, size: int, lam: bool, free: bool) -> Iterator[Tuple[tuple, bool]]:
