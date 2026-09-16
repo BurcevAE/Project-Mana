@@ -49,6 +49,26 @@ CELLS = (("А: k≤6, 2.5k", 0, 2500), ("Б: k≤6, 40k", 0, 40000),
          ("В: k≤10, 2.5k", 4, 2500), ("Г: k≤10, 40k", 4, 40000))
 
 
+#: How many candidates one expression may read without paying for them (12.2,
+#: added after cells В and Г ran for an hour without an answer). Reading is
+#: free in the contract -- only evaluating is charged -- so an expression
+#: that looks at candidates(10) through a lambda that evaluates nothing walks
+#: millions of programs, and keeps every smaller size in memory while it does.
+READ_CAP = 200_000
+
+
+class _ReadCap(Exception):
+    """An expression read more candidates than READ_CAP without paying."""
+
+
+class _CappedCandidates(questions._Candidates):
+    def __iter__(self):
+        for read, p in enumerate(super().__iter__()):
+            if read >= READ_CAP:
+                raise _ReadCap()
+            yield p
+
+
 def _try(e, it, share):
     """(X or None, why it failed) -- the budget apart from the form."""
     ledger = problems.Ledger(share)
@@ -58,9 +78,13 @@ def _try(e, it, share):
     run.nodes.append(node)
     scope = questions._Scope(run, node, it["columns"], it["target"], it["evaluator"],
                              it["leaves"], it["conditions"], it["own"].program, it["held"])
+    scope.ops["candidates"] = lambda ex, env, c: _CappedCandidates(
+        scope.leaves, scope.conditions, scope.value(ex[1], env, c))
     try:
         x = scope.value(e, {"share": share}, True)
         values = np.asarray(it["evaluator"](x), dtype=np.int64)
+    except _ReadCap:
+        return None, "чтение"
     except questions._Short:
         return None, "бюджет"
     except Exception as bad:                      # noqa: BLE001 -- the class is the point
@@ -190,11 +214,12 @@ def main() -> None:
             form3 = sum(v for k, v in classes.items() if k.startswith("форма"))
             print(f"  ступень 3а, доля формы среди отказов "
                   f"{100 * form3 / max(1, len(fell) - classes['исполнилась']):.1f}%", flush=True)
-        if what in ("д2", "обе"):
+        if what in ("д2", "обе", "вг"):
             print(f"\n=== Д2: какой запор держит щель; {time.time() - started:.0f}с", flush=True)
             listed = d2_sample(SEED)
             print(f"  выражений в выборке: {len(listed)}", flush=True)
-            jobs = [(name, widen, share, listed) for name, widen, share in CELLS]
+            cells = CELLS if what == "д2" or what == "обе" else CELLS[2:]
+            jobs = [(name, widen, share, listed) for name, widen, share in cells]
             print("  клетка            различных X   размеры X            отказы")
             for name, count, sizes, why in pool.map(d2_job, jobs):
                 print(f"  {name:<16}  {count:>11}   {str(sizes):<20} {why}", flush=True)
