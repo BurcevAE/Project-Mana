@@ -277,6 +277,21 @@ def _batches(most, done, limit=0):
             yield (number, most, listed)
 
 
+def from_file(done):
+    """Survivors and coverage as an earlier session wrote them, for a run
+    that takes up stage 3a where screening was stopped by hand (10.9). What
+    was screened is read, never screened again: the file is the record."""
+    survivors, covered = [], {}
+    for row in done.values():
+        if row.get("kind") != "screen":
+            continue
+        n = row["size"]
+        visited, whole, here = covered.get(n, (0, X.total(n), 0.0))
+        covered[n] = (visited + row.get("visited", 0), whole, here)
+        survivors += row.get("passed", [])
+    return survivors, covered
+
+
 def _full_key(job) -> str:
     rank, _, inst, branch = job
     return f"full:{rank}:{inst}:{branch}"
@@ -390,13 +405,20 @@ def main() -> None:
     path = sys.argv[2] if len(sys.argv) > 2 else str(ROOT / "d3_prep1_results.jsonl")
     most = int(sys.argv[3]) if len(sys.argv) > 3 else X.MOST
     only = len(sys.argv) > 4 and sys.argv[4] == "скрининг"
+    straight = len(sys.argv) > 4 and sys.argv[4] == "3а"
     limit = int(sys.argv[5]) if len(sys.argv) > 5 else 0
     started = time.time()
     done = load(path)
     print(f"результаты: {path}; уже записано {len(done)}; потолки {CEILING}", flush=True)
     with multiprocessing.Pool(workers) as pool:
-        survivors, counts, stopped, covered = screen(pool, workers, path, done, most, started,
-                                                     limit)
+        if straight:
+            survivors, covered = from_file(done)
+            counts, stopped = Counter(), "скрининг остановлен решением владельца (10.9)"
+            print(f"  из файла: выживших {len(survivors)}; размеров {len(covered)}; "
+                  f"пройдено {sum(v for v, _, _ in covered.values())}", flush=True)
+        else:
+            survivors, counts, stopped, covered = screen(pool, workers, path, done, most, started,
+                                                         limit)
         spent = time.time() - started
         print(f"\nскрининг: {dict(counts)}; прошло {len(survivors)}; {spent:.0f}с", flush=True)
         if only:
