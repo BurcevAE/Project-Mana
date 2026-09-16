@@ -67,8 +67,16 @@ CEILING = {"порождено": 15_000_000, "ступень 1": 15_000_000, "с
 #: Stage 3a takes the same number of candidates from every size, not the
 #: first N of the whole order: the size is one of the variables of the
 #: experiment, so it must not depend on how well small programs screen
-#: (owner's decision, 10.3). Fixed before the run, from measured cost.
-QUOTA = 300
+#: (owner's decision, 10.3). Fixed before the run, from measured cost: one
+#: run is 10.6 seconds of processor time at every size from 4 to 10, so
+#: 8 sizes x 200 x 4 instances is about 3.2 hours on six processes.
+QUOTA = 200
+#: Of the 12 hours, what screening may take. Measured before the run: 234
+#: expressions a second, so every size up to 9 is exhausted in 2.4 hours and
+#: the rest of this budget goes into the beginning of size 10, which cannot
+#: be exhausted at all (10.5). Without this, screening would eat the whole
+#: ceiling and stage 3 would never run.
+SCREEN_HOURS = 6.5
 HOURS = 12.0
 #: What an expression of the wrong shape may raise when it runs.
 FAULTS = (TypeError, ValueError, IndexError, KeyError, ZeroDivisionError, OverflowError,
@@ -289,8 +297,8 @@ def screen(pool, path, done, most, started):
                 spent = sum(v for k, v in counts.items() if k != "повтор X" and k != "прошло")
                 if spent >= CEILING["ступень 1"] or counts["ступень 2"] >= CEILING["ступень 2"]:
                     stopped = f"потолок на размере {n}"
-                if time.time() - started > HOURS * 3600:
-                    stopped = f"время на размере {n}"
+                if time.time() - started > SCREEN_HOURS * 3600:
+                    stopped = f"время скрининга на размере {n}"
                 if stopped:
                     break
             done_here = not stopped
