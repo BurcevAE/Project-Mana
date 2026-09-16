@@ -288,21 +288,20 @@ def _arg(asks: str, size: int, lam: bool, free: bool) -> Iterator[Tuple[tuple, b
 # -- a uniform sample of the same space, for the diagnostic baseline ----------
 
 def sample(size: int, rng: random.Random, form: str = "P") -> tuple:
-    """One expression of this form and size, uniformly among them all."""
-    return _sampled(form, size, False, True, rng)
+    """One expression of this form and size, uniformly among them all.
 
-
-def _weight(form: str, size: int, lam: bool, free: bool) -> int:
-    a, b = count(form, size, lam)
-    return a + (b if free else 0)
-
-
-def _weight_arg(asks: str, size: int, lam: bool, free: bool) -> int:
-    if asks == "K":
-        return len(CANDIDATE_SIZES) if size == 1 else 0
-    if asks == "Λ":
-        return count("N", size - 1, True)[0] if size >= 2 else 0
-    return _weight(asks, size, lam, free)
+    The counting splits the space in two -- expressions with no `candidates`
+    and expressions with exactly one -- and the drawing must split the same
+    way: first whether this expression carries one at all, then which part of
+    it does, and the other parts are drawn from the population that has none.
+    Weighing every part as if it were free to carry one picks combinations
+    that cannot be built, and the draw then dies on an empty space -- which
+    is how the diagnostics fell over at size 8."""
+    without, with_one = count(form, size, False)
+    if without + with_one <= 0:
+        raise ValueError("пустое пространство")
+    carries = rng.randrange(without + with_one) >= without
+    return _draw(form, size, False, carries, rng)
 
 
 def _pick(weighted: Sequence[Tuple[int, object]], rng: random.Random):
@@ -317,49 +316,58 @@ def _pick(weighted: Sequence[Tuple[int, object]], rng: random.Random):
     raise AssertionError
 
 
-def _sampled(form: str, size: int, lam: bool, free: bool, rng: random.Random) -> tuple:
+def _ways(form: str, size: int, lam: bool, holds: bool) -> List[Tuple[int, object]]:
+    """Every way to build an expression of this form and size, each weighed by
+    how many expressions it stands for. `holds`: it carries one `candidates`."""
     ways: List[Tuple[int, object]] = []
-    if size == 1:
-        ways += [(1, atom) for atom in _atoms(form, lam)]
+    if size == 1 and not holds:
+        ways += [(1, ("atom", atom)) for atom in _atoms(form, lam)]
     for name, gives, asks in OPS:
         if gives != form or (lam and name in NOT_IN_LAMBDA):
             continue
         if name == "candidates":
-            if size == 2 and free:
-                ways += [(1, ("candidates", ("const", k))) for k in CANDIDATE_SIZES]
+            if size == 2 and holds:
+                ways += [(1, ("atom", ("candidates", ("const", k))))
+                         for k in CANDIDATE_SIZES]
             continue
         for parts in _cuts(asks, size - 1):
-            weight = 1
-            for a, n in zip(asks, parts):
-                weight *= _weight_arg(a, n, lam, free)
-            if name in ARITHMETIC and all(n == 1 for n in parts):
-                weight -= len(K) ** len(parts)             # restriction 7
-            if weight > 0:
-                ways.append((weight, (name, asks, parts)))
-    chosen = _pick(ways, rng)
-    if type(chosen) is not tuple or len(chosen) != 3 or chosen[0] not in dict(
-            (name, True) for name, _, _ in OPS):
-        return chosen
-    name, asks, parts = chosen
+            counted = [_count_arg(a, n, lam) for a, n in zip(asks, parts)]
+            if not holds:
+                whole = 1
+                for a, _ in counted:
+                    whole *= a
+                if name in ARITHMETIC and all(n == 1 for n in parts):
+                    whole -= len(K) ** len(parts)          # restriction 7
+                if whole > 0:
+                    ways.append((whole, (name, asks, parts, -1)))
+                continue
+            for i, (_, with_one) in enumerate(counted):
+                if not with_one:
+                    continue
+                whole = with_one
+                for j, (a, _) in enumerate(counted):
+                    if j != i:
+                        whole *= a
+                if whole > 0:
+                    ways.append((whole, (name, asks, parts, i)))
+    return ways
+
+
+def _draw(form: str, size: int, lam: bool, holds: bool, rng: random.Random) -> tuple:
+    chosen = _pick(_ways(form, size, lam, holds), rng)
+    if chosen[0] == "atom":
+        return chosen[1]
+    name, asks, parts, carrier = chosen
     while True:
-        made, taken = [], False
-        for a, n in zip(asks, parts):
-            part = _sampled_arg(a, n, lam, free and not taken, rng)
-            taken = taken or _holds_candidates(part)
-            made.append(part)
+        made = [_draw_arg(a, n, lam, i == carrier, rng)
+                for i, (a, n) in enumerate(zip(asks, parts))]
         if _admitted(name, made):
             return (name,) + tuple(made)
 
 
-def _sampled_arg(asks: str, size: int, lam: bool, free: bool, rng: random.Random):
+def _draw_arg(asks: str, size: int, lam: bool, holds: bool, rng: random.Random):
     if asks == "K":
         return ("const", rng.choice(CANDIDATE_SIZES))
     if asks == "Λ":
-        return ("lambda", "x", _sampled("N", size - 1, True, False, rng))
-    return _sampled(asks, size, lam, free, rng)
-
-
-def _holds_candidates(e) -> bool:
-    if type(e) is not tuple or not e:
-        return False
-    return e[0] == "candidates" or any(_holds_candidates(part) for part in e[1:])
+        return ("lambda", "x", _draw("N", size - 1, True, False, rng))
+    return _draw(asks, size, lam, holds, rng)

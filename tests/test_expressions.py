@@ -147,6 +147,21 @@ def test_the_ladder_of_sizes_grows_and_is_counted_before_it_is_built():
 
 # -- the uniform sample of the same space --------------------------------------
 
+def test_a_sample_can_always_be_drawn_and_holds_to_the_restrictions():
+    """The drawing must agree with the counting about what can be built.
+    Weighing every part as if it could carry the `candidates` picks
+    combinations that cannot be built: the diagnostics died on an empty
+    space at size 8, and the small samples before them had not shown it."""
+    rng = random.Random(3)
+    for size in (5, 6, 7, 8, 9, 10):
+        for _ in range(200):
+            e = X.sample(size, rng)
+            assert _form(e) == "P" and _size(e) == size
+            assert _holds(e, "candidates") <= 1
+            assert not _arithmetic_over_constants(e)
+            assert not _bound_outside_a_lambda(e)
+
+
 def test_a_sample_is_of_the_space_and_repeats_with_its_seed():
     space = set(X.generate(4))
     rng = random.Random(7)
