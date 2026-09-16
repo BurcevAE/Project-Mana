@@ -256,11 +256,13 @@ def _base(most: int) -> int:
     return sum(X.total(n) for n in range(1, most))
 
 
-def _batches(most, done):
+def _batches(most, done, limit=0):
     """The expressions of one size, numbered, in batches, skipping what is done.
     The rank is the place in the whole declared order, not within the size:
-    ranks of different sizes must not collide."""
-    stream = X.generate(most)
+    ranks of different sizes must not collide. `limit` walks only the first
+    so many of the size -- for measuring the rate of a size too large to
+    exhaust."""
+    stream = islice(X.generate(most), limit) if limit else X.generate(most)
     number, rank = 0, _base(most)
     while True:
         listed = [[rank + i, e] for i, e in enumerate(islice(stream, BATCH))]
@@ -278,7 +280,7 @@ def _write(fh, done, row):
     fh.flush()
 
 
-def screen(pool, path, done, most, started):
+def screen(pool, path, done, most, started, limit=0):
     """Stages 1 and 2 over every size up to `most`, in the declared order."""
     counts: Counter = Counter()
     survivors = []
@@ -286,9 +288,11 @@ def screen(pool, path, done, most, started):
     with open(path, "a", encoding="utf-8") as fh:
         for n in range(1, most + 1):
             whole = X.total(n)
+            walked = min(whole, limit) if limit else whole
             began = time.time()
-            print(f"  размер {n}: выражений {whole}", flush=True)
-            for row in pool.imap(screen_batch, _batches(n, done), chunksize=1):
+            print(f"  размер {n}: выражений {whole}"
+                  + (f", предел {walked}" if walked < whole else ""), flush=True)
+            for row in pool.imap(screen_batch, _batches(n, done, limit), chunksize=1):
                 _write(fh, done, row)
                 counts.update(row["counts"])
                 survivors += row["passed"]
@@ -307,9 +311,10 @@ def screen(pool, path, done, most, started):
             # The rate is only the size's own when the size was exhausted: an
             # expression of size 10 is longer than one of size 5, and the
             # whole protocol's arithmetic hangs on whether the rate holds.
-            rate = f", {whole / here:.0f} выражений в секунду" if done_here and here else ""
-            print(f"  размер {n}: {'исчерпан' if done_here else stopped}; "
-                  f"прошло {len(survivors)}; {here:.0f}с{rate}", flush=True)
+            rate = f", {walked / here:.0f} выражений в секунду" if done_here and here else ""
+            label = ("исчерпан" if walked == whole else f"пройден предел {walked}") \
+                if done_here else stopped
+            print(f"  размер {n}: {label}; прошло {len(survivors)}; {here:.0f}с{rate}", flush=True)
             if stopped:
                 break
     return survivors, counts, stopped
@@ -320,11 +325,12 @@ def main() -> None:
     path = sys.argv[2] if len(sys.argv) > 2 else str(ROOT / "d3_prep1_results.jsonl")
     most = int(sys.argv[3]) if len(sys.argv) > 3 else X.MOST
     only = len(sys.argv) > 4 and sys.argv[4] == "скрининг"
+    limit = int(sys.argv[5]) if len(sys.argv) > 5 else 0
     started = time.time()
     done = load(path)
     print(f"результаты: {path}; уже записано {len(done)}; потолки {CEILING}", flush=True)
     with multiprocessing.Pool(workers) as pool:
-        survivors, counts, stopped = screen(pool, path, done, most, started)
+        survivors, counts, stopped = screen(pool, path, done, most, started, limit)
         spent = time.time() - started
         print(f"\nскрининг: {dict(counts)}; прошло {len(survivors)}; {spent:.0f}с", flush=True)
         if only:
