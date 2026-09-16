@@ -149,7 +149,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Tuple
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.16"
+__version__ = "1.17"
 
 # Why a question is open.
 NOT_ENOUGH_DATA = "NOT_ENOUGH_DATA"   # nothing observed about it yet
@@ -296,6 +296,14 @@ class HypothesisSet:
         self.doubted = 0
         self.doubt_reopened = 0
         self._doubted_at: Dict[str, int] = {}
+        #: Widening from the model's own state (docs/РАСШИРЕНИЕ_ПРОСТРАНСТВА.md):
+        #: the estimate of belief over the language for each (leader, history
+        #: length), every estimate made, how many times the space was widened,
+        #: and whether the language itself was ever found not enough.
+        self._space_cache: Dict[Tuple[str, int], Any] = {}
+        self.space_estimates: List[Tuple[int, str, Any]] = []
+        self.widened = 0
+        self.language_short = False
         self.challenged: set = set()
         self.capped = False
         #: Belief that the family misses the truth; None while model checks
@@ -1130,16 +1138,51 @@ def _doubts(hypotheses: HypothesisSet, lead: Hypothesis, explain,
     return False, True
 
 
+def _widen(hypotheses: HypothesisSet, lead: Hypothesis, language, explain,
+           space: Sequence[Dict[str, Any]]) -> Tuple[bool, bool]:
+    """Before a leader is accepted, from the model's own state: is belief in
+    it over the whole language of explanations enough? Returns (keep open,
+    added). Not enough -- the question stays open, and once per history
+    discovery and the unrepresented behaviours found enter as rivals of the
+    leader. Enough -- nothing to widen. An estimate that ran out of compute
+    undecided is not enough: doubt remains rather than a forced answer."""
+    key = (lead.name, len(hypotheses.history))
+    estimate = hypotheses._space_cache.get(key)
+    fresh = estimate is None
+    if fresh:
+        estimate = language(hypotheses, lead, space)
+        hypotheses._space_cache[key] = estimate
+        hypotheses.space_estimates.append((len(hypotheses.history), lead.name, estimate))
+        if estimate.language_short:
+            hypotheses.language_short = True
+    if estimate.enough:
+        return False, False
+    added = False
+    if fresh and hypotheses.widened < EXPLAIN_LIMIT:
+        hypotheses.widened += 1
+        born: List[Hypothesis] = []
+        if explain is not None:
+            born += explain(hypotheses)[0]
+        born += list(estimate.rivals)
+        if born and hypotheses.add(born, prior_each=RIVAL_PRIOR * lead.prior):
+            added = True
+    return True, added
+
+
 def settle(hypotheses: HypothesisSet, space: Sequence[Dict[str, Any]],
            challenge: Optional[Callable[[Hypothesis], List[Hypothesis]]] = None,
            confidence: float = CONFIDENCE,
            explain: Optional[Callable[[HypothesisSet],
                                       Tuple[List[Hypothesis], List[float]]]] = None,
-           doubt: bool = False) -> Optional[Tuple[str, Tuple[str, ...]]]:
+           doubt: bool = False,
+           language: Optional[Callable[..., Any]] = None
+           ) -> Optional[Tuple[str, Tuple[str, ...]]]:
     """Is this question answered? Part of updating knowledge, not of
     choosing actions: the same test whichever policy gathered the data.
     `explain`: a generator of new explanations, asked when OTHER leads; with
-    `doubt`, also asked before a leader is accepted."""
+    `doubt`, also asked before a leader is accepted. `language`: an estimate
+    of belief over the whole language of explanations -- the model's own
+    ground to widen its space before accepting (docs/РАСШИРЕНИЕ_ПРОСТРАНСТВА.md)."""
     if hypotheses.settled:
         return hypotheses.settled
     if hypotheses.stakes is not None:
@@ -1210,6 +1253,10 @@ def settle(hypotheses: HypothesisSet, space: Sequence[Dict[str, Any]],
             return None                     # the space of models was not enough
         if added:
             names, mass, lead = hypotheses.leading_class(space)
+    if language is not None:
+        keep_open, added = _widen(hypotheses, lead, language, explain, space)
+        if keep_open:
+            return None                     # belief over the language is not enough
     if hypotheses.boundary is not None:
         hypotheses.applicability = hypotheses.applicability_for(lead)
     hypotheses.settled = (ANSWERED, names)
@@ -1317,7 +1364,8 @@ def inquire(detect: Callable[[], List[Question]], world: ProbeProvider, budget: 
             boundary: Optional[str] = None,
             explain: Optional[Callable[[HypothesisSet],
                                        Tuple[List[Hypothesis], List[float]]]] = None,
-            doubt: bool = False) -> Report:
+            doubt: bool = False,
+            language: Optional[Callable[..., Any]] = None) -> Report:
     """Settle what can be settled, then act where a question gains most per
     unit of cost, until nothing open is worth what it would take. `explain`:
     a generator asked for new explanations when OTHER leads."""
@@ -1363,7 +1411,7 @@ def inquire(detect: Callable[[], List[Question]], world: ProbeProvider, budget: 
             # "not permitted to find out" an answer.
             space = [s.params for s in offered]
             done = settle(question.hypotheses, space, challenge, confidence, explain=explain,
-                          doubt=doubt)
+                          doubt=doubt, language=language)
             if done:
                 answers[question.subject] = done
                 continue
