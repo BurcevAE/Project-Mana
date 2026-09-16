@@ -170,6 +170,19 @@ def test_a_schedule_gives_each_depth_its_own_plans_and_none_past_its_end():
     assert any(depth[n.index] == 3 for n in solved.nodes)
 
 
+def test_a_plan_keeps_its_derivation_when_the_experiment_changes():
+    """D3 invents the experiment; the derivation and the rebuild stay."""
+    mine = plans.with_experiment(plans.D1B[2], ("item", ("leaves",), ("const", 0)))
+    assert mine.entries == plans.D1B[2].entries and mine.rebuild == plans.D1B[2].rebuild
+    assert plans.with_experiment(plans.D1B[0], plans.D1B[0].experiment) == plans.D1B[0]
+    cols, target = _sum_of_two()
+    solved = questions.solve(problems.Problem.whole(cols, target), P.CURRENT, 60000,
+                             plans=(mine,), flat_share=0.5)
+    posed = [r for r in solved.records if r.plan == mine.name]
+    assert posed and posed[0].experiment == mine.experiment
+    assert {n.problem.operator for n in solved.nodes[1:]} <= {e.name for e in mine.entries}
+
+
 # -- candidates(s) (D3-prep-0) -------------------------------------------------
 
 LEAVES = (get("x"), get("y"), const(0))

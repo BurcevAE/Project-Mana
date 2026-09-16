@@ -17,7 +17,13 @@ from .language import add, if_, sub
 from .questions import Entry, Plan
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.0"
+__version__ = "1.1"
+
+
+def with_experiment(plan: Plan, experiment: tuple) -> Plan:
+    """The same plan -- the same derivation, the same rebuild -- from another
+    experiment. What D3 invents is the experiment (docs/ГЛУБИНА_D3.md)."""
+    return Plan(plan.name, experiment, plan.entries, plan.rebuild)
 
 
 def v(name: str) -> tuple:
