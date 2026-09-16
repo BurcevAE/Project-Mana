@@ -58,10 +58,16 @@ from .problems import (ARTICLES, ASSEMBLE, BUILD, FLAT, MAX_DEPTH, SEARCH, VERIF
 from .search import vocabulary
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.1"
+__version__ = "1.2"
 
 #: A hole of a rebuild template: ("?", name) or ("?", name, item).
 HOLE = "?"
+
+#: A rebuild template that offers two forms: build both, keep the one the
+#: verdict prefers, pay for both (D0, 9 -- the branch symmetry of the
+#: assembly). It stands at the top of a template, and the interpreter still
+#: compares by the measure alone, as it already does between plans.
+EITHER = "either"
 
 
 @dataclass(frozen=True)
@@ -146,6 +152,13 @@ def _fill(template, env):
         return _substitute(_fill(template[1], env), template[2], _fill(template[3], env))
     kids = children(template)
     return rebuild(template, [_fill(kid, env) for kid in kids]) if kids else template
+
+
+def _forms(template, env) -> List[tuple]:
+    """Every program a template offers: one, or both sides of an `either`."""
+    if template[0] == EITHER:
+        return [p for side in template[1:] for p in _forms(side, env)]
+    return [_fill(template, env)]
 
 
 def _substitute(p, name, value):
@@ -413,15 +426,18 @@ class _Interpreter:
             made = self._pose(plan, node, scope, share, depth)
             if made is None:
                 continue
-            if not self._afford(2):
-                break
-            candidate, used = made
-            self._charge(node, ASSEMBLE, 1)
-            self._charge(node, VERIFY, 1)
-            key = _key(candidate, columns, target, evaluator)
-            if key < best[0]:
-                best = (key, candidate, plan.name, used)
-            if best[0][2] == 0:
+            forms, used = made
+            short = False
+            for candidate in forms:
+                if not self._afford(2):
+                    short = True
+                    break
+                self._charge(node, ASSEMBLE, 1)
+                self._charge(node, VERIFY, 1)
+                key = _key(candidate, columns, target, evaluator)
+                if key < best[0]:
+                    best = (key, candidate, plan.name, used)
+            if short or best[0][2] == 0:
                 break
         _, node.program, node.chosen, node.used = best
         for record in self.records:
@@ -467,11 +483,11 @@ class _Interpreter:
             answers[entry.name] = child
             env[entry.name] = child.program
             used.append(child.index)
-        candidate = _fill(plan.rebuild, env)
+        forms = _forms(plan.rebuild, env)
         record.derived = tuple(used)
-        record.candidate = show(candidate)
+        record.candidate = "; ".join(show(form) for form in forms)
         self._close(record, before, "")
-        return candidate, tuple(used)
+        return forms, tuple(used)
 
     def _close(self, record: ResearchRecord, before: Dict[str, int], stopped: str) -> None:
         record.cost = {a: self.ledger.spent[a] - before[a] for a in ARTICLES}

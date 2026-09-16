@@ -24,8 +24,9 @@ it is D1b's one procedure, declared before it was written:
            остаток-          P' = R - target      candidate R - R'
            промахи и случаи  P' = the target on R's misses -> R' (half the
                              share); the condition where exactly one of R, R'
-                             is right -> C (the other half); candidate
-                             if(C, R, R')
+                             is right -> C (the other half); candidates
+                             if(C, R, R') and if(C, R', R) -- both
+                             orientations, paid for apart (D0, 9)
     4  the node's answer: the shortest description of R and the candidates,
        by the same measure and the same order at a tie. Once it is exact on
        the node's points, the remaining branches are not run
@@ -53,7 +54,7 @@ from .language import Evaluator, Program, add, if_, show, size, sub
 from .search import Found, vocabulary
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.1"
+__version__ = "1.2"
 
 SEARCH, BUILD, ASSEMBLE, VERIFY = "search", "build", "assemble", "verify"
 ARTICLES = (SEARCH, BUILD, ASSEMBLE, VERIFY)
@@ -220,15 +221,18 @@ class _Procedure:
             made = self._branch(branch, node, columns, target, values, share, depth)
             if made is None:
                 continue
-            if not self._afford(2):
-                break
-            candidate, used = made
-            self._charge(node, ASSEMBLE, 1)
-            self._charge(node, VERIFY, 1)
-            key = _key(candidate, columns, target, evaluator)
-            if key < best[0]:
-                best = (key, candidate, branch, used)
-            if best[0][2] == 0:
+            forms, used = made
+            short = False
+            for candidate in forms:
+                if not self._afford(2):
+                    short = True
+                    break
+                self._charge(node, ASSEMBLE, 1)
+                self._charge(node, VERIFY, 1)
+                key = _key(candidate, columns, target, evaluator)
+                if key < best[0]:
+                    best = (key, candidate, branch, used)
+            if short or best[0][2] == 0:
                 break
         _, node.program, node.chosen, node.used = best
         return node
@@ -253,8 +257,9 @@ class _Procedure:
             if child is None:
                 return None
             answer = child.program
-            return (add(r, answer) if branch == RESIDUAL else sub(r, answer)), (child.index,)
-        if branch == CASES:
+            made = add(r, answer) if branch == RESIDUAL else sub(r, answer)
+            return (made,), (child.index,)
+        if branch == CASES:  # noqa: C901 -- both orientations, D0, 9
             misses = values != target
             self._charge(node, BUILD, 1)
             half = share // 2
@@ -273,7 +278,13 @@ class _Procedure:
                                    share - half, depth + 1)
             if condition is None:
                 return None
-            return if_(condition.program, r, rest.program), (rest.index, condition.index)
+            # Both orientations: on a two-valued question the search may
+            # return the condition's complement at no cost in bits, and
+            # swapping the branches is how the answer's language says "not"
+            # (D0, 9).
+            return ((if_(condition.program, r, rest.program),
+                     if_(condition.program, rest.program, r)),
+                    (rest.index, condition.index))
         raise ValueError(f"no such branch: {branch!r}")
 
 

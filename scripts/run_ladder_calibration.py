@@ -78,7 +78,20 @@ class Oracle:
         self.spent = 0
         self.failure = ""
 
-    def flat(self, rows: np.ndarray, target: np.ndarray, condition: bool = False):
+    def condition(self, rows: np.ndarray, target: np.ndarray):
+        """The condition piece, in either orientation: on a two-valued
+        question the search may return the complement for the same bits, and
+        the assembly may swap the branches for it (D0, 9). Returns the
+        program and whether the branches are to be swapped."""
+        program = self.flat(rows, target, condition=True, mirror=True)
+        if program is None:
+            return None
+        cols = {v: c[rows] for v, c in self.columns.items()}
+        out = (Evaluator(cols)(program) != 0).astype(np.int64)
+        return program, not np.array_equal(out, target[rows])
+
+    def flat(self, rows: np.ndarray, target: np.ndarray, condition: bool = False,
+             mirror: bool = False):
         """A piece for the flat search. Not exact on its own points: the
         piece failed, and the tree with it. A condition is judged by what
         if() reads of it, whether it is 0 -- not by its value (second
@@ -90,6 +103,8 @@ class Oracle:
         if condition:
             out = (out != 0).astype(np.int64)
         wrong = int(np.count_nonzero(out != target[rows]))
+        if mirror and wrong == int(rows.sum()):
+            return found.program                      # the complement: swapped
         if wrong:
             values = len(set(target[rows].tolist()))
             # On two values a program wrong on most points can be a short
@@ -124,8 +139,11 @@ class Oracle:
                 self.failure = f"ни одна ветвь не права в {int(neither.sum())} точках"
                 return None
             told = rows & (ours != theirs)
-            condition = self.flat(told, (target == ours).astype(np.int64), condition=True)
-            return None if condition is None else if_(condition, leaf, rest)
+            made = self.condition(told, (target == ours).astype(np.int64))
+            if made is None:
+                return None
+            program, swapped = made
+            return if_(program, rest, leaf) if swapped else if_(program, leaf, rest)
         return self.flat(rows, target)
 
 

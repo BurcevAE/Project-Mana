@@ -11,7 +11,7 @@ import numpy as np
 
 from mana.discovery import plans, problems, questions
 from mana.discovery import policy as P
-from mana.discovery.language import EQUAL, LESS, cmp, const, get, show, size
+from mana.discovery.language import EQUAL, LESS, cmp, const, get, if_, show, size
 from mana.discovery.worlds import W0
 
 FIELDS = ("program", "bits", "program_bits", "error_bits", "evaluations", "rounds",
@@ -168,6 +168,22 @@ def test_a_schedule_gives_each_depth_its_own_plans_and_none_past_its_end():
     for r in solved.records:
         assert r.plan == (first.name if depth[r.parent] == 1 else second.name)
     assert any(depth[n.index] == 3 for n in solved.nodes)
+
+
+def test_a_template_may_offer_two_forms_and_both_are_paid_for():
+    """D0, 9: the assembly tries both orientations, and pays for each."""
+    assert plans.D1B[2].rebuild[0] == questions.EITHER
+    env = {"X": get("x"), "промахи": get("y"), "случаи": get("z")}
+    assert questions._forms(plans.D1B[2].rebuild, env) == [
+        if_(get("z"), get("x"), get("y")), if_(get("z"), get("y"), get("x"))]
+    assert questions._forms(plans.D1B[0].rebuild, {"X": get("x"), "остаток": get("y")}) == \
+        [plans.add(get("x"), get("y"))]
+    cols, target = _sum_of_two()
+    solved = questions.solve(problems.Problem.whole(cols, target), P.CURRENT, 60000,
+                             plans=(plans.D1B[2],), flat_share=0.5)
+    spent = solved.ledger.spent
+    assert spent[problems.ASSEMBLE] == spent[problems.VERIFY] >= 2
+    assert any(";" in record.candidate for record in solved.records)
 
 
 def test_a_plan_keeps_its_derivation_when_the_experiment_changes():

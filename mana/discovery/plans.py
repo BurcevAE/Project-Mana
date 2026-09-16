@@ -14,10 +14,10 @@ and what the plan did is gone.
 from __future__ import annotations
 
 from .language import add, if_, sub
-from .questions import Entry, Plan
+from .questions import EITHER, Entry, Plan
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.1"
+__version__ = "1.2"
 
 
 def with_experiment(plan: Plan, experiment: tuple) -> Plan:
@@ -59,7 +59,7 @@ def _misses_then_cases(name: str, experiment: tuple, rest: str, choice: str) -> 
         Entry(rest, ("question", TARGET, ("not", _right(v("X")))), HALF),
         Entry(choice, ("question", ("bool", _right(v("X"))),
                        ("neq", _right(v("X")), _right(v(rest)))), OTHER_HALF),
-    ), if_(h(choice), h("X"), h(rest)))
+    ), (EITHER, if_(h(choice), h("X"), h(rest)), if_(h(choice), h(rest), h("X"))))
 
 
 #: D1b's branches, in D0's table order.
@@ -104,7 +104,7 @@ C_MASK = Plan(
     (Entry("C вне", ("question", TARGET, ("not", ("item", v("X"), c(1)))), HALF),
      Entry("C где", ("question", ("bool", ("item", v("X"), c(1))),
                      ("neq", ("item", v("X"), c(1)), _right(v("C вне")))), OTHER_HALF)),
-    if_(h("C где"), h("X", 0), h("C вне")))
+    (EITHER, if_(h("C где"), h("X", 0), h("C вне")), if_(h("C где"), h("C вне"), h("X", 0))))
 
 DIAGNOSTIC = (A_REST, A_COVER, A_SPLIT, C_MASK)
 

@@ -158,6 +158,17 @@ def test_the_order_is_the_order_given():
         assert first(forward) == ["остаток"] and first(backward) == ["промахи"]
 
 
+def test_the_cases_branch_offers_both_orientations():
+    """D0, 9: on a two-valued question the search may return the condition's
+    complement for the same bits; the assembly swaps the branches for it."""
+    cols, target = _sum_of_two()
+    solved = problems.solve(problems.Problem.whole(cols, target), P.CURRENT, 60000,
+                            catalogue=(problems.CASES,), flat_share=0.5)
+    spent = solved.ledger.spent
+    assert spent[problems.ASSEMBLE] == spent[problems.VERIFY] >= 2
+    assert len(solved.nodes) > 1
+
+
 def test_effective_depth_is_measured_apart_from_the_budget():
     cols, target = _sum_of_two()
     solved = problems.solve(problems.Problem.whole(cols, target), P.CURRENT, 60000,
