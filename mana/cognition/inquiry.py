@@ -1164,6 +1164,12 @@ def _widen(hypotheses: HypothesisSet, lead: Hypothesis, language, explain,
         if explain is not None:
             born += explain(hypotheses)[0]
         born += list(estimate.rivals)
+        # Discovery and the chains may offer the same program: once is enough,
+        # or its weight is counted twice.
+        unique: Dict[str, Hypothesis] = {}
+        for h in born:
+            unique.setdefault(h.name, h)
+        born = list(unique.values())
         if born and hypotheses.add(born, prior_each=RIVAL_PRIOR * lead.prior):
             added = True
     return True, added
