@@ -15,9 +15,11 @@ truth is read only by the instrument, only to grade, only at stage 3.
                       shorter than the parent's answer at that b0. One probe
                       per distinct X
     3а. проба         400k on 4 existence instances, the residual branch:
-                      right on the world where the flat search is not
-    3б. подтверждение 10 instances, all three D1b branches: existence and
-                      generality by 10.4
+                      right on the world where the flat search is not. The
+                      same quota of candidates from every size, after exact
+                      repetitions of X are dropped
+    3б. подтверждение 10 instances, all three D1b branches. Existence is
+                      decided here and nowhere else (10.4)
 
 Resumable: every batch and every run is a line of a JSON-lines file, and a
 restart skips what is there.
@@ -57,7 +59,12 @@ FLAT_SHARE = 0.5
 BATCH = 2000
 #: Ceilings (10.5), frozen before the run.
 CEILING = {"порождено": 15_000_000, "ступень 1": 15_000_000, "ступень 2": 200_000,
-           "ступень 3а": 3_000, "ступень 3б": 100}
+           "ступень 3б": 100}
+#: Stage 3a takes the same number of candidates from every size, not the
+#: first N of the whole order: the size is one of the variables of the
+#: experiment, so it must not depend on how well small programs screen
+#: (owner's decision, 10.3). Fixed before the run, from measured cost.
+QUOTA = 300
 HOURS = 12.0
 #: What an expression of the wrong shape may raise when it runs.
 FAULTS = (TypeError, ValueError, IndexError, KeyError, ZeroDivisionError, OverflowError,
@@ -162,7 +169,7 @@ def screen_batch(args):
                 counts["ступень 2"] += 1
             if good:
                 counts["прошло"] += 1
-                passed.append([rank, item, f"{inst[0]}{inst[1]}/{inst[2]}", good])
+                passed.append([rank, most, item, f"{inst[0]}{inst[1]}/{inst[2]}", good, x])
                 break
     return {"kind": "screen", "key": f"screen:{most}:{number}", "size": most, "batch": number,
             "counts": dict(counts), "passed": passed}
@@ -232,10 +239,17 @@ def load(path):
     return done
 
 
+def _base(most: int) -> int:
+    """Where this size starts in the one declared order, counted not built."""
+    return sum(X.total(n) for n in range(1, most))
+
+
 def _batches(most, done):
-    """The expressions of one size, numbered, in batches, skipping what is done."""
+    """The expressions of one size, numbered, in batches, skipping what is done.
+    The rank is the place in the whole declared order, not within the size:
+    ranks of different sizes must not collide."""
     stream = X.generate(most)
-    number, rank = 0, 0
+    number, rank = 0, _base(most)
     while True:
         listed = [[rank + i, e] for i, e in enumerate(islice(stream, BATCH))]
         if not listed:
@@ -295,8 +309,20 @@ def main() -> None:
         print(f"\nскрининг: {dict(counts)}; прошло {len(survivors)}; "
               f"{time.time() - started:.0f}с", flush=True)
         survivors.sort(key=lambda s: s[0])
-        first = survivors[:CEILING["ступень 3а"]]
-        jobs = [(rank, item, inst, 0) for rank, item, _, _ in first for inst in FIRST_FOUR]
+        chosen, taken = [], {}
+        for rank, n, item, _, _, x in survivors:
+            mine = taken.setdefault(n, {})
+            # Only exact repetitions of X are dropped -- no clustering, no
+            # judgement of what counts as the same intermediate object.
+            same = json.dumps(x, ensure_ascii=False)
+            if same in mine or len(mine) >= QUOTA:
+                continue
+            mine[same] = rank
+            chosen.append((rank, n, item))
+        for n in sorted(taken):
+            print(f"  ступень 3а, размер {n}: взято {len(taken[n])} из "
+                  f"{sum(1 for s in survivors if s[1] == n)} (квота {QUOTA})", flush=True)
+        jobs = [(rank, item, inst, 0) for rank, _, item in chosen for inst in FIRST_FOUR]
         rows = []
         with open(path, "a", encoding="utf-8") as fh:
             for row in pool.imap(full_job, [j for j in jobs if f"full:{j[0]}:{j[2]}:0" not in done],
@@ -306,7 +332,7 @@ def main() -> None:
         kept = sorted({row["rank"] for row in rows
                        if row["right"] and not row["flat_right"] and row["at_root"]})
         print(f"ступень 3а: прогонов {len(rows)}; выражений с выигрышем {len(kept)}", flush=True)
-        by_rank = {rank: item for rank, item, _, _ in first}
+        by_rank = {rank: item for rank, _, item in chosen}
         jobs = [(rank, by_rank[rank], inst, branch) for rank in kept[:CEILING["ступень 3б"]]
                 for inst in EXISTENCE for branch in range(3)]
         confirmed = []
