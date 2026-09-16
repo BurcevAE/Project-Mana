@@ -55,6 +55,34 @@ def _predicts(program, names: Sequence[str], noise: float) -> Callable[[Dict], D
     return predict
 
 
+def exact_programs(conditions: Sequence[str], history, most: int = MOST,
+                   budget: int = BUDGET) -> List[Tuple[tuple, float]]:
+    """(program, bits) of the programs the search evaluated that are exact on
+    the history, shortest description first, at most `most`."""
+    names = list(conditions)
+    if not history:
+        return []
+    columns = {n: np.array([int(bool(params["conditions"][n])) for params, _ in history],
+                           dtype=np.int64) for n in names}
+    works = np.array([bool(outcome) for _, outcome in history])
+    rounds: list = []
+    found = P.run(P.with_budget(P.CURRENT, budget), columns, works.astype(np.int64),
+                  profile=True, log_rounds=rounds)
+    evaluator = Evaluator(columns)
+    exact: Dict[tuple, float] = {}
+    # Every program the search evaluated, not only its records: on a few
+    # rows the measure prefers a short program with one error to an exact
+    # one, and the record-breakers may hold no exact program at all.
+    seen = [found.program] + [p for _, p, _ in found.anytime]
+    seen += [p for pool, beam in rounds for p in list(pool) + list(beam)]
+    for program in seen:
+        if program in exact:
+            continue
+        if np.array_equal(np.asarray(evaluator(program)) != 0, works):
+            exact[program] = description.program_bits(program, len(names))
+    return sorted(exact.items(), key=lambda kv: (kv[1], show(kv[0])))[:most]
+
+
 def from_history(conditions: Sequence[str], noise: float = 0.0, most: int = MOST,
                  budget: int = BUDGET
                  ) -> Callable[[HypothesisSet], Tuple[List[Hypothesis], List[float]]]:
@@ -62,28 +90,7 @@ def from_history(conditions: Sequence[str], noise: float = 0.0, most: int = MOST
     names = list(conditions)
 
     def explain(hypotheses: HypothesisSet) -> Tuple[List[Hypothesis], List[float]]:
-        rows = hypotheses.history
-        if not rows:
-            return [], []
-        columns = {n: np.array([int(bool(params["conditions"][n])) for params, _ in rows],
-                               dtype=np.int64) for n in names}
-        works = np.array([bool(outcome) for _, outcome in rows])
-        rounds: list = []
-        found = P.run(P.with_budget(P.CURRENT, budget), columns, works.astype(np.int64),
-                      profile=True, log_rounds=rounds)
-        evaluator = Evaluator(columns)
-        exact: Dict[tuple, float] = {}
-        # Every program the search evaluated, not only its records: on a few
-        # rows the measure prefers a short program with one error to an exact
-        # one, and the record-breakers may hold no exact program at all.
-        seen = [found.program] + [p for _, p, _ in found.anytime]
-        seen += [p for pool, beam in rounds for p in list(pool) + list(beam)]
-        for program in seen:
-            if program in exact:
-                continue
-            if np.array_equal(np.asarray(evaluator(program)) != 0, works):
-                exact[program] = description.program_bits(program, len(names))
-        chosen = sorted(exact.items(), key=lambda kv: (kv[1], show(kv[0])))[:most]
+        chosen = exact_programs(names, hypotheses.history, most, budget)
         born = [Hypothesis(f"программа {show(p)}", _predicts(p, names, noise))
                 for p, _ in chosen]
         return born, [2.0 ** -bits for _, bits in chosen]

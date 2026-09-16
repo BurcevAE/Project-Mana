@@ -40,6 +40,36 @@ def test_a_draw_has_the_probability_its_description_gives_it():
     assert abs(ratio - expected) < 0.05
 
 
+def test_the_chains_agree_with_unbiased_rejection_from_the_prior():
+    """Where rejection is cheap -- two observations, many consistent programs
+    -- the posterior share of the leader's behaviour by the chains matches
+    the unbiased share by drawing from the prior and rejecting."""
+    device = _law(lambda i: bool(i >> 1 & 1))                      # s1
+    h = dev.knowledge_for(device)["b"]
+    _observe(device, h, [(True, True, False), (False, False, False)])
+    space = dev.DeviceProbes(device).space("b")
+    lead = h.get("зависит от s1")
+    leader = tuple(lead.predict(p)[True] > 0.5 for p in space)
+    agreeing, consistent = doubt.by_rejection(NAMES, h.history, leader, space, 150000, seed=5)
+    reference = agreeing / consistent
+    est = doubt.over_language(NAMES, cap=60000, batch=60000, seed=3)(h, lead, space)
+    assert consistent > 3000
+    assert abs(est.belief - reference) < 0.05, (est.belief, reference)
+
+
+def test_an_autocorrelated_series_is_worth_fewer_samples():
+    rng = random.Random(0)
+    independent = [float(rng.random() < 0.5) for _ in range(4000)]
+    sticky, state = [], 0.0
+    for _ in range(4000):
+        if rng.random() < 0.02:
+            state = 1.0 - state
+        sticky.append(state)
+    assert doubt.effective_size(independent) > 2000
+    assert doubt.effective_size(sticky) < 400
+    assert doubt.effective_size([1.0] * 100) == 100
+
+
 def test_the_estimate_cannot_see_the_world():
     for module in (doubt, prior):
         for node in ast.walk(ast.parse(inspect.getsource(module))):
