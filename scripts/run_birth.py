@@ -135,11 +135,11 @@ def run_learner(policy, law, seed):
         knowledge["b"].update(probes.params("b", c), device.rules["b"].holds(c))
     progress = dev._Progress(device, knowledge)
     world = _Logged(device, knowledge, progress)
-    hook = _Recorder(device) if policy in ("I", "R") else None
+    hook = _Recorder(device) if policy in ("I", "R", "D") else None
     challenge = dev.challenge_for(device)
-    if policy in ("I", "N"):
+    if policy in ("I", "N", "D"):
         report = inquiry.inquire(lambda: inquiry.unsettled(knowledge), world, BUDGET,
-                                 challenge=challenge, explain=hook)
+                                 challenge=challenge, explain=hook, doubt=policy == "D")
         stopped = report.stopped
     else:
         rng = random.Random(2000 + seed)
@@ -160,6 +160,15 @@ def run_learner(policy, law, seed):
                        BUDGET)
     observed = set(start) | set(world.configs)
     hidden, right = _holdout(device, _answer(device, knowledge), observed)
+    row = _row(policy, law, seed, trial, stopped, hook, world, hidden, right)
+    if policy == "D":
+        row["doubts"] = knowledge["b"].doubted
+        row["doubt_reopened"] = knowledge["b"].doubt_reopened
+        row["explained"] = knowledge["b"].explained
+    return row
+
+
+def _row(policy, law, seed, trial, stopped, hook, world, hidden, right):
     return {"policy": policy, "law": law, "seed": seed, "stratum": stratum(law),
             "verdict": trial.verdicts.get("b"), "to_correct": trial.to_correct,
             "to_settle": trial.to_settle, "actions": trial.actions, "stopped": stopped,

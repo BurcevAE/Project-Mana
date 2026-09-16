@@ -93,6 +93,48 @@ def test_the_calls_stop_at_the_declared_limit():
     assert len(asked) == inquiry.EXPLAIN_LIMIT
 
 
+def test_doubt_before_acceptance_reopens_a_wrong_leader_once_per_history():
+    """On two of three the family's leader would be accepted wrongly (10.7).
+    With doubt, the generator offers alternatives consistent with the same
+    history; one differs from the leader somewhere, so the question stays
+    open -- and the same leader on the same history is not doubted again."""
+    device = _two_of_three()
+    knowledge = dev.knowledge_for(device)
+    _observe(device, knowledge["b"], [(True, True, False), (False, False, False)])
+    inquiry.inquire(lambda: inquiry.unsettled(knowledge), dev.DeviceProbes(device), 40,
+                    challenge=dev.challenge_for(device))
+    wrong = knowledge["b"].settled
+    assert wrong[0] == inquiry.ANSWERED and dev.verdicts(device, knowledge)["b"] == dev.WRONG
+
+    device = _two_of_three()
+    knowledge = dev.knowledge_for(device)
+    _observe(device, knowledge["b"], [(True, True, False), (False, False, False)])
+    inquiry.inquire(lambda: inquiry.unsettled(knowledge), dev.DeviceProbes(device), 40,
+                    challenge=dev.challenge_for(device), explain=explain.from_history(NAMES),
+                    doubt=True)
+    h = knowledge["b"]
+    assert h.doubted >= 1 and h.doubt_reopened >= 1
+    assert h.doubted <= inquiry.EXPLAIN_LIMIT
+    space = dev.DeviceProbes(device).space("b")
+    before = h.doubted
+    h.settled = None
+    lead = max(h.live(), key=lambda x: x.weight)
+    h._doubted_at[lead.name] = len(h.history)
+    inquiry._doubts(h, lead, explain.from_history(NAMES), space, inquiry.CONFIDENCE)
+    assert h.doubted == before
+
+
+def test_without_doubt_settle_never_asks_before_acceptance():
+    device = _two_of_three()
+    knowledge = dev.knowledge_for(device)
+    _observe(device, knowledge["b"], [(True, True, False), (False, False, False)])
+    asked = []
+    hook = lambda h: (asked.append(1), ([], []))[1]  # noqa: E731
+    inquiry.inquire(lambda: inquiry.unsettled(knowledge), dev.DeviceProbes(device), 40,
+                    challenge=dev.challenge_for(device), explain=hook)
+    assert knowledge["b"].doubted == 0 and knowledge["b"].settled[0] == inquiry.ANSWERED
+
+
 def test_in_the_loop_other_asks_the_generator_instead_of_ending():
     """Inside `inquire`, when OTHER leads the hook is asked and the loop goes
     on; without it the question ends unexplained. Which answer comes out is

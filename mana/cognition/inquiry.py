@@ -149,7 +149,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Tuple
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.15"
+__version__ = "1.16"
 
 # Why a question is open.
 NOT_ENOUGH_DATA = "NOT_ENOUGH_DATA"   # nothing observed about it yet
@@ -289,6 +289,13 @@ class HypothesisSet:
         self.settled: Optional[Tuple[str, Tuple[str, ...]]] = None
         #: How many times a generator was asked for new explanations here.
         self.explained = 0
+        #: Doubt before accepting (docs/РОЖДЕНИЕ_ГИПОТЕЗ.md, 12): how many times
+        #: the generator was asked before a leader was accepted, how many of
+        #: those reopened the question, and the history length each leader
+        #: was last doubted at.
+        self.doubted = 0
+        self.doubt_reopened = 0
+        self._doubted_at: Dict[str, int] = {}
         self.challenged: set = set()
         self.capped = False
         #: Belief that the family misses the truth; None while model checks
@@ -1098,15 +1105,41 @@ def _explained(hypotheses: HypothesisSet, explain) -> bool:
     return True
 
 
+def _doubts(hypotheses: HypothesisSet, lead: Hypothesis, explain,
+            space: Sequence[Dict[str, Any]], confidence: float) -> Tuple[bool, bool]:
+    """Before a leader is accepted: could the space of models itself be
+    wrong? The generator offers alternatives consistent with the history;
+    they enter as rivals of the leader, by the rule rivals already follow.
+    Returns (reopen, added): reopen when one of them can be told apart from
+    the leader. Asked at acceptance only, again for the same leader only if
+    the history grew, at most EXPLAIN_LIMIT times a question."""
+    if explain is None or hypotheses.doubted >= EXPLAIN_LIMIT:
+        return False, False
+    grown = len(hypotheses.history)
+    if hypotheses._doubted_at.get(lead.name) == grown:
+        return False, False
+    hypotheses._doubted_at[lead.name] = grown
+    hypotheses.doubted += 1
+    born, _ = explain(hypotheses)
+    if not born or not hypotheses.add(born, prior_each=RIVAL_PRIOR * lead.prior):
+        return False, False
+    _, mass, _ = hypotheses.leading_class(space)
+    if mass < confidence:
+        hypotheses.doubt_reopened += 1
+        return True, True
+    return False, True
+
+
 def settle(hypotheses: HypothesisSet, space: Sequence[Dict[str, Any]],
            challenge: Optional[Callable[[Hypothesis], List[Hypothesis]]] = None,
            confidence: float = CONFIDENCE,
            explain: Optional[Callable[[HypothesisSet],
-                                      Tuple[List[Hypothesis], List[float]]]] = None
-           ) -> Optional[Tuple[str, Tuple[str, ...]]]:
+                                      Tuple[List[Hypothesis], List[float]]]] = None,
+           doubt: bool = False) -> Optional[Tuple[str, Tuple[str, ...]]]:
     """Is this question answered? Part of updating knowledge, not of
     choosing actions: the same test whichever policy gathered the data.
-    `explain`: a generator of new explanations, asked when OTHER leads."""
+    `explain`: a generator of new explanations, asked when OTHER leads; with
+    `doubt`, also asked before a leader is accepted."""
     if hypotheses.settled:
         return hypotheses.settled
     if hypotheses.stakes is not None:
@@ -1171,6 +1204,12 @@ def settle(hypotheses: HypothesisSet, space: Sequence[Dict[str, Any]],
         hypotheses.check_phase = True       # told apart; only checking is left
     if hypotheses.claims_open:
         return None                         # a claim the task rests on is worth testing
+    if doubt:
+        reopen, added = _doubts(hypotheses, lead, explain, space, confidence)
+        if reopen:
+            return None                     # the space of models was not enough
+        if added:
+            names, mass, lead = hypotheses.leading_class(space)
     if hypotheses.boundary is not None:
         hypotheses.applicability = hypotheses.applicability_for(lead)
     hypotheses.settled = (ANSWERED, names)
@@ -1277,8 +1316,8 @@ def inquire(detect: Callable[[], List[Question]], world: ProbeProvider, budget: 
             stakes: Optional[Stakes] = None, graded: bool = False,
             boundary: Optional[str] = None,
             explain: Optional[Callable[[HypothesisSet],
-                                       Tuple[List[Hypothesis], List[float]]]] = None
-            ) -> Report:
+                                       Tuple[List[Hypothesis], List[float]]]] = None,
+            doubt: bool = False) -> Report:
     """Settle what can be settled, then act where a question gains most per
     unit of cost, until nothing open is worth what it would take. `explain`:
     a generator asked for new explanations when OTHER leads."""
@@ -1323,7 +1362,8 @@ def inquire(detect: Callable[[], List[Question]], world: ProbeProvider, budget: 
             # does next. Settling on the allowed probes alone would call
             # "not permitted to find out" an answer.
             space = [s.params for s in offered]
-            done = settle(question.hypotheses, space, challenge, confidence, explain=explain)
+            done = settle(question.hypotheses, space, challenge, confidence, explain=explain,
+                          doubt=doubt)
             if done:
                 answers[question.subject] = done
                 continue
