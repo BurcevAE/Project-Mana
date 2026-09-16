@@ -49,17 +49,23 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from ..cognition import inquiry
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.10"
+__version__ = "1.11"
 
 CORRECT, WRONG, UNEXPLAINED, OPEN = "correct", "wrong", "unexplained", "open"
 
 
 @dataclass(frozen=True)
 class Rule:
-    kind: str                          # switch | always | never | all_of | unless_both
+    kind: str                          # switch | always | never | all_of | unless_both | table
     switches: Tuple[int, ...] = ()
+    #: For "table": the outcome for every configuration, indexed by the
+    #: switches read as binary digits, s0 lowest -- any law at all
+    #: (docs/РОЖДЕНИЕ_ГИПОТЕЗ.md, 1).
+    table: Tuple[bool, ...] = ()
 
     def holds(self, state: Sequence[bool]) -> bool:
+        if self.kind == "table":
+            return bool(self.table[sum(1 << i for i, v in enumerate(state) if v)])
         if self.kind == "always":
             return True
         if self.kind == "never":

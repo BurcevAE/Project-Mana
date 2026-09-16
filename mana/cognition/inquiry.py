@@ -149,7 +149,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Tuple
 
 #: Component version -- see mana/version.py for the bump conventions.
-__version__ = "1.14"
+__version__ = "1.15"
 
 # Why a question is open.
 NOT_ENOUGH_DATA = "NOT_ENOUGH_DATA"   # nothing observed about it yet
@@ -248,6 +248,11 @@ ALIVE = 1e-12
 #: challenged for lack of room is accepted, and the settlement says so.
 MAX_HYPOTHESES = 600
 
+#: When OTHER leads and a generator of explanations is given, it is asked at
+#: most so many times on one question (docs/РОЖДЕНИЕ_ГИПОТЕЗ.md, 4): past
+#: that the question ends as unexplained, as it always did.
+EXPLAIN_LIMIT = 8
+
 
 def _entropy(weights: Sequence[float]) -> float:
     return -sum(w * math.log2(w) for w in weights if w > 0.0)
@@ -282,6 +287,8 @@ class HypothesisSet:
         self.observations = 0
         self.contradicted = 0
         self.settled: Optional[Tuple[str, Tuple[str, ...]]] = None
+        #: How many times a generator was asked for new explanations here.
+        self.explained = 0
         self.challenged: set = set()
         self.capped = False
         #: Belief that the family misses the truth; None while model checks
@@ -397,8 +404,10 @@ class HypothesisSet:
         self._pending = None
         return True
 
-    def add(self, rivals: Sequence[Hypothesis], prior_each: float) -> int:
-        """Admit new hypotheses and re-weigh everything from the history."""
+    def add(self, rivals: Sequence[Hypothesis], prior_each: float,
+            priors: Optional[Sequence[float]] = None) -> int:
+        """Admit new hypotheses and re-weigh everything from the history.
+        `priors`, when given, is each rival's own prior, in its order."""
         known = {h.name for h in self.hypotheses}
         fresh = [r for r in rivals if r.name not in known]
         room = MAX_HYPOTHESES - len(self.hypotheses)
@@ -407,8 +416,9 @@ class HypothesisSet:
             fresh = fresh[:max(0, room)]
         if not fresh:
             return 0
+        given = dict(zip((r.name for r in rivals), priors)) if priors is not None else {}
         for r in fresh:
-            r.prior = prior_each
+            r.prior = given.get(r.name, prior_each)
         self.hypotheses.extend(fresh)
         total = sum(h.prior for h in self.hypotheses)
         logs = []
@@ -1071,11 +1081,32 @@ def pairwise_rivals(conditions: Sequence[str]) -> Callable[[Hypothesis], List[Hy
     return challenge
 
 
+def _explained(hypotheses: HypothesisSet, explain) -> bool:
+    """OTHER leads: the explanations known are not enough. That is a signal,
+    not an answer. With a generator, ask it for new explanations from the
+    history -- they share the prior mass OTHER holds, in proportion to the
+    mass the generator gives each -- and keep the question open. Without
+    one, or past EXPLAIN_LIMIT calls, the question ends as it always did."""
+    if explain is None or hypotheses.explained >= EXPLAIN_LIMIT:
+        return False
+    hypotheses.explained += 1
+    born, mass = explain(hypotheses)
+    other = hypotheses.get(OTHER)
+    total = sum(mass)
+    if born and other is not None and total > 0:
+        hypotheses.add(born, 0.0, priors=[other.prior * m / total for m in mass])
+    return True
+
+
 def settle(hypotheses: HypothesisSet, space: Sequence[Dict[str, Any]],
            challenge: Optional[Callable[[Hypothesis], List[Hypothesis]]] = None,
-           confidence: float = CONFIDENCE) -> Optional[Tuple[str, Tuple[str, ...]]]:
+           confidence: float = CONFIDENCE,
+           explain: Optional[Callable[[HypothesisSet],
+                                      Tuple[List[Hypothesis], List[float]]]] = None
+           ) -> Optional[Tuple[str, Tuple[str, ...]]]:
     """Is this question answered? Part of updating knowledge, not of
-    choosing actions: the same test whichever policy gathered the data."""
+    choosing actions: the same test whichever policy gathered the data.
+    `explain`: a generator of new explanations, asked when OTHER leads."""
     if hypotheses.settled:
         return hypotheses.settled
     if hypotheses.stakes is not None:
@@ -1113,6 +1144,8 @@ def settle(hypotheses: HypothesisSet, space: Sequence[Dict[str, Any]],
             hypotheses.add(challenge(lost), prior_each=RIVAL_PRIOR * lost.prior)
             hypotheses._last_refuted = None
             return None
+        if _explained(hypotheses, explain):
+            return None
         hypotheses.settled = (UNEXPLAINED, names)
         return hypotheses.settled
     if challenge is not None and lead.name not in hypotheses.challenged:
@@ -1122,6 +1155,8 @@ def settle(hypotheses: HypothesisSet, space: Sequence[Dict[str, Any]],
         if mass < confidence:
             return None                     # the challenge reopened it
         if names == (OTHER,):
+            if _explained(hypotheses, explain):
+                return None
             hypotheses.settled = (UNEXPLAINED, names)
             return hypotheses.settled
         if lead.name not in hypotheses.challenged and not hypotheses.capped:
@@ -1240,9 +1275,13 @@ def inquire(detect: Callable[[], List[Question]], world: ProbeProvider, budget: 
             vulnerability: str = GEOMETRIC, claim_level: bool = False,
             checks_to_close: int = 0, error_cost: Optional[float] = None,
             stakes: Optional[Stakes] = None, graded: bool = False,
-            boundary: Optional[str] = None) -> Report:
+            boundary: Optional[str] = None,
+            explain: Optional[Callable[[HypothesisSet],
+                                       Tuple[List[Hypothesis], List[float]]]] = None
+            ) -> Report:
     """Settle what can be settled, then act where a question gains most per
-    unit of cost, until nothing open is worth what it would take."""
+    unit of cost, until nothing open is worth what it would take. `explain`:
+    a generator asked for new explanations when OTHER leads."""
     steps: List[Step] = []
     answers: Dict[str, Tuple[str, Tuple[str, ...]]] = {}
     spent = 0
@@ -1284,7 +1323,7 @@ def inquire(detect: Callable[[], List[Question]], world: ProbeProvider, budget: 
             # does next. Settling on the allowed probes alone would call
             # "not permitted to find out" an answer.
             space = [s.params for s in offered]
-            done = settle(question.hypotheses, space, challenge, confidence)
+            done = settle(question.hypotheses, space, challenge, confidence, explain=explain)
             if done:
                 answers[question.subject] = done
                 continue

@@ -79,7 +79,7 @@ VERSIONED_MODULES = (
     "cognition.cycle", "cognition.trials", "cognition.investigator",
     "cognition.hypothesis", "cognition.rules",
     "world.schema", "world.universe", "world.explore", "world.device",
-    "cognition.inquiry",
+    "cognition.inquiry", "cognition.explain",
     "research", "research.contract", "research.loop", "research.adapters.device",
     "research.adapters.universe", "research.adapters.turns",
     "discovery", "discovery.language", "discovery.description",
