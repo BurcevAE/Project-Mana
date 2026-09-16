@@ -112,8 +112,12 @@ class Oracle:
             # one for free): reported apart from a piece merely not found.
             kind = (" — двузначная цель, ответ против цели"
                     if values == 2 and 2 * wrong > int(rows.sum()) else "")
-            self.failure = (f"плоский поиск не решил кусок: {wrong} из {int(rows.sum())} "
-                            f"точек{kind}")
+            # Which piece it was matters: branch symmetry (D0, 9) can only
+            # rescue a condition, and only one that is wrong on every point.
+            what = "условие" if condition else "кусок"
+            whole = " (ровно дополнение)" if wrong == int(rows.sum()) else ""
+            self.failure = (f"плоский поиск не решил {what}: {wrong} из {int(rows.sum())} "
+                            f"точек{kind}{whole}")
             return None
         return found.program
 

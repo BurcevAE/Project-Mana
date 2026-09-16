@@ -24,7 +24,11 @@ truth is read only by the instrument, only to grade, only at stage 3.
 Resumable: every batch and every run is a line of a JSON-lines file, and a
 restart skips what is there.
 
-    python -u -X utf8 scripts/run_d3_prep1.py [workers] [results.jsonl] [most]
+    python -u -X utf8 scripts/run_d3_prep1.py [workers] [results.jsonl] [most] [скрининг]
+
+The fourth argument, "скрининг", stops after stages 1 and 2 and reports what
+they cost -- a measurement of throughput, to fix the quota and the coverage
+before the probe itself is run.
 """
 from __future__ import annotations
 
@@ -301,13 +305,23 @@ def main() -> None:
     workers = int(sys.argv[1]) if len(sys.argv) > 1 else 6
     path = sys.argv[2] if len(sys.argv) > 2 else str(ROOT / "d3_prep1_results.jsonl")
     most = int(sys.argv[3]) if len(sys.argv) > 3 else X.MOST
+    only = len(sys.argv) > 4 and sys.argv[4] == "скрининг"
     started = time.time()
     done = load(path)
     print(f"результаты: {path}; уже записано {len(done)}; потолки {CEILING}", flush=True)
     with multiprocessing.Pool(workers) as pool:
         survivors, counts, stopped = screen(pool, path, done, most, started)
-        print(f"\nскрининг: {dict(counts)}; прошло {len(survivors)}; "
-              f"{time.time() - started:.0f}с", flush=True)
+        spent = time.time() - started
+        print(f"\nскрининг: {dict(counts)}; прошло {len(survivors)}; {spent:.0f}с", flush=True)
+        if only:
+            walked = sum(X.total(n) for n in range(1, most + 1))
+            rate = walked / spent if spent else 0
+            print(f"  пройдено выражений {walked}, {rate:.0f} в секунду на {workers} процессах")
+            for n in (9, 10, 11):
+                whole = sum(X.total(k) for k in range(1, n + 1))
+                print(f"  весь размер {n} и меньше: {whole} выражений ≈ "
+                      f"{whole / rate / 3600:.1f} ч при этой скорости")
+            return
         survivors.sort(key=lambda s: s[0])
         chosen, taken = [], {}
         for rank, n, item, _, _, x in survivors:
